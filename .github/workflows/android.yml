@@ -1,0 +1,101 @@
+name: Android integration
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Verify SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          if [[ ! -f "$SDK/platforms/android-36/android.jar" || ! -x "$SDK/build-tools/35.0.0/aapt2" ]]; then
+            manager="$(command -v sdkmanager || true)"
+            if [[ -z "$manager" ]]; then manager="$(find "$SDK/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -n 1)"; fi
+            test -x "$manager"
+            "$manager" --sdk_root="$SDK" 'platforms;android-36' 'build-tools;35.0.0'
+          fi
+          test -f "$SDK/platforms/android-36/android.jar"
+      - name: Build APK and unsigned release AAB, unit tests and lint
+        run: gradle --no-daemon --stacktrace assembleDebug bundleRelease testDebugUnitTest lintDebug assembleDebugAndroidTest
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Instrumented phone and tablet tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: |
+            gradle --no-daemon --stacktrace connectedDebugAndroidTest
+            adb shell pm clear ru.epbloger.trachu
+            adb shell wm size 1280x800
+            adb shell wm density 160
+            adb shell settings put system font_scale 1.3
+            gradle --no-daemon --stacktrace connectedDebugAndroidTest
+      - name: Upload APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trachu-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload unsigned AAB
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trachu-unsigned-release-aab
+          path: app/build/outputs/bundle/release/*.aab
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload verification reports and generated Room schema
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trachu-verification-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+            app/build/outputs/androidTest-results/
+            app/schemas/
+          if-no-files-found: warn
+          retention-days: 14

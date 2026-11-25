@@ -176,12 +176,12 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
                             Tab.MORE->when(more){
                                 MorePage.INDEX->MoreIndex{more=it}
                                 MorePage.ACCOUNTS->Accounts(ledger,{editor=Editor("account",it?.id)},{add(Kind.TRANSFER)},{more=MorePage.INDEX}){id,delta->
-                                    vm.change { l->
+                                    vm.change({ l->
                                         val sorted=l.accounts.sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name}).toMutableList()
                                         val i=sorted.indexOfFirst{it.id==id};val j=i+delta
                                         if(i>=0&&j in sorted.indices)java.util.Collections.swap(sorted,i,j)
                                         l.copy(accounts=sorted.mapIndexed{index,a->a.copy(sortOrder=index)})
-                                    }
+                                    })
                                 }
                                 MorePage.CATEGORIES->Categories(ledger,{editor=Editor("category",it?.id)},{more=MorePage.INDEX})
                                 MorePage.RATES->Rates(ledger,vm,busy){more=MorePage.INDEX}
