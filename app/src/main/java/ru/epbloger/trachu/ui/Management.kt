@@ -94,7 +94,7 @@ enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"),
         item{Panel{
             SectionTitle("Сохранить курс")
             Choice("Валюта",currency.takeIf{it!=ledger.baseCurrency},allCurrencies.filter{it!=ledger.baseCurrency},{it}){currency=it;value=""}
-            Field("Дата курса",date,{date=it},supporting="ГГГГ-ММ-ДД")
+            DateField("Дата курса",date,{date=it})
             Field("${ledger.baseCurrency} за 1 $currency",value,{value=it},true)
             Button(onClick={
                 runCatching{

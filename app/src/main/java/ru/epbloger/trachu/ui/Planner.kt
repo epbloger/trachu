@@ -167,7 +167,7 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
         Field("Название",name,{name=it})
         Choice("Категория",category,listOf("")+ledger.categories.filter{!it.income&&!it.archived || it.id==category}.map{it.id},{if(it.isEmpty())"Общий бюджет" else ledger.categoryName(it)}){category=it}
         Field("Месячный лимит (${ledger.baseCurrency})",amount,{amount=it},true)
-        Field("Начало",start,{start=it},supporting="ГГГГ-ММ-ДД (учитывается месяц)")
+        DateField("Начало",start,{start=it},supporting="ГГГГ-ММ-ДД (учитывается месяц)")
         Toggle("Переносить остаток",carry,{carry=it})
         Text("Предупреждения при 80%, 100% и превышении лимита.")
         if(current!=null)TextButton(onClick={delete=true}){Text("Удалить бюджет",color=MaterialTheme.colorScheme.error)}
@@ -216,7 +216,7 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
                 Text(dayLabel(a.day)+" · "+Money.format(a.minor,current.currency)+" · "+a.note,style=MaterialTheme.typography.bodySmall)
             }
         }
-        Field("Срок (необязательно)",due,{due=it},supporting="ГГГГ-ММ-ДД")
+        DateField("Срок (необязательно)",due,{due=it})
         Text("Цель отражает отложенные деньги, а не создаёт новую операцию. Переведите деньги на накопительный счёт отдельно, если нужно.")
         if(current!=null)TextButton(onClick={delete=true}){Text("Удалить цель",color=MaterialTheme.colorScheme.error)}
         if(error.isNotEmpty())Warning(error)
@@ -267,12 +267,12 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
         if(current?.openedDay==null)Field("Исходный основной долг (${account?.currency ?: ledger.baseCurrency})",amount,{amount=it},true)
         else Text("Основная сумма: "+Money.format(current.principalMinor,requireNotNull(account).currency))
         Field("Годовая ставка, %",interest,{interest=it},true)
-        Field("Срок (необязательно)",due,{due=it},supporting="ГГГГ-ММ-ДД")
+        DateField("Срок (необязательно)",due,{due=it})
         Field("Заметка",note,{note=it},singleLine=false)
         if(current==null) {
             Toggle("Записать получение или выдачу денег",recordOpening,{recordOpening=it},"Выключите для существующей задолженности, уже учтённой в начальном остатке.")
             if(recordOpening) {
-                Field("Дата получения / выдачи",opened,{opened=it},supporting="ГГГГ-ММ-ДД")
+                DateField("Дата получения / выдачи",opened,{opened=it})
                 if(account!=null && account.currency!=ledger.baseCurrency)Field("Курс ${ledger.baseCurrency} за 1 ${account.currency}",openingRate,{openingRate=it},true)
             }
         }
@@ -306,7 +306,7 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
         Text(debt.person);Text("Остаток: "+Money.format(remaining,a.currency))
         Field("Основной долг",principal,{principal=it},true)
         Field("Фактически уплаченные проценты",interest,{interest=it},true)
-        Field("Дата",day,{day=it},supporting="ГГГГ-ММ-ДД")
+        DateField("Дата",day,{day=it})
         if(a.currency!=ledger.baseCurrency)Field("Курс ${ledger.baseCurrency} за 1 ${a.currency}",rate,{rate=it},true,supporting="Пустое поле использует сохранённый курс")
         Field("Комментарий",note,{note=it})
         Text("Основная сумма уменьшает долг, проценты отражаются в доходах или расходах. Оба компонента меняют остаток счёта.")

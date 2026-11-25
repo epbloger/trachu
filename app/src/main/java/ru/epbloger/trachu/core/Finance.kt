@@ -35,6 +35,20 @@ data class BudgetProgress(val available: Long, val spent: Long) {
 }
 
 object Finance {
+    private const val INTEREST_IN="@interest-income"
+    private const val INTEREST_OUT="@interest-expense"
+    fun categoryLabel(ledger:Ledger,id:String):String=when(id) {
+        INTEREST_IN->"Полученные проценты"
+        INTEREST_OUT->"Уплаченные проценты"
+        else->ledger.categories.find{it.id==id}?.name ?: "Категория"
+    }
+    private fun interestBase(entry:Entry):Long=Money.share(entry.baseMinor,entry.minor-entry.principalMinor,entry.minor)
+    private fun expenseBase(entry:Entry):Long=when(entry.kind){
+        Kind.EXPENSE->entry.baseMinor
+        Kind.REFUND->-entry.baseMinor
+        Kind.DEBT_OUT->interestBase(entry)
+        else->0L
+    }
     /** Published rates may update their own rows, but never overwrite a user-entered rate. */
     fun mergePublishedRates(ledger:Ledger,base:String,published:List<FxRate>):Ledger {
         require(ledger.baseCurrency==base) { "Основная валюта была изменена" }
@@ -132,48 +146,60 @@ object Finance {
         val income = Money.sum(posted.map {
             when (it.kind) {
                 Kind.INCOME -> it.baseMinor
-                Kind.DEBT_IN -> Money.share(it.baseMinor, it.minor - it.principalMinor, it.minor)
+                Kind.DEBT_IN -> interestBase(it)
                 else -> 0L
             }
         })
-        val expense = Money.sum(posted.map {
-            when (it.kind) {
-                Kind.EXPENSE -> it.baseMinor
-                Kind.REFUND -> -it.baseMinor
-                Kind.DEBT_OUT -> Money.share(it.baseMinor, it.minor - it.principalMinor, it.minor)
-                else -> 0L
-            }
-        })
+        val expense = Money.sum(posted.map(::expenseBase))
         return Totals(income, expense)
     }
     fun byCategory(ledger: Ledger, period: Period, income: Boolean = false): Map<String, Long> {
-        val kinds = if (income) setOf(Kind.INCOME) else setOf(Kind.EXPENSE, Kind.REFUND)
+        val kinds = if(income)setOf(Kind.INCOME,Kind.DEBT_IN) else setOf(Kind.EXPENSE,Kind.REFUND,Kind.DEBT_OUT)
         val excluded=ledger.accounts.filterNot { it.includeInStats }.map { it.id }.toSet()
         return ledger.entries.filter { it.status == EntryStatus.POSTED && it.day in period && it.kind in kinds && it.accountId !in excluded }
-            .flatMap { e -> e.splits.map { it.categoryId to if (e.kind == Kind.REFUND) -it.baseMinor else it.baseMinor } }
-            .groupBy({ it.first }, { it.second }).mapValues { Money.sum(it.value) }
+            .flatMap { e ->
+                when(e.kind) {
+                    Kind.DEBT_IN->listOf(INTEREST_IN to interestBase(e)).filter{it.second!=0L}
+                    Kind.DEBT_OUT->listOf(INTEREST_OUT to interestBase(e)).filter{it.second!=0L}
+                    else->e.splits.map { it.categoryId to if(e.kind==Kind.REFUND)-it.baseMinor else it.baseMinor }
+                }
+            }.groupBy({it.first},{it.second}).mapValues{Money.sum(it.value)}
     }
     fun byTag(ledger: Ledger, period: Period): Map<String, Long> =
         ledger.entries.filter { it.status == EntryStatus.POSTED && it.day in period && it.kind in setOf(Kind.EXPENSE, Kind.REFUND) && ledger.accounts.any { a -> a.id==it.accountId && a.includeInStats } }
             .flatMap { e -> e.tags.distinct().map { it to if (e.kind == Kind.REFUND) -e.baseMinor else e.baseMinor } }
             .groupBy({ it.first }, { it.second }).mapValues { Money.sum(it.value) }
     fun budget(ledger: Ledger, budget: Budget, day: Long): BudgetProgress {
-        val target = YearMonth.from(LocalDate.ofEpochDay(day))
-        var month = YearMonth.from(LocalDate.ofEpochDay(budget.startMonth))
-        if (target < month) return BudgetProgress(0, 0)
-        require(java.time.temporal.ChronoUnit.MONTHS.between(month, target) <= 1200)
-        var carry = 0L
-        fun spent(m: YearMonth): Long {
-            val p = Period(m.atDay(1).toEpochDay(), m.atEndOfMonth().toEpochDay())
-            if (budget.categoryId == null) return totals(ledger, p).expense
-            val ids = ledger.categories.filter { it.id == budget.categoryId || it.parentId == budget.categoryId }.map { it.id }.toSet()
-            return Money.sum(byCategory(ledger, p).filterKeys { it in ids }.values)
+        val target=YearMonth.from(LocalDate.ofEpochDay(day))
+        val start=YearMonth.from(LocalDate.ofEpochDay(budget.startMonth))
+        if(target<start)return BudgetProgress(0,0)
+        val first=if(budget.rollover)start else target
+        val included=ledger.accounts.filter{it.includeInStats}.map{it.id}.toSet()
+        val ids=ledger.categories.filter{it.id==budget.categoryId || it.parentId==budget.categoryId}.map{it.id}.toSet()
+        val spentByMonth=ledger.entries.asSequence().filter{
+            it.status==EntryStatus.POSTED && it.accountId in included &&
+                it.day in first.atDay(1).toEpochDay()..target.atEndOfMonth().toEpochDay()
+        }.map { entry ->
+            val spent=if(budget.categoryId==null)expenseBase(entry)
+            else if(entry.kind in setOf(Kind.EXPENSE,Kind.REFUND)) {
+                val value=Money.sum(entry.splits.filter{it.categoryId in ids}.map{it.baseMinor})
+                if(entry.kind==Kind.REFUND)-value else value
+            } else 0L
+            YearMonth.from(LocalDate.ofEpochDay(entry.day)) to spent
+        }.groupBy({it.first},{it.second}).mapValues{Money.sum(it.value)}
+        val monthly=java.math.BigInteger.valueOf(budget.monthlyMinor)
+        var carry=java.math.BigInteger.ZERO
+        if(budget.rollover) {
+            var cursor=start
+            fun gap(from:YearMonth,to:YearMonth)=java.math.BigInteger.valueOf(java.time.temporal.ChronoUnit.MONTHS.between(from,to))
+            spentByMonth.toSortedMap().filterKeys{it<target}.forEach { (month,spent)->
+                carry=carry.add(monthly.multiply(gap(cursor,month))).add(monthly)
+                    .subtract(java.math.BigInteger.valueOf(spent)).max(java.math.BigInteger.ZERO)
+                cursor=month.plusMonths(1)
+            }
+            carry=carry.add(monthly.multiply(gap(cursor,target)))
         }
-        while (month < target) {
-            if (budget.rollover) carry = maxOf(0, Money.sub(Money.add(budget.monthlyMinor, carry), spent(month)))
-            month = month.plusMonths(1)
-        }
-        return BudgetProgress(Money.add(budget.monthlyMinor, carry), spent(target))
+        return BudgetProgress(monthly.add(carry).longValueExact(),spentByMonth[target] ?: 0L)
     }
     fun debtRemaining(ledger: Ledger, debt: Debt): Long = Money.sub(debt.principalMinor,
         Money.sum(ledger.entries.filter { it.status == EntryStatus.POSTED && it.debtId == debt.id && it.kind in setOf(Kind.DEBT_IN, Kind.DEBT_OUT) }.map { it.principalMinor }))
@@ -268,7 +294,7 @@ fun Ledger.validated(): Ledger {
     val dd = debts.associateBy { it.id }; val rr = receipts.map { it.id }.toSet()
     accounts.forEach { require(it.name.isNotBlank()); Money.digits(it.currency) }
     categories.forEach { c ->
-        require(c.name.isNotBlank())
+        require(c.name.isNotBlank() && !c.id.startsWith("@"))
         c.parentId?.let { p -> require(cc[p]?.parentId == null && cc[p]?.income == c.income && p != c.id && p in cc) }
     }
     require(rates.map { it.currency to it.day }.distinct().size == rates.size)
@@ -344,7 +370,11 @@ fun Ledger.validated(): Ledger {
         var saved=it.savedMinor
         it.adjustments.forEach { a -> require(a.minor!=0L && a.note.length<=200); LocalDate.ofEpochDay(a.day); saved=Money.add(saved,a.minor); require(saved>=0) }
     }
-    budgets.forEach { require(it.name.isNotBlank() && it.monthlyMinor > 0 && (it.categoryId == null || cc[it.categoryId]?.income == false)); LocalDate.ofEpochDay(it.startMonth) }
+    budgets.forEach {
+        require(it.name.isNotBlank() && it.monthlyMinor>0 && (it.categoryId==null || cc[it.categoryId]?.income==false))
+        LocalDate.ofEpochDay(it.startMonth)
+        Finance.budget(this,it,today()).remaining
+    }
     schedules.forEach { require(it.interval in 1..365 && it.anchorDay in 1..31 && it.template.kind in setOf(Kind.EXPENSE, Kind.INCOME, Kind.TRANSFER)); checkEntry(it.template, true); LocalDate.ofEpochDay(it.nextDay)
         require(it.weekdays.all { d->d in 1..7 } && it.weekdays.distinct().size==it.weekdays.size)
         require(it.alternateWeekdays.all { d->d in 1..7 } && it.alternateWeekdays.distinct().size==it.alternateWeekdays.size)

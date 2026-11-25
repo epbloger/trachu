@@ -44,6 +44,8 @@ class AdvancedFinanceTest {
         val paid=Finance.putEntry(opened,payment)
         assertEquals(40000L,Finance.debtRemaining(paid,debt))
         assertEquals(2000L,Finance.totals(paid,Period.month(day)).expense)
+        assertEquals(2000L,Money.sum(Finance.byCategory(paid,Period.month(day)).values))
+        assertEquals("Уплаченные проценты",Finance.categoryLabel(paid,Finance.byCategory(paid,Period.month(day)).keys.single()))
         assertEquals(1038000L,Finance.balance(paid,"a",day+1))
         assertTrue(runCatching{Finance.deleteEntry(paid,opened.entries.first().id)}.isFailure)
     }
@@ -55,6 +57,13 @@ class AdvancedFinanceTest {
         assertEquals(2,BudgetProgress(10000,10000).level)
         assertEquals(3,BudgetProgress(10000,10001).level)
         assertEquals(100,BudgetProgress(10000,10001).percent)
+    }
+    @Test fun sparseBudgetHistoryDoesNotRequireMonthByMonthIteration() {
+        val budget=Budget(name="Долгий план",monthlyMinor=100,startMonth=d("1900-01-01"),rollover=true)
+        val progress=Finance.budget(l,budget,d("2026-11-01"))
+        val months=java.time.temporal.ChronoUnit.MONTHS.between(java.time.YearMonth.of(1900,1),java.time.YearMonth.of(2026,11))+1
+        assertEquals(months*100,progress.available)
+        assertEquals(0L,progress.spent)
     }
     @Test fun monthDaysAndAlternatingWeeks() {
         val monday=d("2026-11-02")

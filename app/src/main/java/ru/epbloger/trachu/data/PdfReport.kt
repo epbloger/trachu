@@ -58,7 +58,7 @@ object PdfReport {
             y+=12
             row("По категориям",true)
             Finance.byCategory(ledger,period).toList().sortedByDescending { it.second }.forEach { (id,amount) ->
-                row("${ledger.categories.find { it.id==id }?.name ?: id}: ${Money.format(amount,ledger.baseCurrency)}")
+                row("${Finance.categoryLabel(ledger,id)}: ${Money.format(amount,ledger.baseCurrency)}")
             }
             y+=12
             row("Операции",true)

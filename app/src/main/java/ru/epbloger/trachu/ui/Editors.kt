@@ -223,8 +223,8 @@ class EntryDraft {
         }
         if(!recurring && !forcePlanned) TextButton(onClick={advanced=!advanced}) { Text(if(advanced)"Свернуть детали" else "Дата, комментарий, теги и чек") }
         if(advanced) {
-            Field("Дата",day,{day=it},supporting="ГГГГ-ММ-ДД")
-            Field("Время",time,{time=it},supporting="ЧЧ:ММ")
+            DateField("Дата",day,{day=it})
+            TimeField("Время",time,{time=it})
         }
         if(rateRequired)Field("Курс: ${ledger.baseCurrency} за 1 ${account?.currency}",explicitRate,{explicitRate=it},true,
             supporting=currentRate?.let{"Сохранённый курс: $it. Пустое поле использует его."} ?: "Укажите курс или загрузите его в настройках.")
@@ -246,7 +246,7 @@ class EntryDraft {
                 }
             }
             if(frequency==Frequency.MONTHLY)Field("Дни месяца",monthDays,{monthDays=it},supporting="1–31 через запятую; пусто — день первой операции. 31 означает последний день короткого месяца.")
-            Field("Окончание (необязательно)",endDay,{endDay=it},supporting="ГГГГ-ММ-ДД")
+            DateField("Окончание (необязательно)",endDay,{endDay=it})
             Toggle("Проводить автоматически",autoPost,{autoPost=it},"Иначе появится запланированная операция для подтверждения.")
             Toggle("Активно",enabled,{enabled=it})
             if(schedule!=null)TextButton(onClick={deleteSchedule=true}){Text("Удалить расписание",color=MaterialTheme.colorScheme.error)}
@@ -341,7 +341,7 @@ class EntryDraft {
     }) {
         Text(ledger.entryName(entry));Text("Максимум: "+Money.format(left,account.currency))
         Field("Сумма возврата",amount,{amount=it},true)
-        Field("Дата",day,{day=it},supporting="ГГГГ-ММ-ДД")
+        DateField("Дата",day,{day=it})
         Field("Комментарий",note,{note=it})
         Text("Возврат уменьшает расходы в дату получения денег и использует исторический курс покупки. Части распределяются по категориям исходной покупки.")
         if(error.isNotEmpty())Warning(error)

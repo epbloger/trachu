@@ -162,8 +162,8 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
     var error by remember{mutableStateOf("")}
     Chips(PeriodType.entries,type,{it.label}) { onType(it); if(it!=PeriodType.CUSTOM)onPeriod(periodFor(it,monthStart=monthStart)) }
     if(type==PeriodType.CUSTOM) {
-        Field("С",from,{from=it},supporting="ГГГГ-ММ-ДД")
-        Field("По",to,{to=it},supporting="ГГГГ-ММ-ДД")
+        DateField("С",from,{from=it})
+        DateField("По",to,{to=it})
         Button(onClick={runCatching{Period(parseDay(from),parseDay(to))}.onSuccess{onPeriod(it);error=""}.onFailure{error="Проверьте даты"}}){Text("Применить")}
         if(error.isNotEmpty())Warning(error)
     } else {
@@ -218,6 +218,8 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
                     val discretionary=Money.sum(expenseEntries.filterNot{it.essential}.map{if(it.kind==Kind.REFUND)-it.baseMinor else it.baseMinor})
                     Text("Обязательные траты: "+Money.format(essential,ledger.baseCurrency))
                     Text("Прочие траты: "+Money.format(discretionary,ledger.baseCurrency))
+                    val interest=Money.sub(totals.expense,Money.add(essential,discretionary))
+                    if(interest!=0L)Text("Уплаченные проценты: "+Money.format(interest,ledger.baseCurrency))
                     HorizontalDivider()
                     Text("Предыдущий сопоставимый период",style=MaterialTheme.typography.titleMedium)
                     Text("Результат: "+Money.format(previous.net,ledger.baseCurrency))

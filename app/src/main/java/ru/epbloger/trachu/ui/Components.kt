@@ -11,6 +11,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.DateRange
+import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.luminance
+import java.time.LocalTime
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,7 +52,7 @@ fun AccountType.label(): String = when(this) {
 }
 fun Frequency.label(): String = when(this) { Frequency.DAILY->"День"; Frequency.WEEKLY->"Неделя"; Frequency.MONTHLY->"Месяц"; Frequency.YEARLY->"Год" }
 fun Ledger.accountName(id: String): String = accounts.find { it.id==id }?.name ?: "Счёт"
-fun Ledger.categoryName(id: String): String = categories.find { it.id==id }?.name ?: "Категория"
+fun Ledger.categoryName(id: String): String = Finance.categoryLabel(this,id)
 fun Ledger.entryName(e: Entry): String = when(e.kind) {
     Kind.TRANSFER->"${accountName(e.accountId)} → ${accountName(e.targetAccountId.orEmpty())}"
     Kind.REFUND->"Возврат · "+e.splits.joinToString(", ") { categoryName(it.categoryId) }
@@ -76,10 +82,32 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
         if(action!=null) Button(onClick=onAction) { Text(action) }
     }
 }
-@Composable fun Field(label: String, value: String, onChange: (String)->Unit, numeric: Boolean=false, modifier: Modifier=Modifier, singleLine: Boolean=true, supporting: String?=null) {
+@Composable fun Field(label: String, value: String, onChange: (String)->Unit, numeric: Boolean=false, modifier: Modifier=Modifier, singleLine: Boolean=true, supporting: String?=null, trailing:@Composable (() -> Unit)?=null) {
     OutlinedTextField(value,onChange,modifier.fillMaxWidth().testTag("field:$label"),label={ Text(label) },singleLine=singleLine,
         keyboardOptions=KeyboardOptions(keyboardType=if(numeric) KeyboardType.Decimal else KeyboardType.Text),
-        supportingText=if(supporting==null) null else { { Text(supporting) } })
+        supportingText=if(supporting==null) null else { { Text(supporting) } },trailingIcon=trailing)
+}
+@Composable fun DateField(label:String,value:String,onChange:(String)->Unit,supporting:String="ГГГГ-ММ-ДД") {
+    val context=LocalContext.current
+    val theme=if(MaterialTheme.colorScheme.surface.luminance()<0.5f)android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert
+    Field(label,value,onChange,supporting=supporting,trailing={
+        IconButton(onClick={
+            val date=runCatching{LocalDate.parse(value)}.getOrDefault(LocalDate.now())
+            android.app.DatePickerDialog(context,theme,{_,year,month,day->
+                onChange(LocalDate.of(year,month+1,day).toString())
+            },date.year.coerceIn(1900,2200),date.monthValue-1,date.dayOfMonth.coerceAtMost(28).let{if(date.year in 1900..2200)date.dayOfMonth else it}).show()
+        }){Icon(Icons.Outlined.DateRange,contentDescription="Выбрать дату: $label")}
+    })
+}
+@Composable fun TimeField(label:String,value:String,onChange:(String)->Unit) {
+    val context=LocalContext.current
+    val theme=if(MaterialTheme.colorScheme.surface.luminance()<0.5f)android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert
+    Field(label,value,onChange,supporting="ЧЧ:ММ",trailing={
+        IconButton(onClick={
+            val time=runCatching{LocalTime.parse(value)}.getOrDefault(LocalTime.now())
+            android.app.TimePickerDialog(context,theme,{_,h,m->onChange(String.format(Locale.ROOT,"%02d:%02d",h,m))},time.hour,time.minute,true).show()
+        }){Icon(Icons.Outlined.AccessTime,contentDescription="Выбрать время")}
+    })
 }
 @Composable fun <T> Choice(label: String, value: T?, options: List<T>, title: (T)->String, modifier: Modifier=Modifier, onChoose: (T)->Unit) {
     var open by remember { mutableStateOf(false) }
