@@ -1,0 +1,221 @@
+package ru.epbloger.trachu
+
+import android.content.Intent
+import android.os.Bundle
+import android.os.SystemClock
+import android.view.WindowManager
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.viewModels
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import ru.epbloger.trachu.core.*
+import ru.epbloger.trachu.security.Settings
+import ru.epbloger.trachu.ui.*
+
+class MainActivity : FragmentActivity() {
+    private val vm:AppViewModel by viewModels()
+    private var stoppedAt:Long?=null
+    private var biometricInProgress=false
+    override fun onCreate(savedInstanceState:Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        handleIntent(intent)
+        setContent {
+            val settings by vm.settings.collectAsStateWithLifecycle()
+            val ledger by vm.ledger.collectAsStateWithLifecycle()
+            val message by vm.message.collectAsStateWithLifecycle()
+            val busy by vm.busy.collectAsStateWithLifecycle()
+            val unlocked by vm.unlocked.collectAsStateWithLifecycle()
+            TrachuTheme(settings?.theme ?: "system") {
+                Surface(Modifier.fillMaxSize(),color=MaterialTheme.colorScheme.background) {
+                    val s=settings
+                    val l=ledger
+                    if(s==null||l==null)Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){CircularProgressIndicator()}
+                    else AppShell(l,s,vm,busy,biometricAvailable(),s.protected&&!unlocked,{done->authenticate(done)})
+                    if(message!=null)AlertDialog(onDismissRequest=vm::clearMessage,title={Text("ТРАЧУ.")},text={Text(message.orEmpty())},
+                        confirmButton={TextButton(onClick=vm::clearMessage){Text("OK")}})
+                }
+            }
+        }
+    }
+    override fun onNewIntent(intent:Intent) { super.onNewIntent(intent);setIntent(intent);handleIntent(intent) }
+    private fun handleIntent(intent:Intent?) {
+        val kind=runCatching{Kind.valueOf(intent?.getStringExtra("quick").orEmpty())}.getOrNull()
+        if(kind==Kind.EXPENSE||kind==Kind.INCOME)vm.quick(kind)
+    }
+    override fun onStop() {
+        super.onStop()
+        if(!isChangingConfigurations&&!biometricInProgress) {
+            stoppedAt=SystemClock.elapsedRealtime()
+            if(vm.settings.value?.lockSeconds==0)vm.lock()
+        }
+    }
+    override fun onStart() {
+        super.onStart()
+        val s=vm.settings.value
+        val last=stoppedAt
+        if(last!=null && s?.protected==true && SystemClock.elapsedRealtime()-last>=s.lockSeconds*1000L)vm.lock()
+        stoppedAt=null
+    }
+    private fun biometricAvailable()=BiometricManager.from(this).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)==BiometricManager.BIOMETRIC_SUCCESS
+    private fun authenticate(done:()->Unit) {
+        if(!biometricAvailable()) {
+            vm.perform{error("Настройте сильную биометрию в системных настройках Android.")}
+            return
+        }
+        if(biometricInProgress)return
+        biometricInProgress=true
+        val prompt=BiometricPrompt(this,ContextCompat.getMainExecutor(this),object:BiometricPrompt.AuthenticationCallback(){
+            override fun onAuthenticationSucceeded(result:BiometricPrompt.AuthenticationResult){biometricInProgress=false;done()}
+            override fun onAuthenticationError(errorCode:Int,errString:CharSequence){biometricInProgress=false}
+        })
+        prompt.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("ТРАЧУ.").setSubtitle("Подтвердите доступ")
+            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG).setNegativeButtonText("Отмена").build())
+    }
+}
+
+private enum class Tab(val label:String,val icon:ImageVector) {
+    HOME("Обзор",Icons.Outlined.Home), OPERATIONS("Операции",Icons.Outlined.AccountBalanceWallet),
+    PLAN("План",Icons.Outlined.CalendarMonth), REPORTS("Отчёты",Icons.Outlined.BarChart), MORE("Ещё",Icons.Outlined.MoreHoriz)
+}
+private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXPENSE)
+
+@Composable private fun AppShell(ledger:Ledger,settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,locked:Boolean,authenticate:((()->Unit)->Unit)){
+    var tab by rememberSaveable{mutableStateOf(Tab.HOME)}
+    var more by rememberSaveable{mutableStateOf(MorePage.INDEX)}
+    var plan by rememberSaveable{mutableStateOf(PlannerTab.BUDGET)}
+    var editor by remember{mutableStateOf<Editor?>(null)}
+    var fileRequest by remember{mutableStateOf<FileRequest?>(null)}
+    val quick by vm.quick.collectAsStateWithLifecycle()
+    val save=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
+        val request=fileRequest;fileRequest=null
+        val uri=result.data?.data
+        if(result.resultCode==android.app.Activity.RESULT_OK && request!=null && uri!=null)vm.export(uri,request.mode,request.password,request.period)
+    }
+    val load=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){uri->
+        val request=fileRequest;fileRequest=null
+        if(uri!=null&&request!=null)vm.import(uri,request.mode,request.password,request.account)
+    }
+    fun file(request:FileRequest){
+        if(busy)return
+        fileRequest=request
+        if(request.save) {
+            val mime=when(request.mode){"backup"->"application/octet-stream";"pdf"->"application/pdf";else->"text/csv"}
+            val suffix=when(request.mode){"backup"->"trachu";"pdf"->"pdf";else->"csv"}
+            save.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime)
+                .putExtra(Intent.EXTRA_TITLE,"trachu-${java.time.LocalDate.now()}.$suffix"))
+        }else load.launch(if(request.mode=="backup")arrayOf("*/*") else arrayOf("text/*","application/csv","application/vnd.ms-excel","application/octet-stream"))
+    }
+    fun openMore(page:MorePage){tab=Tab.MORE;more=page}
+    fun add(kind:Kind,planned:Boolean=false){
+        if(ledger.accounts.none{!it.archived}){openMore(MorePage.ACCOUNTS);editor=Editor("account")}
+        else editor=Editor(if(planned)"planned" else "entry",kind=kind)
+    }
+    fun schedule(s:Schedule?){
+        if(ledger.accounts.none{!it.archived}){openMore(MorePage.ACCOUNTS);editor=Editor("account")}
+        else editor=Editor("schedule",s?.id)
+    }
+    LaunchedEffect(quick,locked){if(quick!=null&&!locked){add(requireNotNull(quick));vm.quick(null)}}
+    if(locked){
+        LockScreen(settings,vm,busy,biometricAvailable,authenticate)
+        return
+    }
+    fun choose(t:Tab){tab=t;if(t==Tab.MORE)more=MorePage.INDEX}
+    BoxWithConstraints(Modifier.fillMaxSize()){
+        val rail=maxWidth>=680.dp
+        val largeFont=LocalDensity.current.fontScale>=1.5f
+        Row(Modifier.fillMaxSize()){
+            if(rail)NavigationRail(modifier=Modifier.fillMaxHeight().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start+WindowInsetsSides.Top+WindowInsetsSides.Bottom)),
+                header={Text("Т.",style=MaterialTheme.typography.headlineSmall,color=MaterialTheme.colorScheme.primary,modifier=Modifier.padding(12.dp))}){
+                Tab.entries.forEach{t->NavigationRailItem(selected=t==tab,onClick={choose(t)},icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label)},alwaysShowLabel=!largeFont)}
+            }
+            Scaffold(modifier=Modifier.weight(1f),containerColor=MaterialTheme.colorScheme.background,
+                contentWindowInsets=WindowInsets.safeDrawing,
+                bottomBar={if(!rail)NavigationBar{
+                    Tab.entries.forEach{t->NavigationBarItem(selected=t==tab,onClick={choose(t)},icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label,maxLines=1)},alwaysShowLabel=!largeFont)}
+                }},
+                floatingActionButton={if(tab==Tab.OPERATIONS)FloatingActionButton(onClick={add(Kind.EXPENSE)}){Text("+",style=MaterialTheme.typography.headlineSmall)}}){padding->
+                Column(Modifier.fillMaxSize().padding(padding)){
+                    if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Box(Modifier.weight(1f)){
+                        when(tab){
+                            Tab.HOME->Dashboard(ledger,{add(it)},{editor=Editor("detail",it.id)},{openMore(MorePage.ACCOUNTS)},{tab=Tab.REPORTS},{tab=Tab.PLAN;plan=PlannerTab.BUDGET})
+                            Tab.OPERATIONS->Operations(ledger,{add(it)},{editor=Editor("detail",it.id)})
+                            Tab.PLAN->Planner(ledger,plan,{editor=Editor("budget",it?.id)},{editor=Editor("goal",it?.id)},
+                                {if(ledger.accounts.isEmpty()){openMore(MorePage.ACCOUNTS);editor=Editor("account")}else editor=Editor("debt",it?.id)},
+                                {editor=Editor("payment",it.id)},::schedule,{editor=Editor("detail",it.id)},{add(Kind.EXPENSE,true)})
+                            Tab.REPORTS->Reports(ledger){file(FileRequest("pdf",true,period=it))}
+                            Tab.MORE->when(more){
+                                MorePage.INDEX->MoreIndex{more=it}
+                                MorePage.ACCOUNTS->Accounts(ledger,{editor=Editor("account",it?.id)},{add(Kind.TRANSFER)},{more=MorePage.INDEX})
+                                MorePage.CATEGORIES->Categories(ledger,{editor=Editor("category",it?.id)},{more=MorePage.INDEX})
+                                MorePage.RATES->Rates(ledger,vm,busy){more=MorePage.INDEX}
+                                MorePage.SETTINGS->SettingsPage(settings,vm,busy,biometricAvailable,authenticate){more=MorePage.INDEX}
+                                MorePage.DATA->DataPage(ledger,::file,busy){more=MorePage.INDEX}
+                                MorePage.ABOUT->AboutPage{more=MorePage.INDEX}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    androidx.activity.compose.BackHandler(enabled=editor==null&&(tab!=Tab.HOME||more!=MorePage.INDEX)){
+        if(tab==Tab.MORE&&more!=MorePage.INDEX)more=MorePage.INDEX else tab=Tab.HOME
+    }
+    val current=editor
+    if(current!=null){
+        val close={editor=null}
+        key(current){
+            when(current.type){
+                "account"->AccountEditor(ledger,ledger.accounts.find{it.id==current.id},busy,vm,close)
+                "category"->CategoryEditor(ledger,ledger.categories.find{it.id==current.id},busy,vm,close)
+                "entry","planned"->EntryEditor(ledger,settings,vm,busy,current.kind,current=ledger.entries.find{it.id==current.id},close=close,forcePlanned=current.type=="planned")
+                "schedule"->EntryEditor(ledger,settings,vm,busy,Kind.EXPENSE,schedule=ledger.schedules.find{it.id==current.id},recurring=true,close=close)
+                "detail"->ledger.entries.find{it.id==current.id}?.let{e->EntryDetails(ledger,e,vm,busy,close,{editor=Editor("entry",e.id,e.kind)},{editor=Editor("refund",e.id)})}
+                "refund"->ledger.entries.find{it.id==current.id}?.let{RefundEditor(ledger,it,vm,busy,close)}
+                "budget"->BudgetEditor(ledger,ledger.budgets.find{it.id==current.id},vm,busy,close)
+                "goal"->GoalEditor(ledger,ledger.goals.find{it.id==current.id},vm,busy,close)
+                "debt"->DebtEditor(ledger,ledger.debts.find{it.id==current.id},vm,busy,close)
+                "payment"->ledger.debts.find{it.id==current.id}?.let{DebtPaymentEditor(ledger,it,vm,busy,close)}
+            }
+        }
+    }
+}
+@Composable private fun LockScreen(settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,authenticate:((()->Unit)->Unit)){
+    var pin by remember{mutableStateOf("")}
+    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),contentAlignment=Alignment.Center){
+        Column(Modifier.widthIn(max=440.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),verticalArrangement=Arrangement.spacedBy(18.dp)){
+            Text("ТРАЧУ.",style=MaterialTheme.typography.displaySmall,color=MaterialTheme.colorScheme.primary)
+            Text("Ваши финансы защищены",style=MaterialTheme.typography.headlineSmall)
+            PinField("PIN-код",pin,{pin=it})
+            Button(onClick={vm.unlockPin(pin);pin=""},enabled=!busy&&pin.length>=4,modifier=Modifier.fillMaxWidth()){Text("Разблокировать")}
+            if(settings.biometric&&biometricAvailable)OutlinedButton(onClick={authenticate(vm::unlockBiometric)},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Войти с биометрией")}
+            if(settings.lockedUntil>System.currentTimeMillis())Warning("Слишком много попыток. Подождите 30 секунд.")
+        }
+    }
+}

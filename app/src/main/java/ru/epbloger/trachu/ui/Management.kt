@@ -1,0 +1,252 @@
+package ru.epbloger.trachu.ui
+
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import ru.epbloger.trachu.AppViewModel
+import ru.epbloger.trachu.core.*
+import ru.epbloger.trachu.security.Settings
+import ru.epbloger.trachu.widget.refreshWidgets
+
+enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"), CATEGORIES("Категории"), RATES("Валюты и курсы"), SETTINGS("Настройки"), DATA("Файлы и копии"), ABOUT("О приложении") }
+
+@Composable fun Accounts(ledger:Ledger,edit:(Account?)->Unit,transfer:()->Unit,back:()->Unit) {
+    var showArchived by remember{mutableStateOf(false)}
+    val accounts=ledger.accounts.filter{showArchived||!it.archived}
+    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+        item{SectionTitle("Счета",action="Назад",onAction=back)}
+        item{Panel {
+            val v=Finance.valuation(ledger)
+            Text("Общий баланс");MoneyText(v.minor,ledger.baseCurrency,large=true)
+            if(v.missingCurrencies.isNotEmpty())Warning("Нет курсов: "+v.missingCurrencies.joinToString())
+            Button(onClick={edit(null)},modifier=Modifier.fillMaxWidth()){Text("Добавить счёт")}
+            OutlinedButton(onClick=transfer,enabled=ledger.accounts.count{!it.archived}>=2,modifier=Modifier.fillMaxWidth()){Text("Перевести деньги")}
+            Toggle("Показывать архив",showArchived,{showArchived=it})
+        }}
+        if(accounts.isEmpty())item{EmptyState("Счетов пока нет","Добавьте первый счёт, чтобы записывать операции.","Добавить"){edit(null)}}
+        items(accounts,key={it.id}){a->Panel{
+            SectionTitle(a.name,a.type.label()+" · "+a.currency,action="Изменить"){edit(a)}
+            MoneyText(Finance.balance(ledger,a.id),a.currency,large=true)
+            if(a.archived)Text("В архиве",color=MaterialTheme.colorScheme.tertiary)
+            if(!a.includeInTotal)Text("Не включён в общий баланс",style=MaterialTheme.typography.bodyMedium)
+        }}
+    }
+}
+@Composable fun Categories(ledger:Ledger,edit:(Category?)->Unit,back:()->Unit){
+    var income by remember{mutableStateOf(false)}
+    var archived by remember{mutableStateOf(false)}
+    val cats=ledger.categories.filter{it.income==income&&(archived||!it.archived)}
+    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+        item{SectionTitle("Категории",action="Назад",onAction=back)}
+        item{Panel{
+            Chips(listOf(false,true),income,{if(it)"Доходы" else "Расходы"}){income=it}
+            Toggle("Показывать архив",archived,{archived=it})
+            Button(onClick={edit(null)},modifier=Modifier.fillMaxWidth()){Text("Добавить категорию")}
+        }}
+        items(cats.sortedWith(compareBy<Category>{it.parentId?.let{p->ledger.categoryName(p)} ?: it.name}.thenBy{it.parentId!=null}),key={it.id}){c->Panel{
+            Row(horizontalArrangement=Arrangement.spacedBy(12.dp)){
+                CategoryDot(c)
+                Column(Modifier.weight(1f)){
+                    Text(c.parentId?.let{ledger.categoryName(it)+" / "}.orEmpty()+c.name,style=MaterialTheme.typography.titleMedium)
+                    if(c.archived)Text("В архиве",color=MaterialTheme.colorScheme.tertiary)
+                }
+                TextButton(onClick={edit(c)}){Text("Изменить")}
+            }
+        }}
+    }
+}
+@Composable fun Rates(ledger:Ledger,vm:AppViewModel,busy:Boolean,back:()->Unit){
+    var currency by remember{mutableStateOf(ledger.accounts.firstOrNull{it.currency!=ledger.baseCurrency}?.currency ?: allCurrencies.first{it!=ledger.baseCurrency})}
+    var date by remember{mutableStateOf(iso(today()))}
+    var value by remember{mutableStateOf("")}
+    var error by remember{mutableStateOf("")}
+    var base by remember(ledger.baseCurrency){mutableStateOf(ledger.baseCurrency)}
+    val canChange=ledger.accounts.isEmpty() && ledger.entries.isEmpty() && ledger.budgets.isEmpty() && ledger.schedules.isEmpty() && ledger.debts.isEmpty()
+    val relevant=ledger.rates.filter{it.currency==currency}.sortedByDescending{it.day}
+    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+        item{SectionTitle("Валюты и курсы",action="Назад",onAction=back)}
+        item{Panel{
+            Text("Основная валюта отчётов: ${ledger.baseCurrency}",style=MaterialTheme.typography.titleMedium)
+            if(canChange) {
+                Choice("Валюта отчётов",base,allCurrencies,{it}){base=it}
+                Button(onClick={vm.change({l->require(l.accounts.isEmpty()&&l.entries.isEmpty()&&l.budgets.isEmpty()&&l.schedules.isEmpty()&&l.debts.isEmpty());l.copy(baseCurrency=base,rates=emptyList())})},enabled=!busy&&base!=ledger.baseCurrency){Text("Изменить основную валюту")}
+            } else Text("После создания финансовых записей основная валюта фиксируется для корректных исторических отчётов.")
+        }}
+        item{Panel{
+            SectionTitle("Сохранить курс")
+            Choice("Валюта",currency.takeIf{it!=ledger.baseCurrency},allCurrencies.filter{it!=ledger.baseCurrency},{it}){currency=it;value=""}
+            Field("Дата курса",date,{date=it},supporting="ГГГГ-ММ-ДД")
+            Field("${ledger.baseCurrency} за 1 $currency",value,{value=it},true)
+            Button(onClick={
+                runCatching{
+                    val d=parseDay(date)
+                    val r=value.trim().replace(',','.')
+                    require(currency!=ledger.baseCurrency && d<=today())
+                    Money.convert(1,currency,ledger.baseCurrency,r)
+                    vm.change({l->l.copy(rates=l.rates.filterNot{it.currency==currency&&it.day==d}+FxRate(currency,d,r))})
+                    error=""
+                }.onFailure{error=it.message ?: "Проверьте курс и дату"}
+            },enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Сохранить вручную")}
+            OutlinedButton(onClick={runCatching{parseDay(date).also{require(it<=today())}}.onSuccess{vm.fetchRates(it);error=""}.onFailure{error="Проверьте дату"}},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Получить официальные курсы ЦБ РФ")}
+            Text("Запрос отправляет только выбранную дату на cbr.ru. Операции и остатки не передаются. Сохранённые исторические курсы операций не меняются.",style=MaterialTheme.typography.bodySmall)
+            if(error.isNotEmpty())Warning(error)
+        }}
+        item{Text("История $currency",style=MaterialTheme.typography.titleLarge)}
+        if(relevant.isEmpty())item{Text("Сохранённых курсов пока нет.")}
+        items(relevant,key={it.day}){r->Panel{Text(dayLabel(r.day),style=MaterialTheme.typography.titleMedium);Text("1 ${r.currency} = ${r.unitsOfBasePerUnit} ${ledger.baseCurrency}");Text(if(r.source=="CBR")"ЦБ РФ" else "Вручную",style=MaterialTheme.typography.bodySmall)}}
+    }
+}
+@Composable fun MoreIndex(open:(MorePage)->Unit) {
+    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+        item{Text("Ещё",style=MaterialTheme.typography.headlineLarge)}
+        val descriptions=mapOf(
+            MorePage.ACCOUNTS to "Наличные, карты, накопления и архив",
+            MorePage.CATEGORIES to "Категории, подкатегории, цвета и значки",
+            MorePage.RATES to "Исторические курсы и основная валюта",
+            MorePage.DATA to "Резервные копии, CSV, PDF и импорт",
+            MorePage.SETTINGS to "Тема, PIN, биометрия, уведомления и виджет",
+            MorePage.ABOUT to "Приватность, условия и контакты")
+        items(descriptions.toList()){(page,detail)->Panel{
+            SectionTitle(page.label,detail,action="Открыть"){open(page)}
+        }}
+    }
+}
+@Composable fun PinField(label:String,value:String,change:(String)->Unit) {
+    OutlinedTextField(value,{change(it.filter(Char::isDigit).take(12))},Modifier.fillMaxWidth(),label={Text(label)},singleLine=true,
+        keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.NumberPassword),visualTransformation=PasswordVisualTransformation())
+}
+@Composable fun SettingsPage(settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,authenticate:((()->Unit)->Unit),back:()->Unit){
+    var pinDialog by remember{mutableStateOf(false)}
+    var removeDialog by remember{mutableStateOf(false)}
+    val notify=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){}
+    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+        item{SectionTitle("Настройки",action="Назад",onAction=back)}
+        item{Panel{
+            SectionTitle("Оформление")
+            Choice("Тема",settings.theme,listOf("system","light","dark"),{when(it){"light"->"Светлая";"dark"->"Тёмная";else->"Системная"}}){vm.perform{vm.preferences.theme(it)}}
+        }}
+        item{Panel{
+            SectionTitle("Защита приложения")
+            Text(if(settings.protected)"PIN включён" else "PIN не установлен")
+            Button(onClick={pinDialog=true},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text(if(settings.protected)"Изменить PIN" else "Установить PIN")}
+            if(settings.protected) {
+                Toggle("Биометрия",settings.biometric,{value->
+                    if(!value)vm.perform{vm.preferences.biometric(false)}
+                    else authenticate { vm.perform{vm.preferences.biometric(true)} }
+                },if(biometricAvailable)"Подтверждение отпечатком или другой сильной биометрией." else "Для включения настройте биометрию в Android.")
+                Choice("Автоблокировка",settings.lockSeconds,listOf(0,15,30,60,300),{if(it==0)"Сразу" else "$it сек."}){vm.perform{vm.preferences.timeout(it)}}
+                OutlinedButton(onClick={vm.lock()},modifier=Modifier.fillMaxWidth()){Text("Заблокировать сейчас")}
+                TextButton(onClick={removeDialog=true}){Text("Отключить PIN",color=MaterialTheme.colorScheme.error)}
+            }
+            Text("PIN ограничивает доступ к интерфейсу. База защищена изоляцией Android; переносимая резервная копия шифруется отдельно паролем.",style=MaterialTheme.typography.bodySmall)
+        }}
+        item{Panel{
+            SectionTitle("Виджет и уведомления")
+            Toggle("Показывать баланс на виджете",settings.showWidgetBalance,{v->vm.perform{
+                vm.preferences.widget(v);ru.epbloger.trachu.worker.FinanceWorker.refresh(vm.getApplication())
+            }},"При включённом PIN сумма всегда скрыта.")
+            if(Build.VERSION.SDK_INT>=33)Button(onClick={notify.launch(Manifest.permission.POST_NOTIFICATIONS)}){Text("Разрешить уведомления")}
+            Text("Напоминания о плановых операциях, долгах и превышении бюджета. Android может откладывать фоновые задачи.",style=MaterialTheme.typography.bodyMedium)
+        }}
+    }
+    if(pinDialog||removeDialog){
+        var old by remember{mutableStateOf("")}
+        var pin by remember{mutableStateOf("")}
+        var repeat by remember{mutableStateOf("")}
+        var error by remember{mutableStateOf("")}
+        Form(if(removeDialog)"Отключение PIN" else "Настройка PIN",{pinDialog=false;removeDialog=false},busy,onSave={
+            if(!removeDialog && (pin.length<4||pin!=repeat))error="Введите совпадающий PIN от 4 до 12 цифр"
+            else {
+                vm.changePin(if(removeDialog)"" else pin,old)
+                pinDialog=false;removeDialog=false
+            }
+        }){
+            if(settings.protected)PinField("Текущий PIN",old,{old=it})
+            if(!removeDialog){PinField("Новый PIN",pin,{pin=it});PinField("Повторите PIN",repeat,{repeat=it})}
+            if(error.isNotEmpty())Warning(error)
+        }
+    }
+}
+data class FileRequest(val mode:String,val save:Boolean,val password:String="",val account:String="",val period:Period=Period.month())
+@Composable fun DataPage(ledger:Ledger,launch:(FileRequest)->Unit,busy:Boolean,back:()->Unit) {
+    var backup by remember{mutableStateOf<String?>(null)}
+    var importStatement by remember{mutableStateOf(false)}
+    var account by remember{mutableStateOf(ledger.accounts.firstOrNull{!it.archived}?.id.orEmpty())}
+    var csvConfirm by remember{mutableStateOf(false)}
+    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+        item{SectionTitle("Файлы и копии",action="Назад",onAction=back)}
+        item{Panel{
+            SectionTitle("Зашифрованная копия")
+            Text("Сохраните все счета, операции, настройки финансов, категории, курсы и чеки в одном файле. Пароль нужен для восстановления на любом устройстве.")
+            Button(onClick={backup="save"},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Создать резервную копию")}
+            OutlinedButton(onClick={backup="restore"},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Восстановить из копии")}
+        }}
+        item{Panel{
+            SectionTitle("CSV и Excel")
+            Text("CSV в UTF-8 открывается в Excel и других таблицах. Файл ТРАЧУ. содержит операции и связанные записи для переноса; он не зашифрован.")
+            Button(onClick={launch(FileRequest("csv",true))},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Экспорт CSV")}
+            OutlinedButton(onClick={csvConfirm=true},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Импорт CSV ТРАЧУ.")}
+            OutlinedButton(onClick={importStatement=true},enabled=!busy&&ledger.accounts.any{!it.archived},modifier=Modifier.fillMaxWidth()){Text("Импорт CSV выписки")}
+            Text("Выписка: date,amount,category,note,id (id необязателен). Дата YYYY-MM-DD; отрицательные суммы — расходы, положительные — доходы.",style=MaterialTheme.typography.bodySmall)
+        }}
+        item{Panel{
+            SectionTitle("PDF-отчёт")
+            Text("Отчёт за текущий месяц. Другой период можно выбрать в аналитике.")
+            Button(onClick={launch(FileRequest("pdf",true,period=Period.month()))},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Сохранить PDF")}
+        }}
+    }
+    if(backup!=null){
+        var password by remember{mutableStateOf("")}
+        var repeat by remember{mutableStateOf("")}
+        var error by remember{mutableStateOf("")}
+        val save=backup=="save"
+        Form(if(save)"Пароль резервной копии" else "Восстановление",{backup=null},busy,if(save)"Выбрать место" else "Выбрать файл",onSave={
+            if(password.length<8 || save&&password!=repeat)error="Пароль должен содержать минимум 8 символов"+(if(save)" и совпадать с подтверждением" else "")
+            else {launch(FileRequest("backup",save,password));backup=null}
+        }){
+            if(!save)Warning("Восстановление полностью заменит текущие финансовые данные после проверки пароля и целостности файла.")
+            OutlinedTextField(password,{password=it},Modifier.fillMaxWidth(),label={Text("Пароль")},visualTransformation=PasswordVisualTransformation(),singleLine=true)
+            if(save)OutlinedTextField(repeat,{repeat=it},Modifier.fillMaxWidth(),label={Text("Повторите пароль")},visualTransformation=PasswordVisualTransformation(),singleLine=true)
+            Text("Пароль нигде не хранится. Восстановить забытый пароль невозможно.")
+            if(error.isNotEmpty())Warning(error)
+        }
+    }
+    if(csvConfirm)Confirm("Импортировать таблицу?","Совпадающие записи не дублируются. При несовместимых идентификаторах импорт будет отклонён.",{csvConfirm=false},{csvConfirm=false;launch(FileRequest("csv",false))},busy)
+    if(importStatement)Form("Импорт выписки",{importStatement=false},busy,"Выбрать файл",onSave={
+        if(account.isNotBlank()){launch(FileRequest("statement",false,account=account));importStatement=false}
+    }){
+        Choice("Счёт",account,ledger.accounts.filter{!it.archived}.map{it.id},{ledger.accountName(it)}){account=it}
+        Text("Суммы должны быть в валюте этого счёта. Импорт повторно не добавит те же строки. Для операций в иностранной валюте заранее сохраните исторические курсы.")
+    }
+}
+@Composable fun AboutPage(back:()->Unit) {
+    var document by remember{mutableStateOf("privacy")}
+    val context=androidx.compose.ui.platform.LocalContext.current
+    val text=remember(document){runCatching{context.assets.open("legal/$document.txt").bufferedReader().use{it.readText()}}.getOrElse{"Документ недоступен"}}
+    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+        item{SectionTitle("О приложении",action="Назад",onAction=back)}
+        item{Panel{
+            Text("ТРАЧУ.",style=MaterialTheme.typography.displaySmall,color=MaterialTheme.colorScheme.primary)
+            Text("Личные финансы под контролем")
+            Text("Moorkis Development · 1.0.0")
+            Text("© 2026 Moorkis Development. Все права защищены.")
+            Text("https://github.com/epbloger/trachu")
+            Text("helpmoorkis@yandex.ru")
+        }}
+        item{Panel{
+            Chips(listOf("privacy","terms","developer"),document,{when(it){"privacy"->"Приватность";"terms"->"Условия";else->"Разработчик"}}){document=it}
+            Text(text,style=MaterialTheme.typography.bodyMedium)
+        }}
+    }
+}

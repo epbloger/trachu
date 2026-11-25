@@ -99,7 +99,7 @@ private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","�
 
 private data class SplitDraft(val category: String,val amount: String)
 
-@Composable fun EntryEditor(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, initialKind: Kind, current: Entry?=null, schedule: Schedule?=null, recurring: Boolean=false, close: ()->Unit) {
+@Composable fun EntryEditor(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, initialKind: Kind, current: Entry?=null, schedule: Schedule?=null, recurring: Boolean=false, close: ()->Unit, forcePlanned: Boolean=false) {
     val original=schedule?.template ?: current
     val active=ledger.accounts.filter{!it.archived || it.id==original?.accountId || it.id==original?.targetAccountId}
     val defaultAccount=active.find{it.id==original?.accountId} ?: active.find{it.id==settings.lastAccount} ?: active.firstOrNull()
@@ -111,7 +111,7 @@ private data class SplitDraft(val category: String,val amount: String)
     var note by remember { mutableStateOf(original?.note.orEmpty()) }
     var tags by remember { mutableStateOf(original?.tags?.joinToString(", ").orEmpty()) }
     var essential by remember { mutableStateOf(original?.essential ?: false) }
-    var planned by remember { mutableStateOf(original?.status==EntryStatus.PLANNED || recurring) }
+    var planned by remember { mutableStateOf(original?.status==EntryStatus.PLANNED || recurring || forcePlanned) }
     var targetId by remember { mutableStateOf(original?.targetAccountId.orEmpty()) }
     var targetAmount by remember { mutableStateOf(original?.let{e->e.targetMinor?.let{m->Money.input(m,ledger.accounts.first{a->a.id==e.targetAccountId}.currency)}}.orEmpty()) }
     var explicitRate by remember { mutableStateOf(original?.rate.orEmpty()) }
