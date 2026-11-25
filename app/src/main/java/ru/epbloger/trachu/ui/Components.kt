@@ -78,7 +78,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
         keyboardOptions=KeyboardOptions(keyboardType=if(numeric) KeyboardType.Decimal else KeyboardType.Text),
         supportingText=if(supporting==null) null else { { Text(supporting) } })
 }
-@Composable fun <T> Choice(label: String, value: T?, options: List<T>, title: (T)->String, onChoose: (T)->Unit, modifier: Modifier=Modifier) {
+@Composable fun <T> Choice(label: String, value: T?, options: List<T>, title: (T)->String, modifier: Modifier=Modifier, onChoose: (T)->Unit) {
     var open by remember { mutableStateOf(false) }
     Column(modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(4.dp)) {
         Text(label,style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
