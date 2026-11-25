@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import ru.epbloger.trachu.core.*
@@ -180,17 +181,21 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
     val category=ledger.categories.find { it.id==entry.splits.firstOrNull()?.categoryId }
     val incoming=entry.kind in listOf(Kind.INCOME,Kind.REFUND,Kind.DEBT_IN,Kind.LOAN_IN)
     val sign=when(entry.kind) { Kind.INCOME,Kind.REFUND,Kind.DEBT_IN,Kind.LOAN_IN->"+"; Kind.EXPENSE,Kind.DEBT_OUT,Kind.LOAN_OUT->"−"; Kind.TRANSFER->"" }
-    Row(Modifier.fillMaxWidth().clickable(onClick=onClick).padding(vertical=10.dp),
-        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-        CategoryDot(category)
-        Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(2.dp)) {
-            Text(ledger.entryName(entry),style=MaterialTheme.typography.titleMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
-            Text(listOf(dayLabel(entry.day),a.name,entry.note.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" · "),
-                style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2,overflow=TextOverflow.Ellipsis)
-            if(entry.status==EntryStatus.PLANNED) Text("Запланировано",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.tertiary)
+    val amount=sign+Money.format(entry.minor,a.currency)
+    val amountColor=if(incoming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+    BoxWithConstraints(Modifier.fillMaxWidth().clickable(onClick=onClick).padding(vertical=10.dp)) {
+        val stack=maxWidth<320.dp || LocalDensity.current.fontScale>=1.3f || amount.length>15
+        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+            CategoryDot(category)
+            Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(2.dp)) {
+                Text(ledger.entryName(entry),style=MaterialTheme.typography.titleMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
+                Text(listOf(dayLabel(entry.day),a.name,entry.note.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" · "),
+                    style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2,overflow=TextOverflow.Ellipsis)
+                if(entry.status==EntryStatus.PLANNED)Text("Запланировано",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.tertiary)
+                if(stack)Text(amount,style=MaterialTheme.typography.titleMedium,color=amountColor)
+            }
+            if(!stack)Text(amount,modifier=Modifier.widthIn(max=156.dp),style=MaterialTheme.typography.titleMedium,color=amountColor)
         }
-        Text(sign+Money.format(entry.minor,a.currency),modifier=Modifier.widthIn(max=156.dp),style=MaterialTheme.typography.titleMedium,
-            color=if(incoming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
     }
 }
 @Composable fun Confirm(title: String, detail: String, onClose: ()->Unit, onConfirm: ()->Unit, busy: Boolean=false) {

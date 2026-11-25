@@ -19,11 +19,13 @@ class NavigationTest {
         rule.waitUntil(10_000){rule.onAllNodesWithTag("field:Название").fetchSemanticsNodes().isNotEmpty()}
         rule.onNodeWithTag("field:Название").performTextInput("Тестовый кошелёк")
         rule.onNodeWithTag("form_save").performClick()
+        rule.waitUntil(15_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
         rule.waitUntil(15_000){rule.onAllNodesWithText("Тестовый кошелёк").fetchSemanticsNodes().isNotEmpty()}
         rule.onNodeWithTag("nav-home").performClick()
         rule.onNodeWithTag("add-expense").performClick()
         rule.onNodeWithTag("field:Сумма (RUB)").performTextInput("12.34")
         rule.onNodeWithTag("form_save").performClick()
+        rule.waitUntil(15_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
         rule.waitUntil(15_000){rule.onAllNodesWithTag("nav-operations").fetchSemanticsNodes().isNotEmpty()}
         rule.onNodeWithTag("nav-operations").performClick()
         val expected="−"+Money.format(1234,"RUB")

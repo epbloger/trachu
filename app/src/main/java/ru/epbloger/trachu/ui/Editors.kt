@@ -2,8 +2,6 @@ package ru.epbloger.trachu.ui
 
 import android.graphics.BitmapFactory
 import android.util.Base64
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -112,41 +110,54 @@ private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","�
 
 private data class SplitDraft(val category: String,val amount: String)
 
-@Composable fun EntryEditor(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, initialKind: Kind, current: Entry?=null, schedule: Schedule?=null, recurring: Boolean=false, close: ()->Unit, forcePlanned: Boolean=false) {
+/** In-memory form state retained across a temporary lock, never written to saved-state bundles. */
+class EntryDraft {
+    private val states=mutableMapOf<String,MutableState<*>>()
+    @Suppress("UNCHECKED_CAST")
+    fun <T> state(key:String,initial:()->T):MutableState<T> =
+        states.getOrPut(key){mutableStateOf(initial())} as MutableState<T>
+    fun attach(receipt:Receipt) {
+        val ids=state("receiptIds"){emptyList<String>()}
+        if(ids.value.size>=4)return
+        val pending=state("pendingReceipts"){emptyList<Receipt>()}
+        pending.value=pending.value+receipt
+        ids.value=ids.value+receipt.id
+    }
+}
+@Composable fun EntryEditor(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, initialKind: Kind, current: Entry?=null, schedule: Schedule?=null, recurring: Boolean=false, close: ()->Unit, forcePlanned: Boolean=false, draft: EntryDraft, chooseReceipt: ()->Unit) {
     val original=schedule?.template ?: current
     val active=ledger.accounts.filter{!it.archived || it.id==original?.accountId || it.id==original?.targetAccountId}.sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name})
     val defaultAccount=active.find{it.id==original?.accountId} ?: active.find{it.id==settings.lastAccount} ?: active.firstOrNull()
-    var accountId by remember { mutableStateOf(defaultAccount?.id.orEmpty()) }
-    var kind by remember { mutableStateOf(original?.kind ?: initialKind) }
-    var amount by remember { mutableStateOf(original?.let{Money.input(it.minor,ledger.accounts.first{a->a.id==it.accountId}.currency)}.orEmpty()) }
-    var day by remember { mutableStateOf(iso(schedule?.nextDay ?: original?.day ?: today())) }
-    var time by remember { mutableStateOf(original?.timeMinutes?.let{"%02d:%02d".format(it/60,it%60)} ?: LocalTime.now().withSecond(0).withNano(0).toString()) }
-    var note by remember { mutableStateOf(original?.note.orEmpty()) }
-    var tags by remember { mutableStateOf(original?.tags?.joinToString(", ").orEmpty()) }
-    var essential by remember { mutableStateOf(original?.essential ?: false) }
-    var planned by remember { mutableStateOf(original?.status==EntryStatus.PLANNED || recurring || forcePlanned) }
-    var targetId by remember { mutableStateOf(original?.targetAccountId.orEmpty()) }
-    var targetAmount by remember { mutableStateOf(original?.let{e->e.targetMinor?.let{m->Money.input(m,ledger.accounts.first{a->a.id==e.targetAccountId}.currency)}}.orEmpty()) }
-    var explicitRate by remember { mutableStateOf(original?.rate.orEmpty()) }
-    var splitMode by remember { mutableStateOf((original?.splits?.size ?: 0)>1) }
+    var accountId by draft.state("accountId") { defaultAccount?.id.orEmpty() }
+    var kind by draft.state("kind") { original?.kind ?: initialKind }
+    var amount by draft.state("amount") { original?.let{Money.input(it.minor,ledger.accounts.first{a->a.id==it.accountId}.currency)}.orEmpty() }
+    var day by draft.state("day") { iso(schedule?.nextDay ?: original?.day ?: today()) }
+    var time by draft.state("time") { original?.timeMinutes?.let{"%02d:%02d".format(it/60,it%60)} ?: LocalTime.now().withSecond(0).withNano(0).toString() }
+    var note by draft.state("note") { original?.note.orEmpty() }
+    var tags by draft.state("tags") { original?.tags?.joinToString(", ").orEmpty() }
+    var essential by draft.state("essential") { original?.essential ?: false }
+    var planned by draft.state("planned") { original?.status==EntryStatus.PLANNED || recurring || forcePlanned }
+    var targetId by draft.state("targetId") { original?.targetAccountId.orEmpty() }
+    var targetAmount by draft.state("targetAmount") { original?.let{e->e.targetMinor?.let{m->Money.input(m,ledger.accounts.first{a->a.id==e.targetAccountId}.currency)}}.orEmpty() }
+    var explicitRate by draft.state("explicitRate") { original?.rate.orEmpty() }
+    var splitMode by draft.state("splitMode") { (original?.splits?.size ?: 0)>1 }
     val initialCategory=ledger.categories.firstOrNull{it.income==(kind==Kind.INCOME) && !it.archived}?.id.orEmpty()
-    var splitDrafts by remember { mutableStateOf(original?.splits?.map{SplitDraft(it.categoryId,Money.input(it.minor,defaultAccount?.currency ?: ledger.baseCurrency))}
-        ?.takeIf{it.isNotEmpty()} ?: listOf(SplitDraft(initialCategory,""))) }
-    var frequency by remember { mutableStateOf(schedule?.frequency ?: Frequency.MONTHLY) }
-    var interval by remember { mutableStateOf(schedule?.interval?.toString() ?: "1") }
-    var weekdays by remember { mutableStateOf(schedule?.weekdays.orEmpty().toSet()) }
-    var alternate by remember { mutableStateOf(schedule?.alternateWeekdays.orEmpty().toSet()) }
-    var useAlternate by remember { mutableStateOf(schedule?.alternateWeekdays?.isNotEmpty()==true) }
-    var monthDays by remember { mutableStateOf(schedule?.monthDays?.joinToString(",").orEmpty()) }
-    var endDay by remember { mutableStateOf(schedule?.endDay?.let(::iso).orEmpty()) }
-    var autoPost by remember { mutableStateOf(schedule?.autoPost ?: false) }
-    var enabled by remember { mutableStateOf(schedule?.enabled ?: true) }
-    var pendingReceipts by remember { mutableStateOf(emptyList<Receipt>()) }
-    var receiptIds by remember { mutableStateOf(original?.receiptIds ?: emptyList()) }
-    val launcher=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()){uri->if(uri!=null)vm.readReceipt(uri){r->pendingReceipts=pendingReceipts+r;receiptIds=receiptIds+r.id}}
-    var error by remember { mutableStateOf("") }
-    var advanced by remember { mutableStateOf(original!=null || recurring || forcePlanned) }
-    var deleteSchedule by remember { mutableStateOf(false) }
+    var splitDrafts by draft.state("splitDrafts") { original?.splits?.map{SplitDraft(it.categoryId,Money.input(it.minor,defaultAccount?.currency ?: ledger.baseCurrency))}
+        ?.takeIf{it.isNotEmpty()} ?: listOf(SplitDraft(initialCategory,"")) }
+    var frequency by draft.state("frequency") { schedule?.frequency ?: Frequency.MONTHLY }
+    var interval by draft.state("interval") { schedule?.interval?.toString() ?: "1" }
+    var weekdays by draft.state("weekdays") { schedule?.weekdays.orEmpty().toSet() }
+    var alternate by draft.state("alternate") { schedule?.alternateWeekdays.orEmpty().toSet() }
+    var useAlternate by draft.state("useAlternate") { schedule?.alternateWeekdays?.isNotEmpty()==true }
+    var monthDays by draft.state("monthDays") { schedule?.monthDays?.joinToString(",").orEmpty() }
+    var endDay by draft.state("endDay") { schedule?.endDay?.let(::iso).orEmpty() }
+    var autoPost by draft.state("autoPost") { schedule?.autoPost ?: false }
+    var enabled by draft.state("enabled") { schedule?.enabled ?: true }
+    var pendingReceipts by draft.state("pendingReceipts") { emptyList<Receipt>() }
+    var receiptIds by draft.state("receiptIds") { original?.receiptIds ?: emptyList() }
+    var error by draft.state("error") { "" }
+    var advanced by draft.state("advanced") { original!=null || recurring || forcePlanned }
+    var deleteSchedule by draft.state("deleteSchedule") { false }
     val account=ledger.accounts.find{it.id==accountId}
     val target=ledger.accounts.find{it.id==targetId}
     val cats=ledger.categories.filter{it.income==(kind==Kind.INCOME) && (!it.archived || splitDrafts.any{d->d.category==it.id})}
@@ -245,7 +256,7 @@ private data class SplitDraft(val category: String,val amount: String)
                 if(r!=null)ReceiptPreview(r)
                 TextButton(onClick={receiptIds=receiptIds.filterNot{it==id}}){Text("Убрать фотографию")}
             }
-            OutlinedButton(onClick={launcher.launch("image/*")},enabled=!busy && receiptIds.size<4){Text("Прикрепить фото чека")}
+            OutlinedButton(onClick=chooseReceipt,enabled=!busy && receiptIds.size<4){Text("Прикрепить фото чека")}
         }
         if(error.isNotEmpty())Warning(error)
     }

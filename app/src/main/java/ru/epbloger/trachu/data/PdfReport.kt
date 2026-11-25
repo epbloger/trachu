@@ -33,12 +33,21 @@ object PdfReport {
             y=96f
         }
         fun row(value: String, bold: Boolean=false) {
-            val chunks=value.replace('\n',' ').chunked(76).ifEmpty { listOf("") }
-            chunks.forEach {
-                if(y>785f) newPage()
-                text(requireNotNull(page).canvas,it,36f,y,11f,bold)
+            var remaining=value.replace('\n',' ')
+            do {
+                paint.textSize=11f
+                paint.typeface=Typeface.create("sans-serif",if(bold) Typeface.BOLD else Typeface.NORMAL)
+                val measured=paint.breakText(remaining,true,523f,null)
+                val count=if(remaining.isEmpty())0 else measured.coerceAtLeast(1).coerceAtMost(remaining.length)
+                val end=if(count<remaining.length && count>0) {
+                    val space=remaining.lastIndexOf(' ',count-1)
+                    if(space>0)space else count
+                } else count
+                if(y>785f)newPage()
+                text(requireNotNull(page).canvas,remaining.substring(0,end),36f,y,11f,bold)
                 y+=18f
-            }
+                remaining=remaining.substring(end).trimStart()
+            }while(remaining.isNotEmpty())
         }
         try {
             newPage()

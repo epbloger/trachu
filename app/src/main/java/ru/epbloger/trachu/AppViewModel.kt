@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -19,7 +20,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val preferences=Preferences(app)
     private val _ledger=MutableStateFlow<Ledger?>(null)
     val ledger=_ledger.asStateFlow()
-    val settings=preferences.settings.stateIn(viewModelScope,SharingStarted.Eagerly,null)
+    private val _settings=MutableStateFlow<Settings?>(null)
+    val settings=_settings.asStateFlow()
+    private val _loadingError=MutableStateFlow<String?>(null)
+    val loadingError=_loadingError.asStateFlow()
+    private var ledgerJob:Job?=null
+    private var settingsJob:Job?=null
     private val _message=MutableStateFlow<String?>(null)
     val message=_message.asStateFlow()
     private val _busy=MutableStateFlow(false)
@@ -29,10 +35,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _quick=MutableStateFlow<Kind?>(null)
     val quick=_quick.asStateFlow()
     init {
-        viewModelScope.launch {
-            store.ledger.catch { _message.value="Не удалось открыть данные: ${it.message}" }.collect { _ledger.value=it }
-        }
+        retryLoad()
         FinanceWorker.refresh(app)
+    }
+    fun retryLoad() {
+        ledgerJob?.cancel()
+        settingsJob?.cancel()
+        _loadingError.value=null
+        _ledger.value=null
+        _settings.value=null
+        ledgerJob=viewModelScope.launch {
+            store.ledger.catch {
+                _ledger.value=null
+                _loadingError.value="Не удалось открыть финансовые данные. Повторите попытку."
+            }.collect { _ledger.value=it }
+        }
+        settingsJob=viewModelScope.launch {
+            preferences.settings.catch {
+                _settings.value=null
+                _unlocked.value=false
+                _loadingError.value="Не удалось открыть настройки защиты. Повторите попытку."
+            }.collect { _settings.value=it }
+        }
     }
     fun clearMessage() { _message.value=null }
     fun rememberAccount(id: String) { viewModelScope.launch { preferences.lastAccount(id) } }

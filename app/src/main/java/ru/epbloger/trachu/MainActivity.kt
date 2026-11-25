@@ -49,6 +49,7 @@ class MainActivity : FragmentActivity() {
             val ledger by vm.ledger.collectAsStateWithLifecycle()
             val message by vm.message.collectAsStateWithLifecycle()
             val busy by vm.busy.collectAsStateWithLifecycle()
+            val loadingError by vm.loadingError.collectAsStateWithLifecycle()
             val unlocked by vm.unlocked.collectAsStateWithLifecycle()
             SideEffect {
                 if(settings?.protected == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -58,7 +59,14 @@ class MainActivity : FragmentActivity() {
                 Surface(Modifier.fillMaxSize(),color=MaterialTheme.colorScheme.background) {
                     val s=settings
                     val l=ledger
-                    if(s==null||l==null)Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){CircularProgressIndicator()}
+                    if(s==null||l==null)Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),contentAlignment=Alignment.Center){
+                        val error=loadingError
+                        if(error==null)CircularProgressIndicator()
+                        else Column(Modifier.padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(16.dp)){
+                            Text(error,style=MaterialTheme.typography.bodyLarge)
+                            Button(onClick=vm::retryLoad){Text("Повторить")}
+                        }
+                    }
                     else AppShell(l,s,vm,busy,biometricAvailable(),s.protected&&!unlocked,{done->authenticate(done)})
                     if(message!=null && (settings?.protected!=true || unlocked || message=="Неверный PIN" || message?.startsWith("Слишком много попыток")==true))AlertDialog(onDismissRequest=vm::clearMessage,title={Text("ТРАЧУ.")},text={Text(message.orEmpty())},
                         confirmButton={TextButton(onClick=vm::clearMessage){Text("OK")}})
@@ -114,6 +122,14 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
     var plan by rememberSaveable{mutableStateOf(PlannerTab.BUDGET)}
     var editor by remember{mutableStateOf<Editor?>(null)}
     var fileRequest by remember{mutableStateOf<FileRequest?>(null)}
+    val entryDraft=remember(editor){EntryDraft()}
+    var receiptRequest by remember{mutableStateOf<EntryDraft?>(null)}
+    val receiptPicker=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()){uri->
+        val request=receiptRequest
+        receiptRequest=null
+        if(uri!=null && request===entryDraft)vm.readReceipt(uri){request?.attach(it)}
+    }
+    fun chooseReceipt(){receiptRequest=entryDraft;receiptPicker.launch("image/*")}
     val quick by vm.quick.collectAsStateWithLifecycle()
     val save=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
         val request=fileRequest;fileRequest=null
@@ -205,8 +221,8 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
             when(current.type){
                 "account"->AccountEditor(ledger,ledger.accounts.find{it.id==current.id},busy,vm,close)
                 "category"->CategoryEditor(ledger,ledger.categories.find{it.id==current.id},busy,vm,close)
-                "entry","planned"->EntryEditor(ledger,settings,vm,busy,current.kind,current=ledger.entries.find{it.id==current.id},close=close,forcePlanned=current.type=="planned")
-                "schedule"->EntryEditor(ledger,settings,vm,busy,Kind.EXPENSE,schedule=ledger.schedules.find{it.id==current.id},recurring=true,close=close)
+                "entry","planned"->EntryEditor(ledger,settings,vm,busy,current.kind,current=ledger.entries.find{it.id==current.id},close=close,forcePlanned=current.type=="planned",draft=entryDraft,chooseReceipt=::chooseReceipt)
+                "schedule"->EntryEditor(ledger,settings,vm,busy,Kind.EXPENSE,schedule=ledger.schedules.find{it.id==current.id},recurring=true,close=close,draft=entryDraft,chooseReceipt=::chooseReceipt)
                 "detail"->ledger.entries.find{it.id==current.id}?.let{e->EntryDetails(ledger,e,vm,busy,close,{
                     editor=when(e.kind){
                         Kind.REFUND->Editor("editRefund",e.id)
