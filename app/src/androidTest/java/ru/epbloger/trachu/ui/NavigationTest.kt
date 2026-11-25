@@ -1,6 +1,7 @@
 package ru.epbloger.trachu.ui
 
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -52,9 +53,13 @@ class NavigationTest {
         rule.onNodeWithTag("nav-operations").performClick()
         rule.waitUntil(15_000){rule.onAllNodesWithText(expected).fetchSemanticsNodes().isNotEmpty()}
         rule.activity.runOnUiThread{rule.activity.requestedOrientation=ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE}
-        rule.waitForIdle()
-        rule.onNodeWithTag("nav-operations").assertExists()
-        rule.onNodeWithText(expected).assertExists()
+        rule.waitUntil(20_000) {
+            rule.activity.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+                rule.onAllNodesWithTag("operations-list").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("nav-operations").assertIsSelected()
+        rule.onNodeWithTag("operations-list").performScrollToNode(hasText(expected))
+        rule.onNodeWithText(expected).assertIsDisplayed()
         rule.onNodeWithTag("nav-reports").performClick()
         rule.onNodeWithText("Аналитика").assertExists()
         capture("analytics_landscape")

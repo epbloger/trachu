@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -37,7 +38,7 @@ import ru.epbloger.trachu.core.*
     BoxWithConstraints(Modifier.fillMaxSize()) {
       val wide=maxWidth>=760.dp && LocalDensity.current.fontScale<1.5f
       Row(Modifier.fillMaxSize()) {
-       LazyColumn(modifier=Modifier.weight(1f),contentPadding=PaddingValues(start=20.dp,end=20.dp,top=20.dp,bottom=96.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+       LazyColumn(modifier=Modifier.weight(1f).testTag("operations-list"),contentPadding=PaddingValues(start=20.dp,end=20.dp,top=20.dp,bottom=96.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
         item { SectionTitle("Операции",action="Добавить"){add(Kind.EXPENSE)} }
         item {
             Field("Поиск по сумме, заметке, тегу",query,{query=it})
