@@ -7,7 +7,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.*
-import androidx.glance.action.actionStartActivity
+import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.*
 import androidx.glance.layout.*
 import androidx.glance.text.*
@@ -32,7 +32,7 @@ class BalanceWidget : GlanceAppWidget() {
         val text=ColorProvider(Color(0xFFB9F3D5))
         Column(GlanceModifier.fillMaxSize().background(Color(0xFF173B35)).padding(12.dp),verticalAlignment=Alignment.CenterVertically) {
             Text("ТРАЧУ.",style=TextStyle(color=text,fontSize=13.sp,fontWeight=FontWeight.Bold))
-            Text(value,style=TextStyle(color=ColorProvider(Color.White),fontSize=22.sp,fontWeight=FontWeight.Bold),maxLines=1)
+            Text(value,style=TextStyle(color=ColorProvider(Color.White),fontSize=if(value.length>16) 15.sp else 22.sp,fontWeight=FontWeight.Bold),maxLines=2)
             Spacer(GlanceModifier.height(8.dp))
             Row(horizontalAlignment=Alignment.Start) {
                 Button("− Расход",actionStartActivity(Intent(context,MainActivity::class.java).setAction("ru.epbloger.trachu.QUICK_EXPENSE").putExtra("quick","EXPENSE")))
