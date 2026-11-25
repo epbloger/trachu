@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import ru.epbloger.trachu.core.*
@@ -92,11 +94,13 @@ object LedgerRecords {
 
 class LedgerStore(private val db: TrachuDatabase) {
     private val dao get() = db.ledgerDao()
-    val ledger: Flow<Ledger> = dao.observe().map { LedgerRecords.decode(it) }
+    val ledger: Flow<Ledger> = dao.observe().map { LedgerRecords.decode(it) }.flowOn(Dispatchers.Default)
     suspend fun current(): Ledger = db.withTransaction { LedgerRecords.decode(dao.read()) }
     suspend fun change(transform: (Ledger) -> Ledger): Ledger = db.withTransaction {
         val before = dao.read()
-        val next = transform(LedgerRecords.decode(before)).validated()
+        val transformed = transform(LedgerRecords.decode(before))
+        val usedReceipts = (transformed.entries.flatMap { it.receiptIds } + transformed.schedules.flatMap { it.template.receiptIds }).toSet()
+        val next = transformed.copy(receipts = transformed.receipts.filter { it.id in usedReceipts }).validated()
         val after = LedgerRecords.encode(next)
         val old = before.associateBy { it.kind to it.id }
         val updated = after.associateBy { it.kind to it.id }

@@ -1,6 +1,9 @@
 package ru.epbloger.trachu.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -30,7 +33,11 @@ import ru.epbloger.trachu.core.*
         }
         when(sort){ "Старые"->selected.sortedWith(compareBy<Entry>{it.day}.thenBy{it.timeMinutes});"Сумма"->selected.sortedByDescending{it.baseMinor};else->selected.sortedWith(compareByDescending<Entry>{it.day}.thenByDescending{it.timeMinutes}) }
     }
-    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+    var selectedId by remember { mutableStateOf<String?>(null) }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+      val wide=maxWidth>=760.dp && LocalDensity.current.fontScale<1.5f
+      Row(Modifier.fillMaxSize()) {
+       LazyColumn(modifier=Modifier.weight(1f),contentPadding=PaddingValues(start=20.dp,end=20.dp,top=20.dp,bottom=96.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
         item { SectionTitle("Операции",action="Добавить"){add(Kind.EXPENSE)} }
         item {
             Field("Поиск по сумме, заметке, тегу",query,{query=it})
@@ -48,6 +55,24 @@ import ru.epbloger.trachu.core.*
         }
         item { Text("Найдено: ${entries.size}",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant) }
         if(entries.isEmpty()) item { EmptyState("Нет операций","Добавьте расход или измените фильтры.","Добавить",{add(Kind.EXPENSE)}) }
-        items(entries,key={it.id}) { entry->Panel { EntryRow(ledger,entry){open(entry)} } }
+        items(entries,key={it.id}) { entry->Panel { EntryRow(ledger,entry){if(wide)selectedId=entry.id else open(entry)} } }
+       }
+       if(wide) {
+        val selected=entries.find{it.id==selectedId} ?: entries.firstOrNull()
+        Column(Modifier.weight(.9f).verticalScroll(rememberScrollState()).padding(top=20.dp,end=20.dp,bottom=96.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+          if(selected==null)EmptyState("Операция","Выберите запись в списке.")
+          else Panel {
+            SectionTitle(ledger.entryName(selected))
+            MoneyText(selected.minor,ledger.accounts.first{it.id==selected.accountId}.currency,large=true)
+            Text(dayLabel(selected.day)+" · "+ledger.accountName(selected.accountId))
+            selected.splits.forEach{Text(ledger.categoryName(it.categoryId)+": "+Money.format(it.minor,ledger.accounts.first{a->a.id==selected.accountId}.currency))}
+            if(selected.note.isNotBlank())Text(selected.note)
+            if(selected.tags.isNotEmpty())Text(selected.tags.joinToString("  "){ "#$it" })
+            selected.receiptIds.forEach{id->ledger.receipts.find{it.id==id}?.let{ReceiptPreview(it)}}
+            Button(onClick={open(selected)},modifier=Modifier.fillMaxWidth()){Text("Подробности и действия")}
+          }
+        }
+       }
+      }
     }
 }

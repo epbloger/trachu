@@ -44,6 +44,11 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
             vm.change({ l->
                 require(l.accounts.none{it.id!=a.id && it.name.equals(a.name,true)}){"Счёт с таким названием уже существует"}
                 if(current!=null && currency!=current.currency) require(l.entries.none{it.accountId==current.id || it.targetAccountId==current.id} && l.debts.none{it.accountId==current.id} && l.schedules.none{it.template.accountId==current.id || it.template.targetAccountId==current.id})
+                if(a.archived && current?.archived!=true) {
+                    require(l.schedules.none{it.enabled && (it.template.accountId==a.id || it.template.targetAccountId==a.id)}){"Сначала приостановите регулярные операции этого счёта"}
+                    require(l.entries.none{it.status==EntryStatus.PLANNED && (it.accountId==a.id || it.targetAccountId==a.id)}){"Сначала обработайте запланированные операции"}
+                    require(l.debts.none{it.accountId==a.id && Finance.debtRemaining(l,it)>0}){"Сначала погасите задолженность на этом счёте"}
+                }
                 l.copy(accounts=l.accounts.filterNot{it.id==a.id}+a)
             },close)
         }.onFailure{error=it.message ?: "Проверьте данные"}
@@ -154,7 +159,7 @@ private data class SplitDraft(val category: String,val amount: String)
                 val e=Finance.makeEntry(prepared,kind,a.id,minor,date,split,note,tags.split(',').map{it.trim()},
                     targetId=targetId.takeIf{kind==Kind.TRANSFER},targetMinor=toMinor,
                     status=if(plan)EntryStatus.PLANNED else EntryStatus.POSTED,explicitRate=rate,essential=essential,
-                    timeMinutes=t.hour*60+t.minute,id=id,receiptIds=receiptIds)
+                    timeMinutes=t.hour*60+t.minute,id=id,receiptIds=receiptIds,allowArchived=original!=null)
                 if(recurring) {
                     val s=Schedule(schedule?.id ?: newId(),e,date,frequency,interval.toInt(),
                         endDay.trim().takeIf{it.isNotEmpty()}?.let(::parseDay),autoPost,enabled,
@@ -248,7 +253,8 @@ private data class SplitDraft(val category: String,val amount: String)
         entry.receiptIds.forEach{id->ledger.receipts.find{it.id==id}?.let{ReceiptPreview(it)}}
         if(entry.status==EntryStatus.PLANNED) {
             Text("Операция ещё не проведена.",color=MaterialTheme.colorScheme.tertiary)
-            Button(onClick={vm.change({l->Finance.putEntry(l,entry.copy(status=EntryStatus.POSTED,day=minOf(entry.day,today())))},close)},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Подтвердить операцию")}
+            Button(onClick={vm.change({l->Finance.putEntry(l,entry.copy(status=EntryStatus.POSTED))},close)},enabled=!busy && entry.day<=today(),modifier=Modifier.fillMaxWidth()){Text("Подтвердить операцию")}
+            if(entry.day>today())Text("Подтвердить можно в дату операции. Для досрочного проведения сначала измените дату.")
         }
         if(entry.kind in setOf(Kind.EXPENSE,Kind.INCOME,Kind.TRANSFER) && refunds.isEmpty())
             OutlinedButton(onClick=edit,modifier=Modifier.fillMaxWidth()){Text("Редактировать")}

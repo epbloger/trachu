@@ -42,14 +42,17 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        handleIntent(intent)
+         handleIntent(intent)
         setContent {
             val settings by vm.settings.collectAsStateWithLifecycle()
             val ledger by vm.ledger.collectAsStateWithLifecycle()
             val message by vm.message.collectAsStateWithLifecycle()
             val busy by vm.busy.collectAsStateWithLifecycle()
             val unlocked by vm.unlocked.collectAsStateWithLifecycle()
+            SideEffect {
+                if(settings?.protected == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
             TrachuTheme(settings?.theme ?: "system") {
                 Surface(Modifier.fillMaxSize(),color=MaterialTheme.colorScheme.background) {
                     val s=settings
@@ -163,7 +166,7 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
                     if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
                     Box(Modifier.weight(1f)){
                         when(tab){
-                            Tab.HOME->Dashboard(ledger,{add(it)},{editor=Editor("detail",it.id)},{openMore(MorePage.ACCOUNTS)},{tab=Tab.REPORTS},{tab=Tab.PLAN;plan=PlannerTab.BUDGET})
+                            Tab.HOME->Dashboard(ledger,{add(it)},{editor=Editor("detail",it.id)},{openMore(MorePage.ACCOUNTS)},{tab=Tab.REPORTS},{tab=Tab.PLAN;plan=PlannerTab.BUDGET},{tab=Tab.OPERATIONS},{tab=Tab.PLAN;plan=PlannerTab.CALENDAR})
                             Tab.OPERATIONS->Operations(ledger,{add(it)},{editor=Editor("detail",it.id)})
                             Tab.PLAN->Planner(ledger,plan,{editor=Editor("budget",it?.id)},{editor=Editor("goal",it?.id)},
                                 {if(ledger.accounts.isEmpty()){openMore(MorePage.ACCOUNTS);editor=Editor("account")}else editor=Editor("debt",it?.id)},

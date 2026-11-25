@@ -20,7 +20,7 @@ import java.time.YearMonth
 import java.time.DayOfWeek
 import java.time.temporal.TemporalAdjusters
 
-@Composable fun Dashboard(ledger: Ledger, add: (Kind)->Unit, openEntry: (Entry)->Unit, accounts: ()->Unit, reports: ()->Unit, plans: ()->Unit) {
+@Composable fun Dashboard(ledger: Ledger, add: (Kind)->Unit, openEntry: (Entry)->Unit, accounts: ()->Unit, reports: ()->Unit, plans: ()->Unit, operations: ()->Unit, calendar: ()->Unit) {
     val day=today()
     val p=Period.month(day)
     val totals=remember(ledger,p){Finance.totals(ledger,p)}
@@ -101,14 +101,14 @@ import java.time.temporal.TemporalAdjusters
             }
             item {
                 Panel {
-                    SectionTitle("Последние операции",action="Отчёты",onAction=reports)
+                    SectionTitle("Последние операции",action="Все",onAction=operations)
                     if(recent.isEmpty()) Text("Здесь появятся ваши операции.",color=MaterialTheme.colorScheme.onSurfaceVariant)
                     recent.forEach { EntryRow(ledger,it){openEntry(it)} }
                 }
             }
             item {
                 Panel {
-                    SectionTitle("Предстоящие платежи",action="Календарь",onAction=plans)
+                    SectionTitle("Предстоящие платежи",action="Календарь",onAction=calendar)
                     if(planned.isEmpty()) Text("Пока ничего не запланировано.",color=MaterialTheme.colorScheme.onSurfaceVariant)
                     planned.forEach { EntryRow(ledger,it){openEntry(it)} }
                 }

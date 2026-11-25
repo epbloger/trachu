@@ -40,10 +40,10 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
                         SectionTitle(b.name,b.categoryId?.let{ledger.categoryName(it)} ?: "Все расходы",action="Изменить"){editBudget(b)}
                         MoneyText(r.remaining,ledger.baseCurrency,large=true,color=if(r.remaining<0)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
                         Text("Остаток · ${Money.format(r.available,ledger.baseCurrency)} доступно")
-                        Progress(r.spent,r.available,if(r.percent>=100)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                        Progress(r.spent,r.available,if(r.level>=2)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
                         Text("Факт: ${Money.format(r.spent,ledger.baseCurrency)} · ${r.percent}%")
                         Text(if(b.rollover)"Остаток переносится" else "Без переноса остатка",style=MaterialTheme.typography.bodySmall)
-                        if(r.percent>=80)Warning(if(r.percent>100)"Бюджет превышен" else if(r.percent==100)"Лимит достигнут" else "Использовано более 80%")
+                        if(r.level>0)Warning(if(r.level==3)"Бюджет превышен" else if(r.level==2)"Лимит достигнут" else "Использовано 80% или больше")
                     }
                 }
             }

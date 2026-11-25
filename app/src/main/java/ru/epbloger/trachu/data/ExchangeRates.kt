@@ -29,10 +29,15 @@ object ExchangeRates {
     }
     fun parse(bytes: ByteArray, base: String): List<FxRate> {
         val factory = DocumentBuilderFactory.newInstance()
+        // The published feed is ASCII-compatible Windows-1251 or UTF-8.
+        // Reject declarations before parsing, including UTF-16/32 NUL bytes.
+        require(bytes.none { it == 0.toByte() })
+        val ascii = bytes.toString(Charsets.ISO_8859_1)
+        require(!ascii.contains("<!DOCTYPE", ignoreCase=true) && !ascii.contains("<!ENTITY", ignoreCase=true))
         factory.isExpandEntityReferences = false
-        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-        factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
-        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+        runCatching { factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
+        runCatching { factory.setFeature("http://xml.org/sax/features/external-general-entities", false) }
+        runCatching { factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
         val builder = factory.newDocumentBuilder()
         builder.setEntityResolver { _, _ -> InputSource(java.io.StringReader("")) }
         val root = builder.parse(bytes.inputStream()).documentElement

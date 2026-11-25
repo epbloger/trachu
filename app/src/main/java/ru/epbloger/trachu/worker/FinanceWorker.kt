@@ -42,8 +42,7 @@ class FinanceWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 show(101,"Есть обязательства с наступившим сроком.")
             val month=YearMonth.now().toString()
             ledger.budgets.forEach { budget ->
-                val percent=Finance.budget(ledger,budget,day).percent
-                val level=when { percent>100->3; percent>=100->2; percent>=80->1; else->0 }
+                 val level=Finance.budget(ledger,budget,day).level
                 if(prefs.markNotice("budget_${budget.id}","$month:$level") && level>0)
                     show(1000+budget.id.hashCode().and(0x3fffffff),when(level){1->"Бюджет использован на 80%.";2->"Достигнут лимит бюджета.";else->"Лимит бюджета превышен."})
             }

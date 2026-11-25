@@ -21,8 +21,14 @@ data class Totals(val income: Long, val expense: Long) {
 data class Valuation(val minor: Long, val missingCurrencies: Set<String>)
 data class BudgetProgress(val available: Long, val spent: Long) {
     val remaining get() = Money.sub(available, spent)
-    val percent get() = if (available <= 0) if (spent > 0) 101 else 0
-        else BigDecimal.valueOf(spent).multiply(BigDecimal(100)).divide(BigDecimal.valueOf(available), 0, java.math.RoundingMode.DOWN).coerceAtMost(BigDecimal(Int.MAX_VALUE)).toInt()
+    val percent get() = if (available <= 0) if (spent > 0) 100 else 0
+        else BigDecimal.valueOf(spent.coerceAtLeast(0)).multiply(BigDecimal(100)).divide(BigDecimal.valueOf(available), 0, java.math.RoundingMode.DOWN).coerceAtMost(BigDecimal(Int.MAX_VALUE)).toInt()
+    val level get() = when {
+        spent > available -> 3
+        available > 0 && spent == available -> 2
+        available > 0 && percent >= 80 -> 1
+        else -> 0
+    }
 }
 
 object Finance {
@@ -58,9 +64,10 @@ object Finance {
         tags: List<String> = emptyList(), targetId: String? = null, targetMinor: Long? = null,
         status: EntryStatus = EntryStatus.POSTED, explicitRate: String? = null,
         essential: Boolean = false, timeMinutes: Int = 720, id: String = newId(),
-        debtId: String? = null, principalMinor: Long = 0, receiptIds: List<String> = emptyList()
+        debtId: String? = null, principalMinor: Long = 0, receiptIds: List<String> = emptyList(),
+        allowArchived: Boolean = false
     ): Entry {
-        val account = ledger.accounts.first { it.id == accountId && !it.archived }
+        val account = ledger.accounts.first { it.id == accountId && (!it.archived || allowArchived) }
         require(kind != Kind.REFUND) { "Возврат должен ссылаться на покупку" }
         require(minor > 0)
         val r = if (account.currency == ledger.baseCurrency) "1" else explicitRate ?: rate(ledger, account.currency, day)
@@ -93,10 +100,12 @@ object Finance {
         val splits = original.splits.mapNotNull { split ->
             val usedMinor = Money.sum(existing.flatMap { it.splits }.filter { it.categoryId == split.categoryId }.map { it.minor })
             val usedBase = Money.sum(existing.flatMap { it.splits }.filter { it.categoryId == split.categoryId }.map { it.baseMinor })
-            val take = minOf(left, Money.sub(split.minor, usedMinor))
+            val remainingMinor = Money.sub(split.minor, usedMinor)
+            val remainingBase = Money.sub(split.baseMinor, usedBase)
+            val take = minOf(left, remainingMinor)
             left -= take
             if (take == 0L) null else Split(split.categoryId, take,
-                Money.sub(Money.share(split.baseMinor, Money.add(usedMinor, take), split.minor), usedBase))
+                Money.share(remainingBase, take, remainingMinor))
         }
         require(left == 0L)
         return Entry(id, Kind.REFUND, original.accountId, amount, Money.sum(splits.map { it.baseMinor }),
@@ -172,8 +181,17 @@ object Finance {
             while (day <= through && (s.endDay == null || day <= s.endDay)) {
                 require(++count <= 5000) { "Слишком много повторений" }
                 val id = UUID.nameUUIDFromBytes(("${s.id}:$day").toByteArray(Charsets.UTF_8)).toString()
-                if (ids.add(id)) newEntries.add(s.template.copy(id = id, day = day,
-                    status = if (s.autoPost && !forecast) EntryStatus.POSTED else EntryStatus.PLANNED))
+                if (ids.add(id)) {
+                    val t = s.template
+                    val account = ledger.accounts.first { it.id == t.accountId }
+                    val historical = rate(ledger, account.currency, day)
+                    val currentRate = historical ?: t.rate
+                    val occurrence = makeEntry(ledger, t.kind, t.accountId, t.minor, day,
+                        t.splits.map { it.categoryId to it.minor }, t.note, t.tags, t.targetAccountId, t.targetMinor,
+                        if (s.autoPost && !forecast && !account.archived && (t.targetAccountId == null || ledger.accounts.none { it.id == t.targetAccountId && it.archived })) EntryStatus.POSTED else EntryStatus.PLANNED,
+                        currentRate, t.essential, t.timeMinutes, id, receiptIds = t.receiptIds, allowArchived = true)
+                    newEntries.add(occurrence)
+                }
                 day = nextDate(s, day)
             }
             s.copy(nextDay = day, enabled = s.endDay == null || day <= s.endDay)
@@ -240,6 +258,12 @@ fun Ledger.validated(): Ledger {
         }
     }
     entries.forEach { checkEntry(it) }
+    // Bound the absolute reporting volume so arbitrary period aggregation and
+    // per-category arithmetic cannot overflow on a valid ledger.
+    Money.sum(entries.map { it.baseMinor })
+    require(entries.all { it.note.length <= 8_000 && it.tags.size <= 100 && it.tags.all { tag -> tag.length <= 100 } && it.splits.size <= 200 && it.receiptIds.size <= 4 })
+    require(accounts.all { it.name.length <= 160 } && categories.all { it.name.length <= 160 && it.icon.length <= 24 })
+    require(debts.all { it.note.length <= 8_000 && it.person.length <= 160 })
     entries.filter { it.kind == Kind.REFUND }.groupBy { it.originalId }.forEach { (id, refunds) ->
         val original = requireNotNull(ee[id])
         original.splits.forEach { s ->
@@ -258,5 +282,6 @@ fun Ledger.validated(): Ledger {
     schedules.forEach { require(it.interval in 1..365 && it.anchorDay in 1..31 && it.template.kind !in setOf(Kind.REFUND, Kind.DEBT_IN, Kind.DEBT_OUT)); checkEntry(it.template, true); LocalDate.ofEpochDay(it.nextDay) }
     receipts.forEach { require(it.mime in setOf("image/jpeg", "image/png", "image/webp") && it.base64.length <= 8_000_000) }
     accounts.forEach { Finance.balance(this, it.id, Long.MAX_VALUE) }
+    Finance.valuation(this)
     return this
 }
