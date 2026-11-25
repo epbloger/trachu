@@ -4,6 +4,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.kapt")
+    id("androidx.room")
 }
 android {
     namespace = "ru.epbloger.trachu"
@@ -24,7 +25,11 @@ android {
     buildFeatures { compose = true }
     testOptions { unitTests.isReturnDefaultValues = false }
 }
-kapt { arguments { arg("room.schemaLocation", "$projectDir/schemas") } }
+room {
+    schemaDirectory("debug", "$projectDir/schemas/debug")
+    schemaDirectory("release", "$projectDir/schemas/release")
+    schemaDirectory("$projectDir/schemas")
+}
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.10.01"))
     implementation("androidx.compose.material3:material3")
