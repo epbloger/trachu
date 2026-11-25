@@ -21,15 +21,18 @@ import ru.epbloger.trachu.widget.refreshWidgets
 
 enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"), CATEGORIES("Категории"), RATES("Валюты и курсы"), SETTINGS("Настройки"), DATA("Файлы и копии"), ABOUT("О приложении") }
 
-@Composable fun Accounts(ledger:Ledger,edit:(Account?)->Unit,transfer:()->Unit,back:()->Unit) {
+@Composable fun Accounts(ledger:Ledger,edit:(Account?)->Unit,transfer:()->Unit,back:()->Unit,move:(String,Int)->Unit) {
     var showArchived by remember{mutableStateOf(false)}
-    val accounts=ledger.accounts.filter{showArchived||!it.archived}
+    val accounts=ledger.accounts.filter{showArchived||!it.archived}.sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name})
     LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
         item{SectionTitle("Счета",action="Назад",onAction=back)}
         item{Panel {
             val v=Finance.valuation(ledger)
             Text("Общий баланс");MoneyText(v.minor,ledger.baseCurrency,large=true)
             if(v.missingCurrencies.isNotEmpty())Warning("Нет курсов: "+v.missingCurrencies.joinToString())
+            ledger.accounts.filter{it.includeInTotal}.groupBy{it.currency}.forEach{(currency,group)->
+                Text("$currency: "+Money.format(Money.sum(group.map{Finance.balance(ledger,it.id)}),currency))
+            }
             Button(onClick={edit(null)},modifier=Modifier.fillMaxWidth()){Text("Добавить счёт")}
             OutlinedButton(onClick=transfer,enabled=ledger.accounts.count{!it.archived}>=2,modifier=Modifier.fillMaxWidth()){Text("Перевести деньги")}
             Toggle("Показывать архив",showArchived,{showArchived=it})
@@ -40,6 +43,11 @@ enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"),
             MoneyText(Finance.balance(ledger,a.id),a.currency,large=true)
             if(a.archived)Text("В архиве",color=MaterialTheme.colorScheme.tertiary)
             if(!a.includeInTotal)Text("Не включён в общий баланс",style=MaterialTheme.typography.bodyMedium)
+            if(!a.includeInStats)Text("Не включён в отчёты",style=MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                TextButton(onClick={move(a.id,-1)},enabled=accounts.firstOrNull()?.id!=a.id){Text("↑ Выше")}
+                TextButton(onClick={move(a.id,1)},enabled=accounts.lastOrNull()?.id!=a.id){Text("↓ Ниже")}
+            }
         }}
     }
 }
@@ -135,6 +143,8 @@ enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"),
         item{Panel{
             SectionTitle("Оформление")
             Choice("Тема",settings.theme,listOf("system","light","dark"),{when(it){"light"->"Светлая";"dark"->"Тёмная";else->"Системная"}}){vm.perform{vm.preferences.theme(it)}}
+            Choice("Начало отчётного месяца",settings.monthStart,(1..31).toList(),{"$it число"}){vm.perform{vm.preferences.monthStart(it)}}
+            Text("Настройка меняет месячный период в обзоре и аналитике. Бюджеты ведутся по календарным месяцам.",style=MaterialTheme.typography.bodySmall)
         }}
         item{Panel{
             SectionTitle("Защита приложения")

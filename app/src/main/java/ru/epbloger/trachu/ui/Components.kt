@@ -95,6 +95,20 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
         }
     }
 }
+@Composable fun MultiChoice(label:String, selected:Set<String>, options:List<String>, title:(String)->String,onChange:(Set<String>)->Unit){
+    var open by remember { mutableStateOf(false) }
+    Column(verticalArrangement=Arrangement.spacedBy(4.dp)) {
+        Text(label,style=MaterialTheme.typography.labelLarge)
+        Box {
+            OutlinedButton(onClick={open=true},modifier=Modifier.fillMaxWidth()){Text(if(selected.isEmpty())"Все категории" else "Выбрано: ${selected.size}")}
+            DropdownMenu(expanded=open,onDismissRequest={open=false},modifier=Modifier.heightIn(max=420.dp)){
+                DropdownMenuItem(text={Text("Сбросить")},onClick={onChange(emptySet())})
+                options.forEach { id->DropdownMenuItem(text={Text(title(id))},leadingIcon={Checkbox(checked=id in selected,onCheckedChange=null)},
+                    onClick={onChange(if(id in selected)selected-id else selected+id)}) }
+            }
+        }
+    }
+}
 @Composable fun <T> Chips(options: List<T>, selected: T, title: (T)->String, onChoose: (T)->Unit) {
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
         options.forEach { item -> FilterChip(selected=item==selected,onClick={onChoose(item)},label={Text(title(item))}) }

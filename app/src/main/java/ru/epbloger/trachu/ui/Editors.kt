@@ -34,6 +34,7 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     var currency by remember { mutableStateOf(current?.currency ?: ledger.baseCurrency) }
     var opening by remember { mutableStateOf(current?.let { Money.input(it.openingMinor,it.currency) } ?: "0") }
     var included by remember { mutableStateOf(current?.includeInTotal ?: true) }
+    var statistics by remember { mutableStateOf(current?.includeInStats ?: true) }
     var archived by remember { mutableStateOf(current?.archived ?: false) }
     var error by remember { mutableStateOf("") }
     var delete by remember { mutableStateOf(false) }
@@ -41,7 +42,7 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     Form(if(current==null)"Новый счёт" else "Настройки счёта",close,busy,onSave={
         runCatching {
             require(name.isNotBlank()){"Введите название"}
-            val a=Account(current?.id ?: newId(),name.trim(),currency,type,Money.parse(opening,currency),archived,included)
+            val a=Account(current?.id ?: newId(),name.trim(),currency,type,Money.parse(opening,currency),archived,included,statistics,current?.sortOrder ?: ((ledger.accounts.maxOfOrNull{it.sortOrder} ?: -1)+1))
             vm.change({ l->
                 require(l.accounts.none{it.id!=a.id && it.name.equals(a.name,true)}){"Счёт с таким названием уже существует"}
                 if(current!=null && currency!=current.currency) require(l.entries.none{it.accountId==current.id || it.targetAccountId==current.id} && l.debts.none{it.accountId==current.id} && l.schedules.none{it.template.accountId==current.id || it.template.targetAccountId==current.id})
@@ -60,6 +61,7 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
         else Choice("Валюта",currency,allCurrencies,{it}){currency=it;opening="0"}
         Field("Начальный остаток",opening,{opening=it},true,supporting="Не входит в доходы или расходы. Для кредитного счёта можно указать отрицательное значение.")
         Toggle("Включать в общий баланс",included,{included=it})
+        Toggle("Включать в отчёты и бюджеты",statistics,{statistics=it},"Исключение не изменяет операции и остаток счёта.")
         if(current!=null)Toggle("Архивировать",archived,{archived=it},"История и остаток сохраняются. Архивный счёт скрыт в формах новых операций.")
         if(current!=null&&!used)TextButton(onClick={delete=true}){Text("Удалить счёт",color=MaterialTheme.colorScheme.error)}
         if(error.isNotEmpty())Warning(error)
@@ -112,7 +114,7 @@ private data class SplitDraft(val category: String,val amount: String)
 
 @Composable fun EntryEditor(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, initialKind: Kind, current: Entry?=null, schedule: Schedule?=null, recurring: Boolean=false, close: ()->Unit, forcePlanned: Boolean=false) {
     val original=schedule?.template ?: current
-    val active=ledger.accounts.filter{!it.archived || it.id==original?.accountId || it.id==original?.targetAccountId}
+    val active=ledger.accounts.filter{!it.archived || it.id==original?.accountId || it.id==original?.targetAccountId}.sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name})
     val defaultAccount=active.find{it.id==original?.accountId} ?: active.find{it.id==settings.lastAccount} ?: active.firstOrNull()
     var accountId by remember { mutableStateOf(defaultAccount?.id.orEmpty()) }
     var kind by remember { mutableStateOf(original?.kind ?: initialKind) }
@@ -132,6 +134,10 @@ private data class SplitDraft(val category: String,val amount: String)
         ?.takeIf{it.isNotEmpty()} ?: listOf(SplitDraft(initialCategory,""))) }
     var frequency by remember { mutableStateOf(schedule?.frequency ?: Frequency.MONTHLY) }
     var interval by remember { mutableStateOf(schedule?.interval?.toString() ?: "1") }
+    var weekdays by remember { mutableStateOf(schedule?.weekdays.orEmpty().toSet()) }
+    var alternate by remember { mutableStateOf(schedule?.alternateWeekdays.orEmpty().toSet()) }
+    var useAlternate by remember { mutableStateOf(schedule?.alternateWeekdays?.isNotEmpty()==true) }
+    var monthDays by remember { mutableStateOf(schedule?.monthDays?.joinToString(",").orEmpty()) }
     var endDay by remember { mutableStateOf(schedule?.endDay?.let(::iso).orEmpty()) }
     var autoPost by remember { mutableStateOf(schedule?.autoPost ?: false) }
     var enabled by remember { mutableStateOf(schedule?.enabled ?: true) }
@@ -171,7 +177,11 @@ private data class SplitDraft(val category: String,val amount: String)
                 if(recurring) {
                     val s=Schedule(schedule?.id ?: newId(),e,date,frequency,interval.toInt(),
                         endDay.trim().takeIf{it.isNotEmpty()}?.let(::parseDay),autoPost,enabled,
-                        if(schedule!=null && schedule.nextDay==date)schedule.anchorDay else LocalDate.ofEpochDay(date).dayOfMonth)
+                        if(schedule!=null && schedule.nextDay==date)schedule.anchorDay else LocalDate.ofEpochDay(date).dayOfMonth,
+                        if(frequency==Frequency.WEEKLY)weekdays.sorted() else emptyList(),
+                        if(frequency==Frequency.WEEKLY&&useAlternate&&interval.toInt()==2)alternate.sorted() else emptyList(),
+                        if(frequency==Frequency.MONTHLY)monthDays.split(',').map{it.trim()}.filter{it.isNotEmpty()}.map{it.toInt()}.distinct().sorted() else emptyList(),
+                        if(schedule!=null&&schedule.nextDay==date)schedule.anchorEpochDay else date)
                     require(s.endDay==null || s.endDay>=s.nextDay){"Дата окончания раньше начала"}
                     prepared.copy(schedules=prepared.schedules.filterNot{it.id==s.id}+s)
                 } else Finance.putEntry(prepared,e)
@@ -216,6 +226,15 @@ private data class SplitDraft(val category: String,val amount: String)
         if(recurring) {
             Choice("Повторять",frequency,Frequency.entries,{it.label()}){frequency=it}
             Field("Интервал",interval,{interval=it},true,supporting="Каждые N дней, недель, месяцев или лет")
+            if(frequency==Frequency.WEEKLY){
+                Text("Дни недели (пусто — день первой операции)",style=MaterialTheme.typography.labelLarge)
+                WeekdayChoices(weekdays){weekdays=it}
+                if(interval.trim()=="2"&&weekdays.isNotEmpty()){
+                    Toggle("Разные дни в двух неделях",useAlternate,{useAlternate=it})
+                    if(useAlternate)WeekdayChoices(alternate){alternate=it}
+                }
+            }
+            if(frequency==Frequency.MONTHLY)Field("Дни месяца",monthDays,{monthDays=it},supporting="1–31 через запятую; пусто — день первой операции. 31 означает последний день короткого месяца.")
             Field("Окончание (необязательно)",endDay,{endDay=it},supporting="ГГГГ-ММ-ДД")
             Toggle("Проводить автоматически",autoPost,{autoPost=it},"Иначе появится запланированная операция для подтверждения.")
             Toggle("Активно",enabled,{enabled=it})
@@ -231,6 +250,15 @@ private data class SplitDraft(val category: String,val amount: String)
         if(error.isNotEmpty())Warning(error)
     }
     if(deleteSchedule&&schedule!=null)Confirm("Удалить расписание?","Уже созданные операции останутся.",{deleteSchedule=false},{vm.change({l->l.copy(schedules=l.schedules.filterNot{it.id==schedule.id})},close)},busy)
+}
+
+@Composable private fun WeekdayChoices(selected:Set<Int>,onChange:(Set<Int>)->Unit) {
+    val labels=listOf("Пн","Вт","Ср","Чт","Пт","Сб","Вс")
+    (1..7).toList().chunked(4).forEach { days ->
+        Row(horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+            days.forEach { day -> FilterChip(selected=day in selected,onClick={onChange(if(day in selected)selected-day else selected+day)},label={Text(labels[day-1])},modifier=Modifier.weight(1f)) }
+        }
+    }
 }
 
 @Composable fun ReceiptPreview(receipt: Receipt) {

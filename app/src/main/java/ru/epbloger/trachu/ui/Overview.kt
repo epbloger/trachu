@@ -21,9 +21,9 @@ import java.time.YearMonth
 import java.time.DayOfWeek
 import java.time.temporal.TemporalAdjusters
 
-@Composable fun Dashboard(ledger: Ledger, add: (Kind)->Unit, openEntry: (Entry)->Unit, accounts: ()->Unit, reports: ()->Unit, plans: ()->Unit, operations: ()->Unit, calendar: ()->Unit) {
+@Composable fun Dashboard(ledger: Ledger, add: (Kind)->Unit, openEntry: (Entry)->Unit, accounts: ()->Unit, reports: ()->Unit, plans: ()->Unit, operations: ()->Unit, calendar: ()->Unit, monthStart: Int=1) {
     val day=today()
-    val p=Period.month(day)
+    val p=Period.month(day,monthStart)
     val totals=remember(ledger,p){Finance.totals(ledger,p)}
     val valuation=remember(ledger,day){Finance.valuation(ledger,day)}
     val recent=remember(ledger){ledger.entries.filter { it.status==EntryStatus.POSTED }.sortedWith(compareByDescending<Entry>{it.day}.thenByDescending{it.timeMinutes}).take(5)}
@@ -72,7 +72,7 @@ import java.time.temporal.TemporalAdjusters
             else item {
                 Panel {
                     SectionTitle("Счета",action="Все",onAction=accounts)
-                    ledger.accounts.filterNot { it.archived }.take(3).forEach { a ->
+                    ledger.accounts.filterNot { it.archived }.sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name}).take(3).forEach { a ->
                         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) { Text(a.name,style=MaterialTheme.typography.titleMedium); Text(a.type.label(),style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant) }
                             MoneyText(Finance.balance(ledger,a.id),a.currency)
@@ -149,20 +149,20 @@ import java.time.temporal.TemporalAdjusters
 }
 
 enum class PeriodType(val label: String) { DAY("День"),WEEK("Неделя"),MONTH("Месяц"),YEAR("Год"),CUSTOM("Период") }
-fun periodFor(type: PeriodType, day: Long=today()): Period {
+fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
     val d=LocalDate.ofEpochDay(day)
     return when(type) {
         PeriodType.DAY->Period(day,day)
         PeriodType.WEEK->Period(d.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).toEpochDay(),d.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY)).toEpochDay())
-        PeriodType.MONTH,PeriodType.CUSTOM->Period.month(day)
+        PeriodType.MONTH,PeriodType.CUSTOM->Period.month(day,monthStart)
         PeriodType.YEAR->Period(d.withDayOfYear(1).toEpochDay(),d.withDayOfYear(d.lengthOfYear()).toEpochDay())
     }
 }
-@Composable fun PeriodControls(type: PeriodType, onType: (PeriodType)->Unit, period: Period, onPeriod: (Period)->Unit) {
+@Composable fun PeriodControls(type: PeriodType, onType: (PeriodType)->Unit, period: Period, onPeriod: (Period)->Unit, monthStart:Int=1) {
     var from by remember(period){mutableStateOf(iso(period.from))}
     var to by remember(period){mutableStateOf(iso(period.through))}
     var error by remember{mutableStateOf("")}
-    Chips(PeriodType.entries,type,{it.label}) { onType(it); if(it!=PeriodType.CUSTOM)onPeriod(periodFor(it)) }
+    Chips(PeriodType.entries,type,{it.label}) { onType(it); if(it!=PeriodType.CUSTOM)onPeriod(periodFor(it,monthStart=monthStart)) }
     if(type==PeriodType.CUSTOM) {
         Field("С",from,{from=it},supporting="ГГГГ-ММ-ДД")
         Field("По",to,{to=it},supporting="ГГГГ-ММ-ДД")
@@ -171,28 +171,24 @@ fun periodFor(type: PeriodType, day: Long=today()): Period {
     } else {
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
             TextButton(onClick={
-                val d=LocalDate.ofEpochDay(period.from)
-                val prev=when(type){PeriodType.DAY->d.minusDays(1);PeriodType.WEEK->d.minusWeeks(1);PeriodType.MONTH->d.minusMonths(1);PeriodType.YEAR->d.minusYears(1);else->d}
-                onPeriod(periodFor(type,prev.toEpochDay()))
+                onPeriod(periodFor(type,period.from-1,monthStart))
             }){Text("‹")}
             Text("${iso(period.from)} — ${iso(period.through)}",style=MaterialTheme.typography.labelMedium,modifier=Modifier.weight(1f))
             TextButton(onClick={
-                val d=LocalDate.ofEpochDay(period.from)
-                val next=when(type){PeriodType.DAY->d.plusDays(1);PeriodType.WEEK->d.plusWeeks(1);PeriodType.MONTH->d.plusMonths(1);PeriodType.YEAR->d.plusYears(1);else->d}
-                onPeriod(periodFor(type,next.toEpochDay()))
+                onPeriod(periodFor(type,period.through+1,monthStart))
             }){Text("›")}
         }
     }
 }
-@Composable fun Reports(ledger: Ledger, exportPdf: (Period)->Unit) {
+@Composable fun Reports(ledger: Ledger, monthStart:Int=1, exportPdf: (Period)->Unit) {
     var type by remember { mutableStateOf(PeriodType.MONTH) }
-    var period by remember { mutableStateOf(Period.month()) }
+    var period by remember(monthStart) { mutableStateOf(Period.month(startDay=monthStart)) }
     var income by remember { mutableStateOf(false) }
     val totals=remember(ledger,period){Finance.totals(ledger,period)}
     val length=period.through-period.from+1
     val previous=remember(ledger,period,type) {
         val prev=when(type) {
-            PeriodType.MONTH->Period.month(LocalDate.ofEpochDay(period.from).minusMonths(1).toEpochDay())
+            PeriodType.MONTH->Period.month(period.from-1,monthStart)
             PeriodType.YEAR->periodFor(type,LocalDate.ofEpochDay(period.from).minusYears(1).toEpochDay())
             else->Period(period.from-length,period.from-1)
         }
@@ -211,7 +207,7 @@ fun periodFor(type: PeriodType, day: Long=today()): Period {
         val wide=maxWidth>=840.dp && LocalDensity.current.fontScale<1.5f
         LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
             item { SectionTitle("Аналитика",action="PDF"){exportPdf(period)} }
-            item { Panel { PeriodControls(type,{type=it},period,{period=it}) } }
+            item { Panel { PeriodControls(type,{type=it},period,{period=it},monthStart) } }
             item {
                 Panel {
                     Text("Финансовый результат",style=MaterialTheme.typography.titleMedium)
@@ -219,6 +215,11 @@ fun periodFor(type: PeriodType, day: Long=today()): Period {
                     Text("Доходы: "+Money.format(totals.income,ledger.baseCurrency))
                     Text("Расходы: "+Money.format(totals.expense,ledger.baseCurrency))
                     Text("Средние расходы в день: "+Money.format(totals.expense/length,ledger.baseCurrency))
+                    val expenseEntries=ledger.entries.filter{it.status==EntryStatus.POSTED && it.day in period && it.kind in setOf(Kind.EXPENSE,Kind.REFUND) && ledger.accounts.any{a->a.id==it.accountId&&a.includeInStats}}
+                    val essential=Money.sum(expenseEntries.filter{it.essential}.map{if(it.kind==Kind.REFUND)-it.baseMinor else it.baseMinor})
+                    val discretionary=Money.sum(expenseEntries.filterNot{it.essential}.map{if(it.kind==Kind.REFUND)-it.baseMinor else it.baseMinor})
+                    Text("Обязательные траты: "+Money.format(essential,ledger.baseCurrency))
+                    Text("Прочие траты: "+Money.format(discretionary,ledger.baseCurrency))
                     HorizontalDivider()
                     Text("Предыдущий сопоставимый период",style=MaterialTheme.typography.titleMedium)
                     Text("Результат: "+Money.format(previous.net,ledger.baseCurrency))

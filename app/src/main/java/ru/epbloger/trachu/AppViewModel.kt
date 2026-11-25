@@ -37,7 +37,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun clearMessage() { _message.value=null }
     fun rememberAccount(id: String) { viewModelScope.launch { preferences.lastAccount(id) } }
     fun quick(kind: Kind?) { _quick.value=kind }
-    fun lock() { _unlocked.value=false }
+    fun lock() { _unlocked.value=false; _message.value=null }
     fun unlockBiometric() { _unlocked.value=true; viewModelScope.launch { preferences.pinResult(true) } }
     fun unlockPin(pin: String) = perform {
         val s=preferences.current()

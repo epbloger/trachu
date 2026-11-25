@@ -9,9 +9,12 @@ data class Period(val from: Long, val through: Long) {
     init { require(from <= through) }
     operator fun contains(day: Long) = day in from..through
     companion object {
-        fun month(day: Long = today()): Period {
-            val m = YearMonth.from(LocalDate.ofEpochDay(day))
-            return Period(m.atDay(1).toEpochDay(), m.atEndOfMonth().toEpochDay())
+        fun month(day: Long = today(), startDay: Int = 1): Period {
+            require(startDay in 1..31)
+            var m = YearMonth.from(LocalDate.ofEpochDay(day))
+            fun start(month: YearMonth) = month.atDay(minOf(startDay,month.lengthOfMonth())).toEpochDay()
+            if(day < start(m)) m=m.minusMonths(1)
+            return Period(start(m),start(m.plusMonths(1))-1)
         }
     }
 }
@@ -113,7 +116,8 @@ object Finance {
             essential = original.essential)
     }
     fun totals(ledger: Ledger, period: Period): Totals {
-        val posted = ledger.entries.filter { it.status == EntryStatus.POSTED && it.day in period }
+        val excluded=ledger.accounts.filterNot { it.includeInStats }.map { it.id }.toSet()
+        val posted = ledger.entries.filter { it.status == EntryStatus.POSTED && it.day in period && it.accountId !in excluded }
         val income = Money.sum(posted.map {
             when (it.kind) {
                 Kind.INCOME -> it.baseMinor
@@ -133,12 +137,13 @@ object Finance {
     }
     fun byCategory(ledger: Ledger, period: Period, income: Boolean = false): Map<String, Long> {
         val kinds = if (income) setOf(Kind.INCOME) else setOf(Kind.EXPENSE, Kind.REFUND)
-        return ledger.entries.filter { it.status == EntryStatus.POSTED && it.day in period && it.kind in kinds }
+        val excluded=ledger.accounts.filterNot { it.includeInStats }.map { it.id }.toSet()
+        return ledger.entries.filter { it.status == EntryStatus.POSTED && it.day in period && it.kind in kinds && it.accountId !in excluded }
             .flatMap { e -> e.splits.map { it.categoryId to if (e.kind == Kind.REFUND) -it.baseMinor else it.baseMinor } }
             .groupBy({ it.first }, { it.second }).mapValues { Money.sum(it.value) }
     }
     fun byTag(ledger: Ledger, period: Period): Map<String, Long> =
-        ledger.entries.filter { it.status == EntryStatus.POSTED && it.day in period && it.kind in setOf(Kind.EXPENSE, Kind.REFUND) }
+        ledger.entries.filter { it.status == EntryStatus.POSTED && it.day in period && it.kind in setOf(Kind.EXPENSE, Kind.REFUND) && ledger.accounts.any { a -> a.id==it.accountId && a.includeInStats } }
             .flatMap { e -> e.tags.distinct().map { it to if (e.kind == Kind.REFUND) -e.baseMinor else e.baseMinor } }
             .groupBy({ it.first }, { it.second }).mapValues { Money.sum(it.value) }
     fun budget(ledger: Ledger, budget: Budget, day: Long): BudgetProgress {
@@ -173,8 +178,32 @@ object Finance {
         val d = LocalDate.ofEpochDay(day)
         val next = when (schedule.frequency) {
             Frequency.DAILY -> d.plusDays(schedule.interval.toLong())
-            Frequency.WEEKLY -> d.plusWeeks(schedule.interval.toLong())
-            Frequency.MONTHLY -> d.plusMonths(schedule.interval.toLong()).let { it.withDayOfMonth(minOf(schedule.anchorDay, it.lengthOfMonth())) }
+            Frequency.WEEKLY -> {
+                if(schedule.weekdays.isEmpty()) d.plusWeeks(schedule.interval.toLong())
+                else if(schedule.alternateWeekdays.isNotEmpty()) {
+                    val anchor=LocalDate.ofEpochDay(schedule.anchorEpochDay).with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY))
+                    (1L..14L).map { d.plusDays(it) }.first { candidate ->
+                        val week=java.time.temporal.ChronoUnit.WEEKS.between(anchor,candidate.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY)))
+                        val weekdays=if(Math.floorMod(week,2L)==0L)schedule.weekdays else schedule.alternateWeekdays
+                        candidate.dayOfWeek.value in weekdays
+                    }
+                } else {
+                    val weekStart=d.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY))
+                    val later=schedule.weekdays.sorted().firstOrNull { it>d.dayOfWeek.value }
+                    if(later!=null)weekStart.plusDays(later-1L)
+                    else weekStart.plusWeeks(schedule.interval.toLong()).plusDays(schedule.weekdays.min()-1L)
+                }
+            }
+            Frequency.MONTHLY -> {
+                if(schedule.monthDays.isEmpty()) d.plusMonths(schedule.interval.toLong()).let { it.withDayOfMonth(minOf(schedule.anchorDay, it.lengthOfMonth())) }
+                else {
+                    val current=YearMonth.from(d)
+                    fun days(m: YearMonth)=schedule.monthDays.map{minOf(it,m.lengthOfMonth())}.distinct().sorted()
+                    val later=days(current).firstOrNull{it>d.dayOfMonth}
+                    if(later!=null)current.atDay(later)
+                    else current.plusMonths(schedule.interval.toLong()).let{it.atDay(days(it).first())}
+                }
+            }
             Frequency.YEARLY -> d.plusYears(schedule.interval.toLong()).let { it.withDayOfMonth(minOf(schedule.anchorDay, it.lengthOfMonth())) }
         }
         return next.toEpochDay()
@@ -305,7 +334,13 @@ fun Ledger.validated(): Ledger {
         it.adjustments.forEach { a -> require(a.minor!=0L && a.note.length<=200); LocalDate.ofEpochDay(a.day); saved=Money.add(saved,a.minor); require(saved>=0) }
     }
     budgets.forEach { require(it.name.isNotBlank() && it.monthlyMinor > 0 && (it.categoryId == null || cc[it.categoryId]?.income == false)); LocalDate.ofEpochDay(it.startMonth) }
-    schedules.forEach { require(it.interval in 1..365 && it.anchorDay in 1..31 && it.template.kind in setOf(Kind.EXPENSE, Kind.INCOME, Kind.TRANSFER)); checkEntry(it.template, true); LocalDate.ofEpochDay(it.nextDay) }
+    schedules.forEach { require(it.interval in 1..365 && it.anchorDay in 1..31 && it.template.kind in setOf(Kind.EXPENSE, Kind.INCOME, Kind.TRANSFER)); checkEntry(it.template, true); LocalDate.ofEpochDay(it.nextDay)
+        require(it.weekdays.all { d->d in 1..7 } && it.weekdays.distinct().size==it.weekdays.size)
+        require(it.alternateWeekdays.all { d->d in 1..7 } && it.alternateWeekdays.distinct().size==it.alternateWeekdays.size)
+        require(it.alternateWeekdays.isEmpty() || it.interval==2 && it.frequency==Frequency.WEEKLY && it.weekdays.isNotEmpty())
+        require(it.monthDays.all { d->d in 1..31 } && it.monthDays.distinct().size==it.monthDays.size)
+        LocalDate.ofEpochDay(it.anchorEpochDay)
+    }
     receipts.forEach { require(it.mime in setOf("image/jpeg", "image/png", "image/webp") && it.base64.length <= 8_000_000) }
     accounts.forEach { Finance.balance(this, it.id, Long.MAX_VALUE) }
     Finance.valuation(this)

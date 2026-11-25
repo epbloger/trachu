@@ -60,7 +60,7 @@ class MainActivity : FragmentActivity() {
                     val l=ledger
                     if(s==null||l==null)Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){CircularProgressIndicator()}
                     else AppShell(l,s,vm,busy,biometricAvailable(),s.protected&&!unlocked,{done->authenticate(done)})
-                    if(message!=null)AlertDialog(onDismissRequest=vm::clearMessage,title={Text("ТРАЧУ.")},text={Text(message.orEmpty())},
+                    if(message!=null && (settings?.protected!=true || unlocked || message=="Неверный PIN" || message?.startsWith("Слишком много попыток")==true))AlertDialog(onDismissRequest=vm::clearMessage,title={Text("ТРАЧУ.")},text={Text(message.orEmpty())},
                         confirmButton={TextButton(onClick=vm::clearMessage){Text("OK")}})
                 }
             }
@@ -167,15 +167,22 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
                     if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
                     Box(Modifier.weight(1f)){
                         when(tab){
-                            Tab.HOME->Dashboard(ledger,{add(it)},{editor=Editor("detail",it.id)},{openMore(MorePage.ACCOUNTS)},{tab=Tab.REPORTS},{tab=Tab.PLAN;plan=PlannerTab.BUDGET},{tab=Tab.OPERATIONS},{tab=Tab.PLAN;plan=PlannerTab.CALENDAR})
-                            Tab.OPERATIONS->Operations(ledger,{add(it)},{editor=Editor("detail",it.id)})
+                            Tab.HOME->Dashboard(ledger,{add(it)},{editor=Editor("detail",it.id)},{openMore(MorePage.ACCOUNTS)},{tab=Tab.REPORTS},{tab=Tab.PLAN;plan=PlannerTab.BUDGET},{tab=Tab.OPERATIONS},{tab=Tab.PLAN;plan=PlannerTab.CALENDAR},settings.monthStart)
+                            Tab.OPERATIONS->Operations(ledger,{add(it)},{editor=Editor("detail",it.id)},settings.monthStart)
                             Tab.PLAN->Planner(ledger,plan,{editor=Editor("budget",it?.id)},{editor=Editor("goal",it?.id)},
                                 {if(ledger.accounts.isEmpty()){openMore(MorePage.ACCOUNTS);editor=Editor("account")}else editor=Editor("debt",it?.id)},
                                 {editor=Editor("payment",it.id)},::schedule,{editor=Editor("detail",it.id)},{add(Kind.EXPENSE,true)})
-                            Tab.REPORTS->Reports(ledger){file(FileRequest("pdf",true,period=it))}
+                            Tab.REPORTS->Reports(ledger,settings.monthStart){file(FileRequest("pdf",true,period=it))}
                             Tab.MORE->when(more){
                                 MorePage.INDEX->MoreIndex{more=it}
-                                MorePage.ACCOUNTS->Accounts(ledger,{editor=Editor("account",it?.id)},{add(Kind.TRANSFER)},{more=MorePage.INDEX})
+                                MorePage.ACCOUNTS->Accounts(ledger,{editor=Editor("account",it?.id)},{add(Kind.TRANSFER)},{more=MorePage.INDEX}){id,delta->
+                                    vm.change { l->
+                                        val sorted=l.accounts.sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name}).toMutableList()
+                                        val i=sorted.indexOfFirst{it.id==id};val j=i+delta
+                                        if(i>=0&&j in sorted.indices)java.util.Collections.swap(sorted,i,j)
+                                        l.copy(accounts=sorted.mapIndexed{index,a->a.copy(sortOrder=index)})
+                                    }
+                                }
                                 MorePage.CATEGORIES->Categories(ledger,{editor=Editor("category",it?.id)},{more=MorePage.INDEX})
                                 MorePage.RATES->Rates(ledger,vm,busy){more=MorePage.INDEX}
                                 MorePage.SETTINGS->SettingsPage(settings,vm,busy,biometricAvailable,authenticate){more=MorePage.INDEX}

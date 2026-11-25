@@ -17,7 +17,7 @@ object Csv {
             LedgerRecords.encode(ledger).forEach { record ->
                 val e = entries[record.id].takeIf { record.kind == "entry" }
                 val a = e?.let { account[it.accountId] }
-                w.write(line(listOf(record.kind, record.id, e?.let { LocalDate.ofEpochDay(it.day).toString() }.orEmpty(),
+                w.write(line(listOf(record.kind, safe(record.id), e?.let { LocalDate.ofEpochDay(it.day).toString() }.orEmpty(),
                     safe(a?.name.orEmpty()), e?.kind?.name.orEmpty(),
                     if (e != null && a != null) Money.input(e.minor, a.currency) else "",
                     a?.currency.orEmpty(), safe(e?.note.orEmpty()), safe(record.payload))))
@@ -62,7 +62,8 @@ object Csv {
             require(it.size == header.size)
             // Undo Excel formula protection on raw payloads.
             val payload = it[8].let { p -> if (p.startsWith("'") && p.getOrNull(1) in listOf('=', '+', '-', '@', '\t', '\r')) p.substring(1) else p }
-            LedgerRecord(it[0], it[1], payload)
+            val id=it[1].let { p->if(p.startsWith("'")&&p.getOrNull(1) in listOf('=', '+', '-', '@', '\t', '\r'))p.substring(1) else p }
+            LedgerRecord(it[0], id, payload)
         }
         require(records.isNotEmpty())
         return LedgerRecords.decode(records)

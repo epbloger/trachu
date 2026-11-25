@@ -15,7 +15,8 @@ fun today(): Long = LocalDate.now().toEpochDay()
 @Serializable data class Account(
     val id: String = newId(), val name: String, val currency: String = "RUB",
     val type: AccountType = AccountType.CASH, val openingMinor: Long = 0,
-    val archived: Boolean = false, val includeInTotal: Boolean = true
+    val archived: Boolean = false, val includeInTotal: Boolean = true,
+    val includeInStats: Boolean = true, val sortOrder: Int = 0
 )
 @Serializable data class Category(
     val id: String = newId(), val name: String, val income: Boolean = false,
@@ -54,7 +55,9 @@ fun today(): Long = LocalDate.now().toEpochDay()
     val id: String = newId(), val template: Entry, val nextDay: Long,
     val frequency: Frequency, val interval: Int = 1, val endDay: Long? = null,
     val autoPost: Boolean = false, val enabled: Boolean = true,
-    val anchorDay: Int = LocalDate.ofEpochDay(nextDay).dayOfMonth
+    val anchorDay: Int = LocalDate.ofEpochDay(nextDay).dayOfMonth,
+    val weekdays: List<Int> = emptyList(), val alternateWeekdays: List<Int> = emptyList(),
+    val monthDays: List<Int> = emptyList(), val anchorEpochDay: Long = nextDay
 )
 @Serializable data class FxRate(
     val currency: String, val day: Long, val unitsOfBasePerUnit: String,

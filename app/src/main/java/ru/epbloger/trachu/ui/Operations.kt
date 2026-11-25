@@ -12,22 +12,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.core.*
 
-@Composable fun Operations(ledger: Ledger, add: (Kind)->Unit, open: (Entry)->Unit) {
+@Composable fun Operations(ledger: Ledger, add: (Kind)->Unit, open: (Entry)->Unit, monthStart:Int=1) {
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("Все") }
     var account by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("") }
+    var categories by remember { mutableStateOf(emptySet<String>()) }
     var type by remember { mutableStateOf(PeriodType.MONTH) }
-    var period by remember { mutableStateOf(Period.month()) }
+    var period by remember(monthStart) { mutableStateOf(Period.month(startDay=monthStart)) }
     var allDates by remember { mutableStateOf(true) }
     var sort by remember { mutableStateOf("Новые") }
     var expanded by remember { mutableStateOf(false) }
-    val entries=remember(ledger,query,filter,account,category,period,allDates,sort) {
+    val entries=remember(ledger,query,filter,account,categories,period,allDates,sort) {
         val q=query.trim().lowercase()
         val selected=ledger.entries.filter { e->
             (allDates || e.day in period) &&
             (account.isEmpty() || e.accountId==account || e.targetAccountId==account) &&
-            (category.isEmpty() || e.splits.any{it.categoryId==category || ledger.categories.find{c->c.id==it.categoryId}?.parentId==category}) &&
+            (categories.isEmpty() || e.splits.any{it.categoryId in categories || ledger.categories.find{c->c.id==it.categoryId}?.parentId in categories}) &&
             (filter=="Все" || filter=="План" && e.status==EntryStatus.PLANNED || filter==e.kind.label() && e.status==EntryStatus.POSTED) &&
             (q.isBlank() || listOf(e.note,ledger.entryName(e),ledger.accountName(e.accountId),e.tags.joinToString(" "),iso(e.day),Money.input(e.minor,ledger.accounts.first{it.id==e.accountId}.currency)).any{it.lowercase().contains(q)})
         }
@@ -47,10 +47,10 @@ import ru.epbloger.trachu.core.*
         if(expanded)item {
             Panel {
                 Choice("Счёт",account,listOf("")+ledger.accounts.map{it.id},{if(it.isEmpty())"Все счета" else ledger.accountName(it)}){account=it}
-                Choice("Категория",category,listOf("")+ledger.categories.map{it.id},{if(it.isEmpty())"Все категории" else ledger.categoryName(it)}){category=it}
+                MultiChoice("Категории",categories,ledger.categories.map{it.id},{ledger.categoryName(it)}){categories=it}
                 Choice("Сортировка",sort,listOf("Новые","Старые","Сумма"),{it}){sort=it}
                 Toggle("Все даты",allDates,{allDates=it})
-                if(!allDates)PeriodControls(type,{type=it},period,{period=it})
+                if(!allDates)PeriodControls(type,{type=it},period,{period=it},monthStart)
             }
         }
         item { Text("Найдено: ${entries.size}",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant) }
