@@ -74,7 +74,7 @@ enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"),
         }}
     }
 }
-@Composable fun Rates(ledger:Ledger,vm:AppViewModel,busy:Boolean,back:()->Unit){
+@Composable fun Rates(ledger:Ledger,settings:Settings,vm:AppViewModel,busy:Boolean,back:()->Unit){
     var currency by remember{mutableStateOf(ledger.accounts.firstOrNull{it.currency!=ledger.baseCurrency}?.currency ?: allCurrencies.first{it!=ledger.baseCurrency})}
     var date by remember{mutableStateOf(iso(today()))}
     var value by remember{mutableStateOf("")}
@@ -107,7 +107,8 @@ enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"),
                 }.onFailure{error=it.message ?: "Проверьте курс и дату"}
             },enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Сохранить вручную")}
             OutlinedButton(onClick={runCatching{parseDay(date).also{require(it<=today())}}.onSuccess{vm.fetchRates(it);error=""}.onFailure{error="Проверьте дату"}},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Получить официальные курсы ЦБ РФ")}
-            Text("Запрос отправляет только выбранную дату на cbr.ru. Операции и остатки не передаются. Сохранённые исторические курсы операций не меняются.",style=MaterialTheme.typography.bodySmall)
+            Toggle("Автоматически обновлять курсы",settings.automaticRates,{if(!busy)vm.setAutomaticRates(it)},"Раз в сутки при наличии интернета. Выключено по умолчанию.")
+            Text("Запрос к cbr.ru содержит только дату. Операции, остатки и названия счетов не передаются. Ручные курсы и исторические курсы записанных операций сохраняются.",style=MaterialTheme.typography.bodySmall)
             if(error.isNotEmpty())Warning(error)
         }}
         item{Text("История $currency",style=MaterialTheme.typography.titleLarge)}

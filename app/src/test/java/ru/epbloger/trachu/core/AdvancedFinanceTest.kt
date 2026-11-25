@@ -23,6 +23,16 @@ class AdvancedFinanceTest {
         assertEquals(900L,Finance.balance(next,"eur",day+1))
         assertEquals(expense.baseMinor,Finance.totals(next,Period.month(day)).expense)
     }
+    @Test fun publishedRatesPreserveManualOverridesAndHistory() {
+        val e=Finance.makeEntry(l,Kind.EXPENSE,"usd",100,day,listOf("food" to 100))
+        val old=Finance.putEntry(l,e)
+        val updated=Finance.mergePublishedRates(old,"RUB",listOf(
+            FxRate("USD",day,"91","CBR"), FxRate("USD",day+1,"92","CBR")))
+        assertEquals("90.1234",Finance.rate(updated,"USD",day))
+        assertEquals("92",Finance.rate(updated,"USD",day+1))
+        assertEquals(e,updated.entries.single())
+        assertEquals(updated,Finance.mergePublishedRates(updated,"RUB",listOf(FxRate("USD",day+1,"92","CBR"))))
+    }
     @Test fun loansAndInterestNeverDoubleCountPrincipal() {
         val debt=Debt("d","Кредитор","a",true,50000,"12",openedDay=day)
         val withDebt=l.copy(debts=listOf(debt))

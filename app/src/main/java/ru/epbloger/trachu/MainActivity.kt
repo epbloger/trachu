@@ -200,7 +200,7 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
                                     })
                                 }
                                 MorePage.CATEGORIES->Categories(ledger,{editor=Editor("category",it?.id)},{more=MorePage.INDEX})
-                                MorePage.RATES->Rates(ledger,vm,busy){more=MorePage.INDEX}
+                                MorePage.RATES->Rates(ledger,settings,vm,busy){more=MorePage.INDEX}
                                 MorePage.SETTINGS->SettingsPage(settings,vm,busy,biometricAvailable,authenticate){more=MorePage.INDEX}
                                 MorePage.DATA->DataPage(ledger,::file,busy){more=MorePage.INDEX}
                                 MorePage.ABOUT->AboutPage{more=MorePage.INDEX}

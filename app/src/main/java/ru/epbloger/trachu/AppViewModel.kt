@@ -13,6 +13,7 @@ import ru.epbloger.trachu.core.*
 import ru.epbloger.trachu.data.*
 import ru.epbloger.trachu.security.*
 import ru.epbloger.trachu.worker.FinanceWorker
+import ru.epbloger.trachu.worker.RatesWorker
 import ru.epbloger.trachu.widget.refreshWidgets
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -55,7 +56,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 _settings.value=null
                 _unlocked.value=false
                 _loadingError.value="Не удалось открыть настройки защиты. Повторите попытку."
-            }.collect { _settings.value=it }
+            }.collect {
+                val previous=_settings.value
+                _settings.value=it
+                if(previous==null)runCatching { RatesWorker.configure(getApplication(),it.automaticRates) }
+            }
         }
     }
     fun clearMessage() { _message.value=null }
@@ -100,13 +105,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if(receipt!=null) next=next.copy(receipts=next.receipts+receipt)
         Finance.putEntry(next,entry)
     }) { viewModelScope.launch { preferences.lastAccount(entry.accountId) }; onDone() }
+    fun setAutomaticRates(enabled:Boolean) = perform {
+        preferences.automaticRates(enabled)
+        RatesWorker.configure(getApplication(),enabled,immediate=enabled)
+    }
     fun fetchRates(day: Long) = perform {
         val base=store.current().baseCurrency
         val rates=withContext(Dispatchers.IO) { ExchangeRates.fetch(base,day) }
-        store.change { l ->
-            require(l.baseCurrency==base)
-            l.copy(rates=l.rates.filter { old -> rates.none { it.currency==old.currency && it.day==old.day } }+rates)
-        }
+        store.change { l -> Finance.mergePublishedRates(l,base,rates) }
         _message.value="Курсы сохранены"
     }
     fun export(uri: Uri, mode: String, password: String="", period: Period=Period.month()) = perform {

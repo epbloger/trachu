@@ -17,7 +17,7 @@ data class Settings(
     val lastAccount: String = "",
     val showWidgetBalance: Boolean = false,
     val failedAttempts: Int = 0,
-    val lockedUntil: Long = 0L, val monthStart: Int = 1
+    val lockedUntil: Long = 0L, val monthStart: Int = 1, val automaticRates:Boolean=false
 ) { val protected get() = credential.isNotEmpty() }
 
 class Preferences(context: Context) {
@@ -32,16 +32,18 @@ class Preferences(context: Context) {
         val failures = intPreferencesKey("pin_failures")
         val until = longPreferencesKey("pin_until")
         val monthStart = intPreferencesKey("month_start")
+        val automaticRates = booleanPreferencesKey("automatic_rates")
     }
     val settings: Flow<Settings> = store.data.map { p ->
         Settings(p[K.theme] ?: "system",p[K.pin] ?: "",p[K.biometric] ?: false,
             p[K.timeout] ?: 30,p[K.account] ?: "",p[K.widget] ?: false,
-            p[K.failures] ?: 0,p[K.until] ?: 0,p[K.monthStart] ?: 1)
+            p[K.failures] ?: 0,p[K.until] ?: 0,p[K.monthStart] ?: 1,p[K.automaticRates] ?: false)
     }
     suspend fun current() = settings.first()
     suspend fun theme(value: String) { require(value in listOf("system","light","dark")); store.edit { it[K.theme]=value } }
     suspend fun lastAccount(value: String) { store.edit { it[K.account]=value } }
     suspend fun widget(value: Boolean) { store.edit { it[K.widget]=value } }
+    suspend fun automaticRates(value:Boolean) { store.edit { it[K.automaticRates]=value } }
     suspend fun monthStart(value: Int) { require(value in 1..31); store.edit { it[K.monthStart]=value } }
     suspend fun timeout(value: Int) { require(value in listOf(0,15,30,60,300)); store.edit { it[K.timeout]=value } }
     suspend fun biometric(value: Boolean) { store.edit { require(!value || !it[K.pin].isNullOrEmpty()); it[K.biometric]=value } }

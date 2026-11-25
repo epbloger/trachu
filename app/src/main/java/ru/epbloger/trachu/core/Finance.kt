@@ -35,6 +35,17 @@ data class BudgetProgress(val available: Long, val spent: Long) {
 }
 
 object Finance {
+    /** Published rates may update their own rows, but never overwrite a user-entered rate. */
+    fun mergePublishedRates(ledger:Ledger,base:String,published:List<FxRate>):Ledger {
+        require(ledger.baseCurrency==base) { "Основная валюта была изменена" }
+        val keyed=ledger.rates.associateBy{it.currency to it.day}.toMutableMap()
+        published.forEach { rate ->
+            require(rate.source=="CBR")
+            val key=rate.currency to rate.day
+            if(keyed[key]?.source!="manual")keyed[key]=rate
+        }
+        return ledger.copy(rates=keyed.values.toList())
+    }
     fun rate(ledger: Ledger, currency: String, day: Long): String? =
         if (currency == ledger.baseCurrency) "1" else ledger.rates
             .filter { it.currency == currency && it.day <= day }.maxByOrNull { it.day }?.unitsOfBasePerUnit

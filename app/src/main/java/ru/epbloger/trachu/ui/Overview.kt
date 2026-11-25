@@ -127,12 +127,10 @@ import java.time.temporal.TemporalAdjusters
         SectionTitle(if(income)"Структура доходов" else "Структура расходов")
         if(categories.isEmpty()) Text("Нет операций за выбранный период.",color=MaterialTheme.colorScheme.onSurfaceVariant)
         else {
-            Box(Modifier.fillMaxWidth(),contentAlignment=Alignment.Center) {
+            Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(6.dp)) {
                 Donut(positive.map{(id,v)->Color(ledger.categories.find{it.id==id}?.color ?: 0xFF218C75) to v},"Диаграмма категорий")
-                Column(horizontalAlignment=Alignment.CenterHorizontally,modifier=Modifier.widthIn(max=100.dp)) {
-                    Text("Итого",style=MaterialTheme.typography.labelSmall)
-                    Text(Money.format(total,ledger.baseCurrency),style=MaterialTheme.typography.labelMedium)
-                }
+                Text("Итого",style=MaterialTheme.typography.labelSmall)
+                MoneyText(total,ledger.baseCurrency,large=true)
             }
             categories.forEach { (id,v)->
                 Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
