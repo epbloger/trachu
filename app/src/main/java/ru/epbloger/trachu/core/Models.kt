@@ -8,7 +8,7 @@ fun newId(): String = UUID.randomUUID().toString()
 fun today(): Long = LocalDate.now().toEpochDay()
 
 @Serializable enum class AccountType { CASH, CARD, SAVINGS, CREDIT, OTHER }
-@Serializable enum class Kind { EXPENSE, INCOME, TRANSFER, REFUND, DEBT_IN, DEBT_OUT }
+@Serializable enum class Kind { EXPENSE, INCOME, TRANSFER, REFUND, DEBT_IN, DEBT_OUT, LOAN_IN, LOAN_OUT }
 @Serializable enum class EntryStatus { POSTED, PLANNED }
 @Serializable enum class Frequency { DAILY, WEEKLY, MONTHLY, YEARLY }
 
@@ -42,11 +42,13 @@ fun today(): Long = LocalDate.now().toEpochDay()
 @Serializable data class Debt(
     val id: String = newId(), val person: String, val accountId: String,
     val owedByMe: Boolean, val principalMinor: Long, val annualPercent: String = "0",
-    val dueDay: Long? = null, val note: String = ""
+    val dueDay: Long? = null, val note: String = "", val openedDay: Long? = null
 )
+@Serializable data class GoalAdjustment(val id: String = newId(), val day: Long = today(), val minor: Long, val note: String = "")
 @Serializable data class Goal(
     val id: String = newId(), val name: String, val currency: String = "RUB",
-    val targetMinor: Long, val savedMinor: Long = 0, val dueDay: Long? = null
+    val targetMinor: Long, val savedMinor: Long = 0, val dueDay: Long? = null,
+    val adjustments: List<GoalAdjustment> = emptyList()
 )
 @Serializable data class Schedule(
     val id: String = newId(), val template: Entry, val nextDay: Long,

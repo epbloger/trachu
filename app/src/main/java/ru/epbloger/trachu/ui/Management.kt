@@ -168,8 +168,7 @@ enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"),
         Form(if(removeDialog)"Отключение PIN" else "Настройка PIN",{pinDialog=false;removeDialog=false},busy,onSave={
             if(!removeDialog && (pin.length<4||pin!=repeat))error="Введите совпадающий PIN от 4 до 12 цифр"
             else {
-                vm.changePin(if(removeDialog)"" else pin,old)
-                pinDialog=false;removeDialog=false
+                vm.changePin(if(removeDialog)"" else pin,old) { pinDialog=false;removeDialog=false }
             }
         }){
             if(settings.protected)PinField("Текущий PIN",old,{old=it})

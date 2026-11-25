@@ -49,12 +49,13 @@ class FinanceWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         }
         refreshWidgets(applicationContext)
         Result.success()
-    } catch (_: Exception) { if(runAttemptCount<3) Result.retry() else Result.failure() }
+    } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+    catch (_: Exception) { if(runAttemptCount<3) Result.retry() else Result.failure() }
 
     companion object {
         fun schedule(context: Context) {
             WorkManager.getInstance(context).enqueueUniquePeriodicWork("finance-periodic",ExistingPeriodicWorkPolicy.KEEP,
-                PeriodicWorkRequestBuilder<FinanceWorker>(12,TimeUnit.HOURS).build())
+                PeriodicWorkRequestBuilder<FinanceWorker>(1,TimeUnit.HOURS).build())
         }
         fun refresh(context: Context) {
             WorkManager.getInstance(context).enqueueUniqueWork("finance-refresh",ExistingWorkPolicy.REPLACE,

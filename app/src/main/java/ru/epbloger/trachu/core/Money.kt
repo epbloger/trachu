@@ -11,7 +11,7 @@ object Money {
         .also { require(it in 0..4) { "Неподдерживаемая валюта" } }
     fun parse(text: String, currency: String): Long {
         val clean = text.trim().replace(" ", "").replace("\u00a0", "").replace(",", ".")
-        require(clean.matches(Regex("[+-]?[0-9]+(\\.[0-9]+)?"))) { "Введите корректную сумму" }
+        require(clean.length <= 48 && clean.matches(Regex("[+-]?[0-9]+(\\.[0-9]+)?"))) { "Введите корректную сумму" }
         return BigDecimal(clean).movePointRight(digits(currency)).longValueExact()
     }
     fun decimal(minor: Long, currency: String): BigDecimal = BigDecimal.valueOf(minor, digits(currency))
@@ -24,7 +24,7 @@ object Money {
         }.format(decimal(minor, currency))
     fun convert(minor: Long, from: String, to: String, rate: String): Long {
         val r = BigDecimal(rate)
-        require(r.signum() > 0 && r.scale() <= 24 && r.precision() <= 40) { "Некорректный курс" }
+        require(r.signum() > 0 && r.scale() in -12..24 && r.precision() <= 40 && r <= BigDecimal("1000000000000")) { "Некорректный курс" }
         return decimal(minor, from).multiply(r).movePointRight(digits(to))
             .setScale(0, RoundingMode.HALF_EVEN).longValueExact()
     }

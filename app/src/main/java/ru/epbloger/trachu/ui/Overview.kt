@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.core.*
 import java.time.LocalDate
@@ -47,7 +48,7 @@ import java.time.temporal.TemporalAdjusters
                             Text("Результат месяца",color=Mint,style=MaterialTheme.typography.bodyMedium)
                             MoneyText(totals.net,ledger.baseCurrency,color=Color.White)
                             Row(horizontalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.fillMaxWidth()) {
-                                Button(onClick={add(Kind.EXPENSE)},modifier=Modifier.weight(1f),colors=ButtonDefaults.buttonColors(containerColor=Mint,contentColor=Deep)) { Text("− Расход") }
+                                Button(onClick={add(Kind.EXPENSE)},modifier=Modifier.weight(1f).testTag("add-expense"),colors=ButtonDefaults.buttonColors(containerColor=Mint,contentColor=Deep)) { Text("− Расход") }
                                 OutlinedButton(onClick={add(Kind.INCOME)},modifier=Modifier.weight(1f),colors=ButtonDefaults.outlinedButtonColors(contentColor=Color.White)) { Text("+ Доход") }
                             }
                         }

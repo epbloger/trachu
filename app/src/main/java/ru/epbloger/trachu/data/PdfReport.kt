@@ -55,7 +55,7 @@ object PdfReport {
             row("Операции",true)
             ledger.entries.filter { it.status==EntryStatus.POSTED && it.day in period }.sortedByDescending { it.day }.forEach { e ->
                 val a=ledger.accounts.first { it.id==e.accountId }
-                val kind=when(e.kind) { Kind.EXPENSE->"Расход"; Kind.INCOME->"Доход"; Kind.TRANSFER->"Перевод"; Kind.REFUND->"Возврат"; Kind.DEBT_IN,Kind.DEBT_OUT->"Долг" }
+                val kind=when(e.kind) { Kind.EXPENSE->"Расход"; Kind.INCOME->"Доход"; Kind.TRANSFER->"Перевод"; Kind.REFUND->"Возврат"; Kind.DEBT_IN,Kind.DEBT_OUT->"Погашение долга"; Kind.LOAN_IN,Kind.LOAN_OUT->"Получение / выдача займа" }
                 row("${LocalDate.ofEpochDay(e.day)}  $kind  ${Money.format(e.minor,a.currency)}  ${a.name}")
                 if(e.note.isNotBlank()) row(e.note)
             }

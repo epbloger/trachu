@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.epbloger.trachu.core.*
@@ -154,12 +155,12 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
         Row(Modifier.fillMaxSize()){
             if(rail)NavigationRail(modifier=Modifier.fillMaxHeight().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start+WindowInsetsSides.Top+WindowInsetsSides.Bottom)),
                 header={Text("Т.",style=MaterialTheme.typography.headlineSmall,color=MaterialTheme.colorScheme.primary,modifier=Modifier.padding(12.dp))}){
-                Tab.entries.forEach{t->NavigationRailItem(selected=t==tab,onClick={choose(t)},icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label)},alwaysShowLabel=!largeFont)}
+                Tab.entries.forEach{t->NavigationRailItem(selected=t==tab,onClick={choose(t)},modifier=Modifier.testTag("nav-${t.name.lowercase()}"),icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label)},alwaysShowLabel=!largeFont)}
             }
             Scaffold(modifier=Modifier.weight(1f),containerColor=MaterialTheme.colorScheme.background,
                 contentWindowInsets=WindowInsets.safeDrawing,
                 bottomBar={if(!rail)NavigationBar{
-                    Tab.entries.forEach{t->NavigationBarItem(selected=t==tab,onClick={choose(t)},icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label,maxLines=1)},alwaysShowLabel=!largeFont)}
+                    Tab.entries.forEach{t->NavigationBarItem(selected=t==tab,onClick={choose(t)},modifier=Modifier.testTag("nav-${t.name.lowercase()}"),icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label,maxLines=1)},alwaysShowLabel=!largeFont)}
                 }},
                 floatingActionButton={if(tab==Tab.OPERATIONS)FloatingActionButton(onClick={add(Kind.EXPENSE)}){Text("+",style=MaterialTheme.typography.headlineSmall)}}){padding->
                 Column(Modifier.fillMaxSize().padding(padding)){
@@ -199,8 +200,16 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
                 "category"->CategoryEditor(ledger,ledger.categories.find{it.id==current.id},busy,vm,close)
                 "entry","planned"->EntryEditor(ledger,settings,vm,busy,current.kind,current=ledger.entries.find{it.id==current.id},close=close,forcePlanned=current.type=="planned")
                 "schedule"->EntryEditor(ledger,settings,vm,busy,Kind.EXPENSE,schedule=ledger.schedules.find{it.id==current.id},recurring=true,close=close)
-                "detail"->ledger.entries.find{it.id==current.id}?.let{e->EntryDetails(ledger,e,vm,busy,close,{editor=Editor("entry",e.id,e.kind)},{editor=Editor("refund",e.id)})}
+                "detail"->ledger.entries.find{it.id==current.id}?.let{e->EntryDetails(ledger,e,vm,busy,close,{
+                    editor=when(e.kind){
+                        Kind.REFUND->Editor("editRefund",e.id)
+                        Kind.DEBT_IN,Kind.DEBT_OUT->Editor("editPayment",e.id)
+                        else->Editor("entry",e.id,e.kind)
+                    }
+                },{editor=Editor("refund",e.id)})}
                 "refund"->ledger.entries.find{it.id==current.id}?.let{RefundEditor(ledger,it,vm,busy,close)}
+                "editRefund"->ledger.entries.find{it.id==current.id}?.let{r->ledger.entries.find{it.id==r.originalId}?.let{o->RefundEditor(ledger,o,vm,busy,close,r)}}
+                "editPayment"->ledger.entries.find{it.id==current.id}?.let{p->ledger.debts.find{it.id==p.debtId}?.let{d->DebtPaymentEditor(ledger,d,vm,busy,close,p)}}
                 "budget"->BudgetEditor(ledger,ledger.budgets.find{it.id==current.id},vm,busy,close)
                 "goal"->GoalEditor(ledger,ledger.goals.find{it.id==current.id},vm,busy,close)
                 "debt"->DebtEditor(ledger,ledger.debts.find{it.id==current.id},vm,busy,close)

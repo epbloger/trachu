@@ -35,9 +35,9 @@ class BalanceWidget : GlanceAppWidget() {
             Text(value,style=TextStyle(color=ColorProvider(Color.White),fontSize=22.sp,fontWeight=FontWeight.Bold),maxLines=1)
             Spacer(GlanceModifier.height(8.dp))
             Row(horizontalAlignment=Alignment.Start) {
-                Button("− Расход",actionStartActivity(Intent(context,MainActivity::class.java).putExtra("quick","EXPENSE")))
+                Button("− Расход",actionStartActivity(Intent(context,MainActivity::class.java).setAction("ru.epbloger.trachu.QUICK_EXPENSE").putExtra("quick","EXPENSE")))
                 Spacer(GlanceModifier.width(6.dp))
-                Button("+ Доход",actionStartActivity(Intent(context,MainActivity::class.java).putExtra("quick","INCOME")))
+                Button("+ Доход",actionStartActivity(Intent(context,MainActivity::class.java).setAction("ru.epbloger.trachu.QUICK_INCOME").putExtra("quick","INCOME")))
             }
         }
     }

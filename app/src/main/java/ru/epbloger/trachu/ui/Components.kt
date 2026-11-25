@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import ru.epbloger.trachu.core.*
@@ -36,6 +37,7 @@ fun parseDay(value: String): Long = LocalDate.parse(value.trim()).toEpochDay()
 fun Kind.label(): String = when(this) {
     Kind.EXPENSE->"Расход"; Kind.INCOME->"Доход"; Kind.TRANSFER->"Перевод"; Kind.REFUND->"Возврат"
     Kind.DEBT_IN->"Возврат долга вам"; Kind.DEBT_OUT->"Погашение долга"
+    Kind.LOAN_IN->"Получение займа"; Kind.LOAN_OUT->"Выдача займа"
 }
 fun AccountType.label(): String = when(this) {
     AccountType.CASH->"Наличные"; AccountType.CARD->"Банковская карта"; AccountType.SAVINGS->"Накопительный"
@@ -47,7 +49,7 @@ fun Ledger.categoryName(id: String): String = categories.find { it.id==id }?.nam
 fun Ledger.entryName(e: Entry): String = when(e.kind) {
     Kind.TRANSFER->"${accountName(e.accountId)} → ${accountName(e.targetAccountId.orEmpty())}"
     Kind.REFUND->"Возврат · "+e.splits.joinToString(", ") { categoryName(it.categoryId) }
-    Kind.DEBT_IN,Kind.DEBT_OUT->e.kind.label()
+    Kind.DEBT_IN,Kind.DEBT_OUT,Kind.LOAN_IN,Kind.LOAN_OUT->e.kind.label()+" · "+(debts.find { it.id==e.debtId }?.person ?: "")
     else->e.splits.joinToString(", ") { categoryName(it.categoryId) }.ifBlank { e.kind.label() }
 }
 
@@ -74,7 +76,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
     }
 }
 @Composable fun Field(label: String, value: String, onChange: (String)->Unit, numeric: Boolean=false, modifier: Modifier=Modifier, singleLine: Boolean=true, supporting: String?=null) {
-    OutlinedTextField(value,onChange,modifier.fillMaxWidth(),label={ Text(label) },singleLine=singleLine,
+    OutlinedTextField(value,onChange,modifier.fillMaxWidth().testTag("field:$label"),label={ Text(label) },singleLine=singleLine,
         keyboardOptions=KeyboardOptions(keyboardType=if(numeric) KeyboardType.Decimal else KeyboardType.Text),
         supportingText=if(supporting==null) null else { { Text(supporting) } })
 }
@@ -119,7 +121,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
                 Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.End,verticalAlignment=Alignment.CenterVertically) {
                     TextButton(onClick=onClose,enabled=!busy) { Text("Отмена") }
-                    Button(onClick=onSave,enabled=!busy) { if(busy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Text(saveLabel) }
+                    Button(onClick=onSave,enabled=!busy,modifier=Modifier.testTag("form_save")) { if(busy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Text(saveLabel) }
                 }
             }
         }
@@ -162,8 +164,8 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
 @Composable fun EntryRow(ledger: Ledger, entry: Entry, onClick: ()->Unit) {
     val a=ledger.accounts.first { it.id==entry.accountId }
     val category=ledger.categories.find { it.id==entry.splits.firstOrNull()?.categoryId }
-    val incoming=entry.kind in listOf(Kind.INCOME,Kind.REFUND,Kind.DEBT_IN)
-    val sign=when(entry.kind) { Kind.INCOME,Kind.REFUND,Kind.DEBT_IN->"+"; Kind.EXPENSE,Kind.DEBT_OUT->"−"; Kind.TRANSFER->"" }
+    val incoming=entry.kind in listOf(Kind.INCOME,Kind.REFUND,Kind.DEBT_IN,Kind.LOAN_IN)
+    val sign=when(entry.kind) { Kind.INCOME,Kind.REFUND,Kind.DEBT_IN,Kind.LOAN_IN->"+"; Kind.EXPENSE,Kind.DEBT_OUT,Kind.LOAN_OUT->"−"; Kind.TRANSFER->"" }
     Row(Modifier.fillMaxWidth().clickable(onClick=onClick).padding(vertical=10.dp),
         verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
         CategoryDot(category)

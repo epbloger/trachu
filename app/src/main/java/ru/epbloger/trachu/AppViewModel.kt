@@ -35,6 +35,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         FinanceWorker.refresh(app)
     }
     fun clearMessage() { _message.value=null }
+    fun rememberAccount(id: String) { viewModelScope.launch { preferences.lastAccount(id) } }
     fun quick(kind: Kind?) { _quick.value=kind }
     fun lock() { _unlocked.value=false }
     fun unlockBiometric() { _unlocked.value=true; viewModelScope.launch { preferences.pinResult(true) } }
@@ -46,13 +47,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         require(ok) { "Неверный PIN" }
         _unlocked.value=true
     }
-    fun changePin(pin: String, old: String) = perform {
+    fun changePin(pin: String, old: String, onDone: ()->Unit = {}) = perform {
         val s=preferences.current()
         if(s.protected) require(withContext(Dispatchers.Default) { PinVault.verify(old,s.credential) }) { "Неверный текущий PIN" }
         val credential=if(pin.isBlank()) "" else withContext(Dispatchers.Default) { PinVault.create(pin) }
         preferences.setCredential(credential)
         _unlocked.value=true
-        refreshWidgets(getApplication())
+        runCatching { refreshWidgets(getApplication()) }
+        onDone()
     }
     fun perform(task: suspend () -> Unit) {
         if(_busy.value) return
@@ -66,7 +68,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun change(transform: (Ledger)->Ledger, onDone: ()->Unit = {}) = perform {
         store.change(transform)
-        FinanceWorker.refresh(getApplication())
+        runCatching { FinanceWorker.refresh(getApplication()) }
         onDone()
     }
     fun saveEntry(entry: Entry, receipt: Receipt? = null, onDone: ()->Unit={}) = change({ old ->

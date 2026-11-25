@@ -11,7 +11,8 @@ import kotlinx.serialization.json.Json
 import ru.epbloger.trachu.core.*
 
 @Entity(tableName = "ledger_records", primaryKeys = ["kind", "id"])
-data class LedgerRecord(val kind: String, val id: String, val payload: String)
+data class LedgerRecord(val kind: String, val id: String, val payload: String,
+    @ColumnInfo(defaultValue = "1") val formatVersion: Int = 1)
 
 @Dao
 interface LedgerDao {
@@ -23,14 +24,19 @@ interface LedgerDao {
     @Delete suspend fun delete(records: List<LedgerRecord>)
 }
 
-@Database(entities = [LedgerRecord::class], version = 1, exportSchema = true)
+@Database(entities = [LedgerRecord::class], version = 2, exportSchema = true)
 abstract class TrachuDatabase : RoomDatabase() {
     abstract fun ledgerDao(): LedgerDao
     companion object {
+        val MIGRATION_1_2 = object : androidx.room.migration.Migration(1,2) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE ledger_records ADD COLUMN formatVersion INTEGER NOT NULL DEFAULT 1")
+            }
+        }
         @Volatile private var instance: TrachuDatabase? = null
         fun get(context: Context): TrachuDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, TrachuDatabase::class.java, "trachu.db")
-                .build().also { instance = it }
+                .addMigrations(MIGRATION_1_2).build().also { instance = it }
         }
     }
 }
@@ -57,7 +63,7 @@ object LedgerRecords {
         addAll("rate", ledger.rates, { "${it.currency}:${it.day}" }, { json.encodeToString(it) })
         ledger.receipts.forEach { receipt ->
             add(LedgerRecord("receipt", receipt.id, receipt.mime))
-            receipt.base64.chunked(48_000).forEachIndexed { index, chunk ->
+            receipt.base64.chunked(24_000).forEachIndexed { index, chunk ->
                 add(LedgerRecord("receipt_chunk", "${receipt.id}:${index.toString().padStart(6,'0')}", chunk))
             }
         }
@@ -65,6 +71,7 @@ object LedgerRecords {
     fun decode(rows: List<LedgerRecord>): Ledger {
         if (rows.isEmpty()) return Ledger.initial()
         require(rows.map { it.kind to it.id }.distinct().size == rows.size)
+        require(rows.all { it.formatVersion == 1 }) { "Неподдерживаемая версия записи" }
         require(rows.all { it.kind in setOf("meta","account","category","entry","budget","debt","goal","schedule","rate","receipt","receipt_chunk") })
         val grouped = rows.groupBy { it.kind }
         val base = grouped["meta"]?.single()?.also { require(it.id == "base") }?.payload
@@ -111,6 +118,9 @@ class LedgerStore(private val db: TrachuDatabase) {
         next
     }
     suspend fun restore(ledger: Ledger) = change { ledger.validated() }
-    suspend fun processDue(through: Long = today()) = change { Finance.generate(it, through) }
+    suspend fun processDue(through: Long = today()): Ledger {
+        val now = java.time.LocalTime.now()
+        return change { Finance.generate(it, through, throughMinutes = if(through==today()) now.hour*60+now.minute else null) }
+    }
     companion object { fun get(context: Context) = LedgerStore(TrachuDatabase.get(context)) }
 }

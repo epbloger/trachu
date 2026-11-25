@@ -42,7 +42,7 @@ object Finance {
             val delta = when {
                 e.kind == Kind.TRANSFER && e.targetAccountId == accountId -> requireNotNull(e.targetMinor)
                 e.accountId != accountId -> 0L
-                e.kind in listOf(Kind.INCOME, Kind.REFUND, Kind.DEBT_IN) -> e.minor
+                e.kind in listOf(Kind.INCOME, Kind.REFUND, Kind.DEBT_IN, Kind.LOAN_IN) -> e.minor
                 else -> -e.minor
             }
             Money.add(total, delta)
@@ -160,7 +160,15 @@ object Finance {
         return BudgetProgress(Money.add(budget.monthlyMinor, carry), spent(target))
     }
     fun debtRemaining(ledger: Ledger, debt: Debt): Long = Money.sub(debt.principalMinor,
-        Money.sum(ledger.entries.filter { it.status == EntryStatus.POSTED && it.debtId == debt.id }.map { it.principalMinor }))
+        Money.sum(ledger.entries.filter { it.status == EntryStatus.POSTED && it.debtId == debt.id && it.kind in setOf(Kind.DEBT_IN, Kind.DEBT_OUT) }.map { it.principalMinor }))
+
+    fun goalSaved(goal: Goal): Long = Money.add(goal.savedMinor, Money.sum(goal.adjustments.map { it.minor }))
+
+    fun estimatedInterest(ledger: Ledger, debt: Debt, days: Int): Long {
+        require(days in 1..366)
+        return BigDecimal.valueOf(debtRemaining(ledger, debt)).multiply(BigDecimal(debt.annualPercent))
+            .multiply(BigDecimal(days)).divide(BigDecimal(36500), 0, java.math.RoundingMode.HALF_EVEN).longValueExact()
+    }
     fun nextDate(schedule: Schedule, day: Long): Long {
         val d = LocalDate.ofEpochDay(day)
         val next = when (schedule.frequency) {
@@ -171,14 +179,14 @@ object Finance {
         }
         return next.toEpochDay()
     }
-    fun generate(ledger: Ledger, through: Long, forecast: Boolean = false): Ledger {
+    fun generate(ledger: Ledger, through: Long, forecast: Boolean = false, throughMinutes: Int? = null): Ledger {
         val newEntries = ledger.entries.toMutableList()
         val ids = newEntries.map { it.id }.toHashSet()
         val updated = ledger.schedules.map { s ->
             if (!s.enabled) return@map s
             var day = s.nextDay
             var count = 0
-            while (day <= through && (s.endDay == null || day <= s.endDay)) {
+            while ((day < through || day == through && (throughMinutes == null || s.template.timeMinutes <= throughMinutes)) && (s.endDay == null || day <= s.endDay)) {
                 require(++count <= 5000) { "Слишком много повторений" }
                 val id = UUID.nameUUIDFromBytes(("${s.id}:$day").toByteArray(Charsets.UTF_8)).toString()
                 if (ids.add(id)) {
@@ -205,6 +213,7 @@ object Finance {
     }
     fun deleteEntry(ledger: Ledger, id: String): Ledger {
         require(ledger.entries.none { it.originalId == id }) { "Сначала удалите связанные возвраты" }
+        require(ledger.entries.none { it.id == id && it.kind in setOf(Kind.LOAN_IN,Kind.LOAN_OUT) }) { "Измените связанную запись долга" }
         return ledger.copy(entries = ledger.entries.filterNot { it.id == id }).validated()
     }
 }
@@ -249,10 +258,18 @@ fun Ledger.validated(): Ledger {
                 require(target.id != account.id && (e.targetMinor ?: 0L) > 0 && e.splits.isEmpty() && e.originalId == null && e.debtId == null && e.principalMinor == 0L)
                 if (account.currency == target.currency) require(e.targetMinor == e.minor)
             }
-            Kind.DEBT_IN, Kind.DEBT_OUT -> {
+            Kind.DEBT_IN, Kind.DEBT_OUT, Kind.LOAN_IN, Kind.LOAN_OUT -> {
                 val debt = requireNotNull(dd[e.debtId])
-                require(debt.accountId == e.accountId && e.kind == if (debt.owedByMe) Kind.DEBT_OUT else Kind.DEBT_IN)
+                val opening = e.kind in setOf(Kind.LOAN_IN,Kind.LOAN_OUT)
+                val expected = if(opening) {
+                    if(debt.owedByMe) Kind.LOAN_IN else Kind.LOAN_OUT
+                } else {
+                    if(debt.owedByMe) Kind.DEBT_OUT else Kind.DEBT_IN
+                }
+                require(debt.accountId == e.accountId && e.kind == expected)
                 require(e.principalMinor in 0..e.minor && e.splits.isEmpty() && e.originalId == null && e.targetAccountId == null && e.targetMinor == null)
+                if(opening) require(e.principalMinor == debt.principalMinor && e.minor == debt.principalMinor && debt.openedDay == e.day)
+                else require(debt.openedDay == null || e.day >= debt.openedDay)
                 require(!template && e.status == EntryStatus.POSTED)
             }
         }
@@ -274,12 +291,21 @@ fun Ledger.validated(): Ledger {
         }
     }
     debts.forEach {
-        require(it.person.isNotBlank() && it.accountId in aa && it.principalMinor > 0 && BigDecimal(it.annualPercent).signum() >= 0)
+        val percent=BigDecimal(it.annualPercent)
+        require(it.person.isNotBlank() && it.accountId in aa && it.principalMinor > 0 && percent >= BigDecimal.ZERO && percent <= BigDecimal("1000") && percent.scale() in -3..6)
+        val openings=entries.filter { e -> e.debtId == it.id && e.kind in setOf(Kind.LOAN_IN,Kind.LOAN_OUT) }
+        require(openings.size == if(it.openedDay==null) 0 else 1)
         require(Finance.debtRemaining(this, it) >= 0) { "Погашение больше остатка долга" }
     }
-    goals.forEach { Money.digits(it.currency); require(it.name.isNotBlank() && it.targetMinor > 0 && it.savedMinor >= 0) }
+    goals.forEach {
+        Money.digits(it.currency)
+        require(it.name.isNotBlank() && it.targetMinor > 0 && it.savedMinor >= 0 && it.adjustments.size <= 500)
+        unique(it.adjustments.map { a -> a.id })
+        var saved=it.savedMinor
+        it.adjustments.forEach { a -> require(a.minor!=0L && a.note.length<=200); LocalDate.ofEpochDay(a.day); saved=Money.add(saved,a.minor); require(saved>=0) }
+    }
     budgets.forEach { require(it.name.isNotBlank() && it.monthlyMinor > 0 && (it.categoryId == null || cc[it.categoryId]?.income == false)); LocalDate.ofEpochDay(it.startMonth) }
-    schedules.forEach { require(it.interval in 1..365 && it.anchorDay in 1..31 && it.template.kind !in setOf(Kind.REFUND, Kind.DEBT_IN, Kind.DEBT_OUT)); checkEntry(it.template, true); LocalDate.ofEpochDay(it.nextDay) }
+    schedules.forEach { require(it.interval in 1..365 && it.anchorDay in 1..31 && it.template.kind in setOf(Kind.EXPENSE, Kind.INCOME, Kind.TRANSFER)); checkEntry(it.template, true); LocalDate.ofEpochDay(it.nextDay) }
     receipts.forEach { require(it.mime in setOf("image/jpeg", "image/png", "image/webp") && it.base64.length <= 8_000_000) }
     accounts.forEach { Finance.balance(this, it.id, Long.MAX_VALUE) }
     Finance.valuation(this)
