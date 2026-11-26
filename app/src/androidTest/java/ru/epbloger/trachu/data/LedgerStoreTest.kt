@@ -32,6 +32,10 @@ class LedgerStoreTest {
             store.restore(before)
             store.restore(before)
             assertEquals(1,store.current().entries.size)
+            val oversized=before.copy(accounts=before.accounts.map{if(it.id==a.id)it.copy(name="Ж".repeat(300_000)) else it})
+            assertTrue(runCatching{store.restore(oversized)}.isFailure)
+            assertTrue(runCatching{store.change{oversized}}.isFailure)
+            assertEquals(before,store.current())
         } finally {db.close()}
     }
     @Test fun migrationPreservesLegacyRowsAndReopen()=runBlocking {
@@ -101,5 +105,33 @@ class LedgerStoreTest {
             store.restore(before)
             assertEquals(before,store.current())
         } finally { db.close() }
+    }
+    @Test fun legacyEncryptedArchiveWithMultiMegabyteReceiptRestoresAtomically()=runBlocking {
+        val db=Room.inMemoryDatabaseBuilder(context,TrachuDatabase::class.java).build()
+        try {
+            val store=LedgerStore(db)
+            val account=Account("legacy-archive","Архив",openingMinor=10000)
+            val receipt=Receipt("old-check","image/png","AAAA".repeat(750_000))
+            val state=Ledger.initial().copy(accounts=listOf(account),receipts=listOf(receipt))
+            val entry=Finance.makeEntry(state,Kind.EXPENSE,account.id,3210,today(),listOf("food" to 3210L),receiptIds=listOf(receipt.id))
+            val expected=state.copy(entries=listOf(entry))
+            // Generate a legacy TRACHU01 envelope with the platform JCA provider,
+            // independently of Backup.write and its current streaming implementation.
+            val header="TRACHU01".toByteArray(Charsets.US_ASCII)+ByteArray(28){it.toByte()}
+            val spec=javax.crypto.spec.PBEKeySpec("legacy-password".toCharArray(),header.copyOfRange(8,24),310_000,256)
+            val key=try{javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded}finally{spec.clearPassword()}
+            val cipher=javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            try{cipher.init(javax.crypto.Cipher.ENCRYPT_MODE,javax.crypto.spec.SecretKeySpec(key,"AES"),javax.crypto.spec.GCMParameterSpec(128,header.copyOfRange(24,36)))}finally{key.fill(0)}
+            cipher.updateAAD(header)
+            val bytes=header+cipher.doFinal(("{\"version\":1,\"ledger\":"+LedgerRecords.json.encodeToString(Ledger.serializer(),expected)+"}").toByteArray(Charsets.UTF_8))
+            store.restore(Backup.read("legacy-password".toCharArray(),bytes.inputStream()))
+            val before=store.current()
+            assertEquals(expected.receipts,before.receipts)
+            assertEquals(expected.entries,before.entries)
+            assertEquals(6790L,Finance.balance(before,account.id))
+            bytes[bytes.lastIndex]=(bytes.last().toInt() xor 1).toByte()
+            assertTrue(runCatching{store.restore(Backup.read("legacy-password".toCharArray(),bytes.inputStream()))}.isFailure)
+            assertEquals(before,store.current())
+        }finally{db.close()}
     }
 }

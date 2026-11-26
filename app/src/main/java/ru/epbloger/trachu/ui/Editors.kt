@@ -125,6 +125,33 @@ class EntryDraft {
         ids.value=ids.value+receipt.id
     }
 }
+internal fun canRepeatEntry(ledger:Ledger,entry:Entry):Boolean =
+    entry.status==EntryStatus.POSTED && entry.kind in setOf(Kind.EXPENSE,Kind.INCOME,Kind.TRANSFER) &&
+        ledger.accounts.any{it.id==entry.accountId&&!it.archived} &&
+        (entry.kind!=Kind.TRANSFER || ledger.accounts.any{it.id==entry.targetAccountId&&!it.archived}) &&
+        entry.splits.all{sp->ledger.categories.any{it.id==sp.categoryId&&!it.archived}}
+
+/** A new draft, never an automatic posting or a mutation of the source entry. */
+internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
+    require(canRepeatEntry(ledger,entry))
+    val currency=ledger.accounts.first{it.id==entry.accountId}.currency
+    return EntryDraft().apply {
+        state("accountId"){entry.accountId}
+        state("kind"){entry.kind}
+        state("amount"){Money.input(entry.minor,currency)}
+        state("note"){entry.note}
+        state("tags"){entry.tags.joinToString(", ")}
+        state("essential"){entry.essential}
+        state("advanced"){true}
+        state("targetId"){entry.targetAccountId.orEmpty()}
+        state("targetAmount"){entry.targetMinor?.let{Money.input(it,ledger.accounts.first{a->a.id==entry.targetAccountId}.currency)}.orEmpty()}
+        if(entry.splits.isNotEmpty()) {
+            state("splitMode"){entry.splits.size>1}
+            state("splitDrafts"){entry.splits.map{SplitDraft(it.categoryId,Money.input(it.minor,currency))}}
+        }
+        // New date/time, rate lookup, ID and no receipts or scheduled auto-posting.
+    }
+}
 @Composable fun EntryEditor(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, initialKind: Kind, current: Entry?=null, schedule: Schedule?=null, recurring: Boolean=false, close: ()->Unit, forcePlanned: Boolean=false, draft: EntryDraft, chooseReceipt: ()->Unit, initialDay:Long?=null) {
     // Keep the snapshot from opening the draft, even if the ledger emits a newer entry.
     val original by draft.state("originalEntry") { schedule?.template ?: current }
@@ -315,8 +342,8 @@ class EntryDraft {
     else Text("Фотография чека",style=MaterialTheme.typography.bodySmall)
 }
 
-@Composable fun EntryDetails(ledger: Ledger, entry: Entry, vm: AppViewModel,busy:Boolean,close:()->Unit,edit:()->Unit,refund:()->Unit) {
-    var confirmDelete by remember { mutableStateOf(false) }
+@Composable fun EntryDetails(ledger: Ledger, entry: Entry, vm: AppViewModel,busy:Boolean,close:()->Unit,edit:()->Unit,refund:()->Unit,repeat:()->Unit) {
+    var deletionSnapshot by remember { mutableStateOf<Entry?>(null) }
     val account=ledger.accounts.first{it.id==entry.accountId}
     val refunds=ledger.entries.filter{it.originalId==entry.id}
     val remaining=Money.sub(entry.minor,Money.sum(refunds.map{it.minor}))
@@ -343,6 +370,7 @@ class EntryDraft {
         }
         if(entry.kind !in setOf(Kind.LOAN_IN,Kind.LOAN_OUT) && refunds.isEmpty())
             OutlinedButton(onClick=edit,modifier=Modifier.fillMaxWidth()){Text("Редактировать")}
+        if(canRepeatEntry(ledger,entry))OutlinedButton(onClick=repeat,enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Повторить операцию")}
         if(entry.kind==Kind.EXPENSE && entry.status==EntryStatus.POSTED && remaining>0) {
             Text("Доступно к возврату: "+Money.format(remaining,account.currency))
             OutlinedButton(onClick=refund,modifier=Modifier.fillMaxWidth()){Text("Оформить возврат")}
@@ -351,9 +379,12 @@ class EntryDraft {
             Text("Связанные возвраты",style=MaterialTheme.typography.titleMedium)
             refunds.forEach{Text(dayLabel(it.day)+" · "+Money.format(it.minor,account.currency))}
         }
-        OutlinedButton(onClick={confirmDelete=true},enabled=refunds.isEmpty()&&!busy&&entry.kind !in setOf(Kind.LOAN_IN,Kind.LOAN_OUT),modifier=Modifier.fillMaxWidth()){Text("Удалить операцию",color=MaterialTheme.colorScheme.error)}
+        OutlinedButton(onClick={deletionSnapshot=entry},enabled=refunds.isEmpty()&&!busy&&entry.kind !in setOf(Kind.LOAN_IN,Kind.LOAN_OUT),modifier=Modifier.fillMaxWidth()){Text("Удалить операцию",color=MaterialTheme.colorScheme.error)}
     }
-    if(confirmDelete)Confirm("Удалить операцию?","Баланс и отчёты будут пересчитаны.",{confirmDelete=false},{vm.change({l->Finance.deleteEntry(l,entry.id)},close)},busy)
+    deletionSnapshot?.let{snapshot->Confirm("Удалить операцию?","Баланс и отчёты будут пересчитаны.",{deletionSnapshot=null},{vm.change({l->
+        require(l.entries.find{it.id==snapshot.id}==snapshot){"Операция изменилась. Откройте её снова."}
+        Finance.deleteEntry(l,snapshot.id)
+    },close)},busy)}
 }
 
 @Composable fun RefundEditor(ledger: Ledger, entry: Entry, vm: AppViewModel,busy:Boolean,close:()->Unit,current:Entry?=null, draft:EntryDraft) {

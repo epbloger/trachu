@@ -26,6 +26,8 @@ SDK запускается при посещении обзора только �
 
 Перед выпуском сборки с рекламой необходимо проверить фактический сетевой трафик, декларации магазинов и опубликованную политику. Две копии политики (docs/PRIVACY_POLICY.md и app/src/main/assets/legal/privacy.txt) должны совпадать.
 
+**RuStore:** в декларации указываются сведения, передаваемые с устройства не только собственным кодом, но и сторонними SDK. Для сборки с рекламой необходимо проверить текущие [категории данных](https://www.rustore.ru/help/developers/publishing-and-verifying-apps/app-publication/new-version-app/declare-app-permissions/data-categories) по фактическим запросам. Само удаление Android `AD_ID` и отсутствие доступа к финансам не означают, что SDK вообще не обрабатывает сетевые или технические данные. Для сборки без настроенного блока требуется фактически подтвердить отсутствие рекламных запросов. Приложение не содержит ключей или ID других проектов.
+
 ## Что проверить перед публикацией
 
 1. В settings.gradle.kts внутри dependencyResolutionManagement подключён https://ads.maven.yandex.net/ с content-фильтрами includeGroup("com.yandex.android") и includeGroupAndSubgroups("com.yandex.ads").

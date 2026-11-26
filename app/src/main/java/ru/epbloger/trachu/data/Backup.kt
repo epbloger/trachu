@@ -8,6 +8,7 @@ import ru.epbloger.trachu.core.Ledger
 import ru.epbloger.trachu.core.validated
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.File
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.AEADBadTagException
@@ -65,6 +66,20 @@ object Backup {
     private val magic = "TRACHU01".toByteArray(Charsets.US_ASCII)
     private const val maxBytes = 100 * 1024 * 1024
     private val random = SecureRandom()
+    /** Stage only encrypted bytes in private cache. SAF cannot promise atomic
+     * replacement across providers, but generation failure leaves the target alone. */
+    internal fun writeStaged(ledger: Ledger, password: CharArray, cache: File, destination: () -> OutputStream) {
+        var staged: File? = null
+        try {
+            val file = File.createTempFile("backup-", ".encrypted", cache)
+            staged = file
+            file.outputStream().use { write(ledger, password, it) }
+            destination().use { output -> file.inputStream().use { it.copyTo(output) } }
+        } finally {
+            password.fill('\u0000')
+            staged?.delete()
+        }
+    }
     private fun key(password: CharArray, salt: ByteArray): SecretKeySpec {
         val spec = PBEKeySpec(password, salt, 310_000, 256)
         try {

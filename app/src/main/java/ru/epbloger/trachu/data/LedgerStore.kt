@@ -14,6 +14,15 @@ import ru.epbloger.trachu.core.*
 data class LedgerRecord(val kind: String, val id: String, val payload: String,
     @ColumnInfo(defaultValue = "1") val formatVersion: Int = 1)
 
+// Prevent a single imported string/record from exceeding CursorWindow capacity.
+// Receipt bodies are already chunked separately; ordinary records stay far smaller.
+private fun LedgerRecord.checkedSize(): LedgerRecord = apply {
+    require(id.length <= 4096 && payload.length <= 512 * 1024 &&
+        id.toByteArray(Charsets.UTF_8).size.toLong() + payload.toByteArray(Charsets.UTF_8).size <= 512 * 1024) {
+        "Отдельная финансовая запись слишком большая"
+    }
+}
+
 data class RecordStats(val bytes: Long, @ColumnInfo(name = "row_count") val rows: Long) {
     // Includes decoded strings, receipt builders and per-object/list overhead.
     fun estimatedMemory(): Long = bytes * 4 + rows * 1024
@@ -88,6 +97,7 @@ object LedgerRecords {
         var bytes = 0L
         var rows = 0L
         records(ledger).forEach {
+            it.checkedSize()
             bytes += it.kind.toByteArray(Charsets.UTF_8).size.toLong() +
                 it.id.toByteArray(Charsets.UTF_8).size + it.payload.toByteArray(Charsets.UTF_8).size
             rows++
@@ -229,7 +239,7 @@ class LedgerStore(private val db: TrachuDatabase) {
         before.asSequence().filter { id(it) !in nextIds }
             .map { LedgerRecord(kind, id(it), "") }.chunked(pageSize).forEach { dao.delete(it) }
         after.asSequence().filter { old[id(it)] != it }
-            .map { LedgerRecord(kind, id(it), encode(it)) }.chunked(pageSize).forEach { dao.put(it) }
+            .map { LedgerRecord(kind, id(it), encode(it)).checkedSize() }.chunked(pageSize).forEach { dao.put(it) }
     }
 
     private suspend fun syncReceipts(before: List<Receipt>, after: List<Receipt>) {
@@ -240,7 +250,7 @@ class LedgerStore(private val db: TrachuDatabase) {
             if (it.id !in next) dao.delete(listOf(LedgerRecord("receipt", it.id, "")))
         }
         after.filter { old[it.id] != it }.forEach {
-            LedgerRecords.receiptRows(it).chunked(pageSize).forEach { rows -> dao.put(rows) }
+            LedgerRecords.receiptRows(it).map { row->row.checkedSize() }.chunked(pageSize).forEach { rows -> dao.put(rows) }
         }
     }
 
@@ -249,7 +259,7 @@ class LedgerStore(private val db: TrachuDatabase) {
         val before = readSnapshot(stats)
         val next = prune(transform(before))
         if (stats.rows == 0L) {
-            LedgerRecords.records(next).chunked(pageSize).forEach { dao.put(it) }
+            LedgerRecords.records(next).map{it.checkedSize()}.chunked(pageSize).forEach { dao.put(it) }
         } else {
             val json = LedgerRecords.json
             if (before.baseCurrency != next.baseCurrency) dao.put(listOf(LedgerRecord("meta", "base", next.baseCurrency)))
@@ -270,7 +280,7 @@ class LedgerStore(private val db: TrachuDatabase) {
         val next = prune(ledger.validated())
         val stats = dao.stats()
         dao.clear()
-        LedgerRecords.records(next).chunked(pageSize).forEach { dao.put(it) }
+        LedgerRecords.records(next).map{it.checkedSize()}.chunked(pageSize).forEach { dao.put(it) }
         checkGrowth(stats)
         next
     }

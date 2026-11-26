@@ -115,7 +115,7 @@ class MainActivity : FragmentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED){
                 combine(vm.settings,vm.ledger,vm.unlocked,vm.busy,vm.pickedResult){s,l,u,b,p->
-                    p!=null && s!=null && l!=null && (!s.protected||u) && !b
+                    p!=null && s!=null && (l!=null||p.isBackupRestore()) && (!s.protected||u) && !b
                 }.collect{ready->if(ready)vm.deliverPickedResult()}
             }
         }
@@ -134,13 +134,12 @@ class MainActivity : FragmentActivity() {
                 Surface(Modifier.fillMaxSize(),color=MaterialTheme.colorScheme.background) {
                     val s=settings
                     val l=ledger
-                    if(s==null||l==null)Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),contentAlignment=Alignment.Center){
+                    if(s!=null && s.protected && !unlocked && l==null && loadingError!=null) {
+                        LockScreen(s,vm,busy,biometricAvailable()){done->authenticate(done)}
+                    } else if(s==null||l==null)Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),contentAlignment=Alignment.Center){
                         val error=loadingError
                         if(error==null)CircularProgressIndicator()
-                        else Column(Modifier.padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(16.dp)){
-                            Text(error,style=MaterialTheme.typography.bodyLarge)
-                            Button(onClick=vm::retryLoad){Text("Повторить")}
-                        }
+                        else RecoveryScreen(error,canRestore=s!=null&&l==null,busy=busy,retry=vm::retryLoad,file=::launchFile)
                     }
                     else AppShell(l,s,vm,busy,biometricAvailable(),s.protected&&!unlocked,{done->authenticate(done)},::launchFile,::chooseReceipt)
                     if(message!=null && (settings?.protected!=true || unlocked || message=="Неверный PIN" || message?.startsWith("Слишком много попыток")==true))AlertDialog(onDismissRequest=vm::clearMessage,title={Text("ТРАЧУ.")},text={Text(message.orEmpty())},
@@ -191,6 +190,31 @@ class MainActivity : FragmentActivity() {
     }
 }
 
+@Composable private fun RecoveryScreen(error:String,canRestore:Boolean,busy:Boolean,retry:()->Unit,file:(FileRequest)->Unit){
+    var restoring by remember{mutableStateOf(false)}
+    Column(Modifier.widthIn(max=480.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
+        horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(16.dp)){
+        Text(error,style=MaterialTheme.typography.bodyLarge)
+        Button(onClick=retry,enabled=!busy){Text("Повторить")}
+        if(canRestore) {
+            Text("Если повторное открытие не помогает, можно восстановить сохранённую зашифрованную копию. Текущая база не будет удалена до проверки файла.")
+            OutlinedButton(onClick={restoring=true},enabled=!busy){Text("Восстановить из копии")}
+        }
+    }
+    if(restoring&&canRestore){
+        var password by remember{mutableStateOf("")}
+        Form("Восстановление",{restoring=false},busy,"Выбрать файл",onSave={
+            if(password.length>=8){file(FileRequest("backup",false,password));restoring=false}
+        }){
+            Warning("После проверки пароля и целостности копия полностью заменит финансовую историю. Неверный файл не изменит текущие записи.")
+            OutlinedTextField(password,{password=it},Modifier.fillMaxWidth(),label={Text("Пароль резервной копии")},
+                visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                keyboardOptions=androidx.compose.foundation.text.KeyboardOptions(keyboardType=androidx.compose.ui.text.input.KeyboardType.Password),singleLine=true)
+            if(password.length<8)Text("Пароль содержит не менее 8 символов.",style=MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
 private enum class Tab(val label:String,val icon:ImageVector) {
     HOME("Обзор",Icons.Outlined.Home), OPERATIONS("Операции",Icons.Outlined.AccountBalanceWallet),
     PLAN("План",Icons.Outlined.CalendarMonth), REPORTS("Отчёты",Icons.Outlined.BarChart), MORE("Ещё",Icons.Outlined.MoreHoriz)
@@ -213,7 +237,11 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
         if(ledger.accounts.none{!it.archived}){openMore(MorePage.ACCOUNTS);editor=Editor("account")}
         else editor=Editor("schedule",s?.id)
     }
-    LaunchedEffect(quick,locked){if(quick!=null&&!locked){add(requireNotNull(quick));vm.quick(null)}}
+    LaunchedEffect(quick,locked){if(quick!=null&&!locked){
+        if(editor==null&&!vm.pickerPending()&&!busy)add(requireNotNull(quick))
+        else vm.notice("Сначала завершите текущую операцию. Черновик сохранён.")
+        vm.quick(null)
+    }}
     if(locked){
         LockScreen(settings,vm,busy,biometricAvailable,authenticate)
         return
@@ -293,7 +321,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                         Kind.DEBT_IN,Kind.DEBT_OUT->Editor("editPayment",e.id)
                         else->Editor("entry",e.id,e.kind)
                     }
-                },{editor=Editor("refund",e.id)})}
+                },{editor=Editor("refund",e.id)},{editor=Editor("entry",kind=e.kind,draft=repeatEntryDraft(ledger,e))})}
                 "refund"->ledger.entries.find{it.id==current.id}?.let{RefundEditor(ledger,it,vm,busy,close,draft=entryDraft)}
                 "editRefund"->ledger.entries.find{it.id==current.id}?.let{r->ledger.entries.find{it.id==r.originalId}?.let{o->RefundEditor(ledger,o,vm,busy,close,r,entryDraft)}}
                 "editPayment"->ledger.entries.find{it.id==current.id}?.let{p->ledger.debts.find{it.id==p.debtId}?.let{d->DebtPaymentEditor(ledger,d,vm,busy,close,p,entryDraft)}}

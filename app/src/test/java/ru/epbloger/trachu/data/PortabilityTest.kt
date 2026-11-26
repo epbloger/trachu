@@ -121,6 +121,22 @@ class PortabilityTest {
         assertTrue(runCatching{Backup.write(original,password,ByteArrayOutputStream())}.isFailure)
         assertTrue(password.all{it=='\u0000'})
     }
+    @Test fun stagedBackupDoesNotOpenDestinationOnGenerationFailure() {
+        val dir=java.nio.file.Files.createTempDirectory("trachu-backup-test").toFile()
+        try {
+            val target=java.io.File(dir,"existing.trachu").apply{writeText("previous backup")}
+            val password="short".toCharArray()
+            var opened=false
+            assertTrue(runCatching{Backup.writeStaged(original,password,dir){opened=true;target.outputStream()}}.isFailure)
+            assertFalse(opened)
+            assertEquals("previous backup",target.readText())
+            assertTrue(password.all{it=='\u0000'})
+            assertEquals(listOf("existing.trachu"),dir.list()!!.toList())
+            Backup.writeStaged(original,"password123".toCharArray(),dir){target.outputStream()}
+            assertEquals(original,target.inputStream().use{Backup.read("password123".toCharArray(),it)})
+            assertEquals(listOf("existing.trachu"),dir.list()!!.toList())
+        } finally {dir.deleteRecursively()}
+    }
     @Test fun oldOperationPayloadUsesSafeManualConfirmationDefault() {
         val encoded=LedgerRecords.json.encodeToString(Entry.serializer(),original.entries.single())
         val legacy=encoded.replace(",\"autoPostPlanned\":false","")

@@ -23,6 +23,7 @@ internal sealed interface PickedResult {
     data class File(val uri:Uri,val request:FileRequest):PickedResult
     data class Photo(val uri:Uri,val draft:EntryDraft):PickedResult
 }
+internal fun PickedResult.isBackupRestore():Boolean = this is PickedResult.File && !request.save && request.mode=="backup"
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     // Activity recreation retains this state without serializing financial drafts,
@@ -42,8 +43,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
     internal fun deliverPickedResult(){
         val s=_settings.value ?: return
-        if(_ledger.value==null || _busy.value || (s.protected&&!_unlocked.value))return
         val result=_pickedResult.value ?: return
+        if((_ledger.value==null&&!result.isBackupRestore()) || _busy.value || (s.protected&&!_unlocked.value))return
         // Consume before starting I/O so activity recreation cannot repeat it.
         _pickedResult.value=null
         when(result){
@@ -170,12 +171,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val current=store.current()
         withContext(Dispatchers.IO) {
             val resolver=getApplication<Application>().contentResolver
-            requireNotNull(resolver.openOutputStream(uri,"wt")).use { out ->
-                when(mode) {
-                    "backup" -> Backup.write(current,password.toCharArray(),out)
-                    "pdf" -> PdfReport.write(current,period,out,accountId)
-                    else -> Csv.write(current,out)
+            if(mode=="backup") {
+                // Produce and finish authentication before opening the destination.
+                // A rejected backup must not truncate an existing selected file.
+                Backup.writeStaged(current,password.toCharArray(),getApplication<Application>().cacheDir) {
+                    requireNotNull(resolver.openOutputStream(uri,"wt"))
                 }
+            } else requireNotNull(resolver.openOutputStream(uri,"wt")).use { out ->
+                if(mode=="pdf") PdfReport.write(current,period,out,accountId) else Csv.write(current,out)
             }
         }
         _message.value="Файл сохранён"
@@ -194,7 +197,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        FinanceWorker.refresh(getApplication())
+        runCatching { FinanceWorker.refresh(getApplication()) }
+        if(mode=="backup" && _ledger.value==null)retryLoad()
         _message.value="Данные загружены"
     }
     fun readReceipt(uri: Uri, onDone: (Receipt)->Unit) = perform {

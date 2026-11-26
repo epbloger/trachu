@@ -19,6 +19,9 @@ import ru.epbloger.trachu.MainActivity
 import ru.epbloger.trachu.PickedResult
 import ru.epbloger.trachu.core.*
 import ru.epbloger.trachu.data.LedgerStore
+import ru.epbloger.trachu.data.LedgerRecord
+import ru.epbloger.trachu.data.TrachuDatabase
+import ru.epbloger.trachu.data.Backup
 import ru.epbloger.trachu.security.PinVault
 import ru.epbloger.trachu.security.Preferences
 import java.io.File
@@ -45,6 +48,10 @@ class EditorRecreationTest {
         enter("field:Название","Черновик счёта")
         enter("field:Начальный остаток","1234")
         rule.onNodeWithTag("toggle:Включать в общий баланс").performScrollTo().performClick().assertIsOff()
+        // Launcher/widget shortcut must never silently replace an open draft.
+        withVm{it.quick(Kind.EXPENSE)}
+        rule.waitUntil(10_000){rule.onAllNodesWithText("Сначала завершите текущую операцию. Черновик сохранён.").fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithText("OK").performClick()
         rule.activityRule.scenario.recreate()
         awaitTag("field:Название")
         rule.onNodeWithTag("field:Название").performScrollTo().assertTextContains("Черновик счёта")
@@ -137,6 +144,84 @@ class EditorRecreationTest {
         }
     }
 
+    @Test fun repeatExpenseRequiresSaveAndDoesNotCopyOriginalIdentityOrReceipt(){
+        val store=LedgerStore.get(context)
+        val initial=runBlocking{store.current()}
+        val account=Account(name="Повтор ${newId()}",currency=initial.baseCurrency)
+        val category=initial.categories.first{!it.income&&!it.archived}
+        val receipt=Receipt(mime="image/png",base64="AAAA")
+        val prepared=initial.copy(accounts=initial.accounts+account,receipts=initial.receipts+receipt)
+        val original=Finance.makeEntry(prepared,Kind.EXPENSE,account.id,1234,today()-1,
+            listOf(category.id to 1234L),note="Повторяемая покупка",tags=listOf("повтор"),receiptIds=listOf(receipt.id))
+        runBlocking{store.change{it.copy(accounts=it.accounts+account,receipts=it.receipts+receipt,entries=it.entries+original)}}
+        try {
+            awaitTag("nav-home")
+            lateinit var vm:AppViewModel
+            withVm{vm=it}
+            rule.waitUntil(20_000){vm.ledger.value?.entries?.any{it.id==original.id}==true}
+            withVm{it.editor=Editor("detail",original.id)}
+            rule.onNodeWithText("Повторить операцию").performScrollTo().performClick()
+            val amountTag="field:Сумма (${account.currency})"
+            awaitTag(amountTag)
+            rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(1234,account.currency))
+            rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(today()))
+            assertEquals(listOf(original),runBlocking{store.current().entries.filter{it.accountId==account.id}})
+            rule.onNodeWithTag("form_save").performClick()
+            rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+            val saved=runBlocking{store.current().entries.filter{it.accountId==account.id}}
+            assertEquals(2,saved.size)
+            assertTrue(original in saved)
+            val copy=saved.single{it.id!=original.id}
+            assertEquals(original.minor,copy.minor)
+            assertEquals(original.splits,copy.splits)
+            assertEquals(original.note,copy.note)
+            assertEquals(original.tags,copy.tags)
+            assertEquals(today(),copy.day)
+            assertTrue(copy.receiptIds.isEmpty())
+            assertFalse(copy.autoPostPlanned)
+            assertEquals(-2468L,Finance.balance(runBlocking{store.current()},account.id))
+        } finally {
+            withVm{it.editor=null}
+            runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id},entries=it.entries.filterNot{e->e.accountId==account.id})}}
+        }
+    }
+
+    @Test fun staleEditorCannotUndoBackgroundAutoPosting(){
+        val store=LedgerStore.get(context)
+        val initial=runBlocking{store.current()}
+        val account=Account(name="Автопроведение ${newId()}",currency=initial.baseCurrency)
+        val category=initial.categories.first{!it.income&&!it.archived}
+        val date=today()+1
+        val prepared=initial.copy(accounts=initial.accounts+account)
+        val planned=Finance.makeEntry(prepared,Kind.EXPENSE,account.id,100,date,listOf(category.id to 100L),
+            status=EntryStatus.PLANNED,autoPostPlanned=true)
+        runBlocking{store.change{it.copy(accounts=it.accounts+account,entries=it.entries+planned)}}
+        try {
+            awaitTag("nav-home")
+            lateinit var vm:AppViewModel
+            withVm{vm=it}
+            rule.waitUntil(20_000){vm.ledger.value?.entries?.any{it.id==planned.id}==true}
+            withVm{it.editor=Editor("entry",planned.id,planned.kind)}
+            val amountTag="field:Сумма (${account.currency})"
+            awaitTag(amountTag)
+            enter(amountTag,"2")
+            // A background transaction wins while the user is editing the prior snapshot.
+            runBlocking{store.processDue(date)}
+            val posted=runBlocking{store.current().entries.first{it.id==planned.id}}
+            assertEquals(EntryStatus.POSTED,posted.status)
+            assertFalse(posted.autoPostPlanned)
+            rule.waitUntil(20_000){vm.ledger.value?.entries?.find{it.id==planned.id}==posted}
+            rule.onNodeWithTag("form_save").performClick()
+            rule.waitUntil(20_000){rule.onAllNodesWithText("Операция изменилась",substring=true).fetchSemanticsNodes().isNotEmpty()}
+            assertEquals(posted,runBlocking{store.current().entries.first{it.id==planned.id}})
+            rule.onNodeWithText("OK").performClick()
+            rule.onNodeWithText("Отмена").performClick()
+        } finally {
+            withVm{it.editor=null;it.clearMessage()}
+            runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id},entries=it.entries.filterNot{e->e.accountId==account.id})}}
+        }
+    }
+
     @Test fun selectedFileWaitsForUnlockAndExportsOnlyOnce(){
         val preferences=Preferences(context)
         val previous=runBlocking{preferences.current()}
@@ -175,6 +260,43 @@ class EditorRecreationTest {
                 preferences.timeout(previous.lockSeconds)
                 if(previous.biometric)preferences.biometric(true)
             }
+            file.delete()
+        }
+    }
+
+    @Test fun corruptedLedgerCanBeRecoveredFromBackupOnlyAfterUnlock(){
+        val store=LedgerStore.get(context)
+        val prefs=Preferences(context)
+        val previous=runBlocking{prefs.current()}
+        runBlocking{store.change{it}}
+        val before=runBlocking{store.current()}
+        val file=File(context.cacheDir,"recovery-${newId()}.trachu")
+        file.outputStream().use{Backup.write(before,"recovery-password".toCharArray(),it)}
+        try {
+            awaitTag("nav-home")
+            lateinit var vm:AppViewModel
+            withVm{vm=it}
+            runBlocking{prefs.setCredential(PinVault.create("1942"));prefs.timeout(0)}
+            rule.waitUntil(20_000){vm.settings.value?.protected==true}
+            withVm{it.lock()}
+            runBlocking{TrachuDatabase.get(context).ledgerDao().put(listOf(LedgerRecord("receipt_chunk","orphan:000000","AAAA")))}
+            rule.waitUntil(20_000){vm.loadingError.value!=null&&vm.ledger.value==null}
+            rule.onNodeWithText("Ваши финансы защищены").assertExists()
+            withVm{
+                it.queuePickedResult(PickedResult.File(Uri.fromFile(file),FileRequest("backup",false,"recovery-password")))
+                it.deliverPickedResult()
+                assertNotNull(it.pickedResult.value)
+            }
+            assertTrue(runCatching{runBlocking{store.current()}}.isFailure)
+            withVm{it.unlockPin("1942")}
+            rule.waitUntil(20_000){vm.loadingError.value==null&&vm.ledger.value!=null&&vm.pickedResult.value==null}
+            assertEquals(before,runBlocking{store.current()})
+            rule.waitUntil(20_000){rule.onAllNodesWithText("Данные загружены").fetchSemanticsNodes().isNotEmpty()}
+            rule.onNodeWithText("OK").performClick()
+            awaitTag("nav-home")
+        }finally{
+            runBlocking{store.restore(before);prefs.setCredential(previous.credential);prefs.timeout(previous.lockSeconds);if(previous.biometric)prefs.biometric(true)}
+            withVm{it.clearMessage()}
             file.delete()
         }
     }
