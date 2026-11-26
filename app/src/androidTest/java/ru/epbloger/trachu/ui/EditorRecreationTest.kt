@@ -87,6 +87,28 @@ class EditorRecreationTest {
         rule.onNodeWithText("Отмена").performClick()
     }
 
+    @Test fun accountCurrencyChangeCannotDiscardOpeningBalance(){
+        val store=LedgerStore.get(context)
+        val currency=runBlocking{store.current().baseCurrency}
+        val account=Account(name="Счёт с начальным остатком ${newId()}",currency=currency,openingMinor=12345)
+        runBlocking{store.change{it.copy(accounts=it.accounts+account)}}
+        try{
+            awaitTag("nav-home")
+            withVm{it.editor=Editor("account",account.id)}
+            awaitTag("field:Название")
+            rule.onNodeWithText("Валюта: $currency. Её нельзя менять, пока у счёта есть начальный остаток или операции.").performScrollTo().assertIsDisplayed()
+            rule.onNodeWithTag("currency:Валюта").assertDoesNotExist()
+            rule.onNodeWithTag("field:Начальный остаток").performScrollTo()
+                .assertTextContains(Money.input(account.openingMinor,currency))
+            rule.onNodeWithText("Отмена").performClick()
+            rule.waitUntil(10_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+            assertEquals(account,runBlocking{store.current().accounts.single{it.id==account.id}})
+        }finally{
+            withVm{it.editor=null}
+            runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id})}}
+        }
+    }
+
     @Test fun entryDraftAndPendingReceiptSurviveRecreation(){
         val store=LedgerStore.get(context)
         val preferences=Preferences(context)

@@ -104,6 +104,9 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
     val used=current!=null && (ledger.entries.any{it.accountId==current.id || it.targetAccountId==current.id} || ledger.debts.any{it.accountId==current.id} || ledger.schedules.any{it.template.accountId==current.id || it.template.targetAccountId==current.id})
+    // A non-zero opening balance is already denominated in this account's currency.
+    // Do not silently discard it or reinterpret it when changing the currency.
+    val currencyLocked=used || current?.openingMinor?.let{it!=0L}==true
     Form(if(current==null)"Новый счёт" else "Настройки счёта",close,busy,validationError=error,onSave={
         runCatching {
             requireEditorName(name,"Название счёта")
@@ -122,8 +125,8 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     }) {
         Field("Название",name,{name=it;error=""})
         Choice("Тип",type,AccountType.entries,{it.label()}){type=it}
-        if(used)Text("Валюта: $currency. Её нельзя менять после появления операций.")
-        else CurrencyPicker("Валюта",currency){if(it!=currency){currency=it;opening="0";error=""}}
+        if(currencyLocked)Text("Валюта: $currency. Её нельзя менять, пока у счёта есть начальный остаток или операции.")
+        else CurrencyPicker("Валюта",currency){if(it!=currency){currency=it;error=""}}
         Field("Начальный остаток",opening,{opening=it;error=""},true,supporting="Не входит в доходы или расходы. Для кредитного счёта можно указать отрицательное значение.")
         Toggle("Включать в общий баланс",included,{included=it})
         Toggle("Включать в отчёты и бюджеты",statistics,{statistics=it},"Исключение не изменяет операции и остаток счёта.")
