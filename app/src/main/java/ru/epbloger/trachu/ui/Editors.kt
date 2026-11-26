@@ -305,6 +305,8 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         if(error.isNotEmpty())Warning(error)
         DateField("Дата",day,{day=it},supporting=null)
         if(!recurring)Chips(listOf(today(),today()-1),runCatching{parseDay(day)}.getOrDefault(Long.MIN_VALUE),{if(it==today())"Сегодня" else "Вчера"}){day=iso(it)}
+        if(!recurring&&!planned&&runCatching{parseDay(day)>today()}.getOrDefault(false))
+            Text("Будущая операция будет запланирована.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.tertiary)
         if(kind==Kind.TRANSFER) {
             Choice("На счёт",targetId,active.filter{it.id!=accountId}.map{it.id},{id->active.find{it.id==id}?.let{"${it.name} · ${it.currency}"} ?: "Выбрать счёт"},compact=true){id->
                 if(target?.currency!=active.first{it.id==id}.currency)targetAmount=""
@@ -406,15 +408,15 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         val pendingAccount=active.find{it.id==pendingAccountId}
         val destination=pendingAccount?.currency ?: account.currency
         val quote=runCatching{CurrencyConversion.quote(ledger,conversionCurrency,destination,parseDay(day))}.getOrNull()
-        val rate=runCatching{
-            if(conversionCurrency==destination)java.math.BigDecimal.ONE
-            else if(conversionManual)CurrencyConversion.manualRate(conversionRate)
-            else requireNotNull(quote){"Нет сохранённого курса на эту дату. Введите курс вручную."}
-        }
         val result=runCatching{
             val source=Money.parse(conversionAmount,conversionCurrency)
             require(source>0){"Введите положительную сумму"}
-            CurrencyConversion.convert(source,conversionCurrency,destination,rate.getOrThrow()).also{
+            val converted=when {
+                conversionCurrency==destination->source
+                conversionManual->CurrencyConversion.convert(source,conversionCurrency,destination,CurrencyConversion.manualRate(conversionRate))
+                else->CurrencyConversion.convertStored(ledger,source,conversionCurrency,destination,parseDay(day))
+            }
+            converted.also{
                 require(it>0){"После округления сумма равна нулю"}
             }
         }
@@ -422,15 +424,16 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             onDismissRequest={cancelConversion()},
             title={Text("Пересчитать в $destination")},
             text={Column(Modifier.heightIn(max=420.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
-                CurrencyPicker("Исходная валюта",conversionCurrency){conversionCurrency=it;conversionRate=""}
+                if(pendingAccountId.isNotBlank())Text("Исходная валюта: $conversionCurrency")
+                else CurrencyPicker("Исходная валюта",conversionCurrency){conversionCurrency=it;conversionRate=""}
                 Field("Исходная сумма ($conversionCurrency)",conversionAmount,{conversionAmount=it},true)
                 if(conversionCurrency!=destination){
                     Toggle("Ручной курс",conversionManual,{conversionManual=it})
                     if(conversionManual)Field("$destination за 1 $conversionCurrency",conversionRate,{conversionRate=it},true)
-                    else if(quote!=null)Text("1 $conversionCurrency = ${quote.toPlainString()} $destination · $day")
+                    else if(quote!=null)Text("1 $conversionCurrency ≈ ${quote.toPlainString()} $destination · $day")
                     else Warning("Нет сохранённого курса на эту дату.")
                 }
-                result.onSuccess{MoneyText(it,destination,large=true)}
+                result.onSuccess{MoneyText(it,destination,modifier=Modifier.testTag("entry-convert-result"),large=true)}
                 if(conversionAmount.isNotBlank())result.onFailure{Warning(it.message ?: "Проверьте сумму и курс")}
                 Text("В операцию будет внесена сумма в валюте счёта. Курс конвертации не изменяет сохранённые курсы.",style=MaterialTheme.typography.bodySmall)
                 if(splitMode)Text("После пересчёта проверьте распределение по категориям.",style=MaterialTheme.typography.bodySmall)

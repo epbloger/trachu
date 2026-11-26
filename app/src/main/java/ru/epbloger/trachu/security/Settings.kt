@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
-private val Context.settingsStore by preferencesDataStore("trachu_preferences")
+internal val Context.settingsStore by preferencesDataStore("trachu_preferences")
 
 data class Settings(
     val theme: String = "system",
@@ -51,7 +51,10 @@ class Preferences(context: Context) {
     suspend fun widget(value: Boolean) { store.edit { it[K.widget]=value } }
     suspend fun automaticRates(value:Boolean) { store.edit { it[K.automaticRates]=value } }
     suspend fun adsConsent(value:Boolean) { store.edit { it[K.adsConsent]=value } }
-    suspend fun completeOnboarding() { store.edit { it[K.onboardingCompleted]=true } }
+    suspend fun completeOnboarding(accountId:String?=null) { store.edit {
+        it[K.onboardingCompleted]=true
+        if(accountId!=null)it[K.account]=accountId
+    } }
     suspend fun monthStart(value: Int) { require(value in 1..31); store.edit { it[K.monthStart]=value } }
     suspend fun timeout(value: Int) { require(value in listOf(0,15,30,60,300)); store.edit { it[K.timeout]=value } }
     suspend fun biometric(value: Boolean) { store.edit { require(!value || !it[K.pin].isNullOrEmpty()); it[K.biometric]=value } }

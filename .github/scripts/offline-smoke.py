@@ -1,5 +1,6 @@
 """Verify the exact previously built APK with no default network (API 36)."""
 import json
+import hashlib
 import os
 import pathlib
 import re
@@ -10,6 +11,9 @@ import time
 import xml.etree.ElementTree as ET
 
 package = 'ru.epbloger.trachu'
+# Only the separately pinned historical APK may use the old setup flow.
+legacy_apk = hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == '926e2d7f8aa558475c08d186c772c5b6a49ce3eed8c8998ed6c006ffb2cdeb8f'
+assert sys.argv[2:] in ([], ['--legacy']), 'Only --legacy is supported after the APK path'
 out = pathlib.Path(os.environ.get('TRACHU_OFFLINE_QA_DIR', 'offline-qa'))
 out.mkdir(exist_ok=True)
 
@@ -79,15 +83,18 @@ def start(quick=False):
 
 try:
     adb('install', '-r', sys.argv[1])
+    if sys.argv[2:] == ['--legacy']:
+        installed = adb('shell', 'dumpsys', 'package', package)
+        assert re.search(r'^\s*versionName=1\.0\.0\s*$', installed, re.M), 'Legacy flow is only allowed for installed version 1.0.0'
+        legacy_apk = True
     assert 'Success' in adb('shell', 'pm', 'clear', package)
     adb('shell', 'cmd', 'connectivity', 'airplane-mode', 'enable')
     adb('shell', 'svc', 'wifi', 'disable')
     adb('shell', 'svc', 'data', 'disable')
     assert_offline('before')
     start()
-    first = wait_node(lambda n: n.get('text') in ('Начнём с вашего счёта', 'Обзор') or
-                      n.get('content-desc') in ('Начнём с вашего счёта', 'Обзор'), 'onboarding or overview')
-    if 'Начнём с вашего счёта' in (first.get('text'), first.get('content-desc')):
+    if not legacy_apk:
+        text('Начнём с вашего счёта')
         enter('OfflineQA')
         tap(text('Далее'))
         text('Как пользоваться ТРАЧУ.')
@@ -96,6 +103,7 @@ try:
         text('Обзор')
     else:
         # The optional workflow also replays a pinned pre-onboarding APK.
+        text('Обзор')
         adb('shell', 'am', 'force-stop', package)
         start(quick=True)
         text('Новый счёт')

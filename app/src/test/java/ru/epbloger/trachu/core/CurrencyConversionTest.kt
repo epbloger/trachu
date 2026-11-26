@@ -44,4 +44,13 @@ class CurrencyConversionTest {
         assertTrue(runCatching { CurrencyConversion.convert(-1,"USD","RUB",BigDecimal.ONE) }.isFailure)
         assertTrue(runCatching { CurrencyConversion.convert(Long.MAX_VALUE,"USD","RUB",BigDecimal("100")) }.isFailure)
     }
+
+    @Test fun storedCrossRateRoundsOnlyOnceAtExactHalf() {
+        val l = Ledger.initial().copy(rates = listOf(FxRate("USD",day,"1"),FxRate("JPY",day,"6")))
+        // 3 USD / 6 is exactly 0.5 JPY; a rounded 1/6 quote would round up.
+        assertEquals(0L, CurrencyConversion.convertStored(l,300,"USD","JPY",day))
+        assertEquals(2L, CurrencyConversion.convertStored(l,900,"USD","JPY",day))
+        assertEquals(123L, CurrencyConversion.convertStored(l,123,"JPY","JPY",day))
+        assertTrue(runCatching { CurrencyConversion.convertStored(l,1,"EUR","JPY",day) }.isFailure)
+    }
 }

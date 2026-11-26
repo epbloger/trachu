@@ -35,6 +35,13 @@ class EvidenceTest(unittest.TestCase):
     def test_actual_supported_resolution(self):
         self.screens()
 
+    def test_v11_requires_all_new_distinct_screens(self):
+        with self.assertRaises(FileNotFoundError):
+            verify.verify_screens(self.root, verify.SCREENS_V11)
+        for index, name in enumerate(verify.SCREENS_V11[len(verify.SCREENS):], start=3):
+            (self.root/(name+'.png')).write_bytes(png(1080, 1920, index))
+        verify.verify_screens(self.root, verify.SCREENS_V11)
+
     def test_wrong_orientation(self):
         (self.root/'dashboard.png').write_bytes(png(1920, 1080, 0))
         with self.assertRaises(ValueError): self.screens()

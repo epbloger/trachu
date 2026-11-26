@@ -74,14 +74,16 @@ fun today(): Long = LocalDate.now().toEpochDay()
 ) {
     companion object {
         fun initial() = Ledger(categories = listOf(
-            Category(id = "food", name = "Продукты", icon = "🛒"),
+            // Explicit colors apply only to new ledgers. Keep the Category
+            // constructor's historic default for decoding old data/archives.
+            Category(id = "food", name = "Продукты", icon = "🛒", color = 0xFF6143CC),
             Category(id = "transport", name = "Транспорт", icon = "🚇", color = 0xFF4677BD),
             Category(id = "home", name = "Дом", icon = "🏠", color = 0xFF9469B6),
             Category(id = "health", name = "Здоровье", icon = "✚", color = 0xFFBF646C),
             Category(id = "leisure", name = "Досуг", icon = "★", color = 0xFFB98B40),
-            Category(id = "other", name = "Другое", icon = "•"),
-            Category(id = "salary", name = "Зарплата", income = true, icon = "₽"),
-            Category(id = "other-income", name = "Другие доходы", income = true, icon = "+")
+            Category(id = "other", name = "Другое", icon = "•", color = 0xFF657984),
+            Category(id = "salary", name = "Зарплата", income = true, icon = "₽", color = 0xFF4677BD),
+            Category(id = "other-income", name = "Другие доходы", income = true, icon = "+", color = 0xFF9469B6)
         ))
     }
 }

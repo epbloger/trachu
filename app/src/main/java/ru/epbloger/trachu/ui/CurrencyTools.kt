@@ -7,6 +7,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.AppViewModel
 import ru.epbloger.trachu.core.*
@@ -47,7 +49,7 @@ fun CurrencyPicker(label: String, value: String, onChange: (String) -> Unit) {
                         items(filtered, key = { it }) { code ->
                             if (query.isBlank() && code == allCurrencies.getOrNull(10))
                                 Text("Все валюты", style = MaterialTheme.typography.labelLarge)
-                            TextButton(onClick = { open = false; onChange(code) }, modifier = Modifier.fillMaxWidth().testTag("currency-option:$code")) {
+                            TextButton(onClick = { open = false; onChange(code) }, modifier = Modifier.fillMaxWidth().testTag("currency-option:$code").semantics { selected = code == value }) {
                                 Text(currencyTitle(code), Modifier.weight(1f))
                                 if (code == value) Text("✓")
                             }
@@ -67,13 +69,20 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
     var amount by remember { mutableStateOf("1") }
     var manual by remember { mutableStateOf(false) }
     var rateText by remember { mutableStateOf("") }
-    val day = today()
-    val saved = remember(ledger, from, to, day) { runCatching { CurrencyConversion.quote(ledger, from, to, day) }.getOrNull() }
+    var date by remember { mutableStateOf(iso(today())) }
+    val day = runCatching { parseDay(date).also { require(it <= today()) } }.getOrNull()
+    val saved = remember(ledger, from, to, day) { day?.let { selectedDay ->
+        runCatching { CurrencyConversion.quote(ledger, from, to, selectedDay) }.getOrNull()
+    } }
     val result = runCatching {
         val minor = Money.parse(amount, from)
-        val rate = if (from == to) java.math.BigDecimal.ONE else if (manual) CurrencyConversion.manualRate(rateText)
-            else requireNotNull(saved) { "Нет сохранённого курса. Введите курс вручную или обновите данные." }
-        CurrencyConversion.convert(minor, from, to, rate)
+        if (from == to) CurrencyConversion.convert(minor, from, to, java.math.BigDecimal.ONE)
+        else if (manual) CurrencyConversion.convert(minor, from, to, CurrencyConversion.manualRate(rateText))
+        else {
+            val selectedDay = requireNotNull(day) { "Укажите корректную дату, не позже сегодняшней." }
+            requireNotNull(saved) { "Нет сохранённого курса. Введите курс вручную или обновите данные." }
+            CurrencyConversion.convertStored(ledger, minor, from, to, selectedDay)
+        }
     }
     LazyColumn(modifier = Modifier.testTag("converter-list"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { SectionTitle("Конвертер валют", action = "Назад", onAction = back) }
@@ -81,7 +90,20 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
             Panel {
                 CurrencyPicker("Из валюты", from) { from = it; rateText = "" }
                 Field("Сумма ($from)", amount, { amount = it }, numeric = true)
-                OutlinedButton(onClick = { val old = from; from = to; to = old; rateText = "" }, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = {
+                    val converted = result.getOrNull()
+                    val old = from
+                    from = to
+                    to = old
+                    if (converted != null) amount = Money.input(converted, from)
+                    else amount = ""
+                    if (manual && from != to) {
+                        rateText = runCatching {
+                            java.math.BigDecimal.ONE.divide(CurrencyConversion.manualRate(rateText), 24, java.math.RoundingMode.HALF_EVEN)
+                                .stripTrailingZeros().toPlainString()
+                        }.getOrDefault("")
+                    } else rateText = ""
+                }, modifier = Modifier.fillMaxWidth().testTag("converter-swap")) {
                     Text("⇅ Поменять валюты местами")
                 }
                 CurrencyPicker("В валюту", to) { to = it; rateText = "" }
@@ -98,21 +120,22 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
                         Field("$to за 1 $from", rateText, { rateText = it }, numeric = true)
                         Text("Ручной курс применяется только к этому расчёту.")
                     } else if (saved != null) {
-                        Text("1 $from = ${saved.toPlainString()} $to")
+                        Text("1 $from ≈ ${saved.toPlainString()} $to")
                         listOf(from, to).filter { it != ledger.baseCurrency }.distinct().forEach { code ->
-                            ledger.rates.filter { it.currency == code && it.day <= day }.maxByOrNull { it.day }?.let { rate ->
+                            ledger.rates.filter { it.currency == code && day != null && it.day <= day }.maxByOrNull { it.day }?.let { rate ->
                                 Text("$code · ${dayLabel(rate.day)} · ${if (rate.source == "CBR") "ЦБ РФ" else "Ручной курс"}",
                                     style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
+                    if (!manual) DateField("Курс на дату", date, { date = it }, supporting = "Используется последний сохранённый курс не позже этой даты.")
                 } else Text("Валюты совпадают: курс 1 к 1.")
                 Text("Конвертация не создаёт операцию и не меняет баланс. Результат округляется до минимальной денежной единицы.", style = MaterialTheme.typography.bodySmall)
             }
         }
         item {
             Panel {
-                Button(onClick = { vm.fetchRates(day) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Обновить курсы ЦБ РФ") }
+                Button(onClick = { day?.let(vm::fetchRates) }, enabled = !busy && day != null, modifier = Modifier.fillMaxWidth()) { Text("Обновить курсы ЦБ РФ") }
                 OutlinedButton(onClick = rates, modifier = Modifier.fillMaxWidth()) { Text("История и ручные курсы") }
                 Text("Без интернета доступны сохранённые и ручные курсы.", style = MaterialTheme.typography.bodySmall)
             }

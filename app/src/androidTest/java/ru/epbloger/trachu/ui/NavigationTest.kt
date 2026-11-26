@@ -15,6 +15,7 @@ import org.junit.runner.RunWith
 import ru.epbloger.trachu.MainActivity
 import ru.epbloger.trachu.core.Money
 import ru.epbloger.trachu.data.LedgerStore
+import ru.epbloger.trachu.security.Preferences
 
 @RunWith(AndroidJUnit4::class)
 class NavigationTest {
@@ -29,10 +30,12 @@ class NavigationTest {
         } finally { bitmap.recycle() }
     }
     @Test fun recordExpenseAndNavigateAfterRotation() {
+        val initialOrientation=rule.activity.resources.configuration.orientation
         val store=LedgerStore.get(InstrumentationRegistry.getInstrumentation().targetContext)
-        rule.waitUntil(20_000){rule.onAllNodesWithTag("add-expense").fetchSemanticsNodes().isNotEmpty() ||
+        rule.waitUntil(20_000){rule.onAllNodesWithTag("nav-home").fetchSemanticsNodes().isNotEmpty() ||
             rule.onAllNodesWithTag("onboarding-next").fetchSemanticsNodes().isNotEmpty()}
         if(rule.onAllNodesWithTag("onboarding-next").fetchSemanticsNodes().isNotEmpty()) {
+            rule.onNodeWithTag("overview-ad-banner").assertDoesNotExist()
             rule.onNodeWithTag("onboarding-restore").assertIsDisplayed()
             rule.onNodeWithTag("onboarding-restore").performClick()
             rule.onNodeWithText("Пароль резервной копии").assertExists()
@@ -46,7 +49,7 @@ class NavigationTest {
             rule.onNodeWithText("Как пользоваться ТРАЧУ.").assertExists()
             rule.onNodeWithText("Пропустить обучение").assertExists()
             rule.onNodeWithTag("form_save").performClick()
-            rule.waitUntil(15_000){rule.onAllNodesWithTag("add-expense").fetchSemanticsNodes().isNotEmpty()}
+            rule.waitUntil(15_000){rule.onAllNodesWithTag("nav-home").fetchSemanticsNodes().isNotEmpty()}
             org.junit.Assert.assertEquals(5000L,runBlocking{store.current().accounts.single().openingMinor})
         } else if(runBlocking{store.current().accounts.none{it.name=="Тестовый кошелёк"}}) {
             rule.onNodeWithTag("nav-more").performClick()
@@ -61,6 +64,7 @@ class NavigationTest {
         rule.waitUntil(15_000){runBlocking{store.current().accounts.any{it.name=="Тестовый кошелёк"}}}
         rule.onNodeWithTag("nav-home").performClick()
         rule.onNodeWithTag("add-expense").performScrollTo().performClick()
+        rule.onNodeWithTag("overview-ad-banner").assertDoesNotExist()
         val selectedAccount=hasTestTag("choice:Счёт") and hasText("Тестовый кошелёк · RUB",substring=true)
         if(rule.onAllNodes(selectedAccount).fetchSemanticsNodes().isEmpty()) {
             rule.onNodeWithTag("choice:Счёт").performScrollTo().performClick()
@@ -72,6 +76,8 @@ class NavigationTest {
         rule.onNodeWithText("Сумма должна быть положительной").assertExists()
         rule.onNodeWithTag("field:Сумма (RUB)").performTextReplacement("12.34")
         rule.onNodeWithTag("field:Сумма (RUB)").performImeAction()
+        rule.onNodeWithTag("category-quick:transport").performScrollTo().performClick().assertIsSelected()
+        capture("quick_entry")
         rule.onNodeWithTag("category-choice:Категория").performScrollTo().performClick()
         rule.onNodeWithTag("field:Поиск категории").performTextInput("Транспорт")
         rule.onNodeWithTag("field:Поиск категории").performImeAction()
@@ -132,13 +138,20 @@ class NavigationTest {
         rule.onNodeWithText("Добавить",substring=false).performScrollTo().performClick()
         rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(java.time.YearMonth.now().plusMonths(1).atDay(1).toString())
         rule.onNodeWithText("Отмена").performClick()
+        if(initialOrientation==Configuration.ORIENTATION_PORTRAIT){
+            rule.activity.runOnUiThread{rule.activity.requestedOrientation=ActivityInfo.SCREEN_ORIENTATION_PORTRAIT}
+            rule.waitUntil(20_000){rule.activity.resources.configuration.orientation==Configuration.ORIENTATION_PORTRAIT}
+        }
         rule.onNodeWithTag("nav-more").performClick()
+        rule.onNodeWithTag("overview-ad-banner").assertDoesNotExist()
+        capture(if(initialOrientation==Configuration.ORIENTATION_PORTRAIT)"drawer" else "drawer_landscape")
         rule.onNodeWithTag("drawer-tutorial").performScrollTo().performClick()
         rule.onNodeWithText("Как пользоваться ТРАЧУ.").assertExists()
         rule.onNodeWithTag("form_save").performClick()
         rule.onNodeWithTag("nav-more").performClick()
         rule.onNodeWithTag("drawer-converter").performScrollTo().performClick()
         rule.onNodeWithTag("converter-list").assertExists()
+        rule.onNodeWithTag("overview-ad-banner").assertDoesNotExist()
         rule.onNodeWithTag("converter-list").performScrollToNode(hasTestTag("field:Сумма (RUB)"))
         rule.onNodeWithTag("field:Сумма (RUB)").performTextReplacement("200")
         rule.onNodeWithTag("field:Сумма (RUB)").performImeAction()
@@ -150,6 +163,27 @@ class NavigationTest {
         rule.onNodeWithTag("field:USD за 1 RUB").performImeAction()
         rule.onNodeWithTag("converter-list").performScrollToNode(hasText(Money.format(200,"USD")))
         rule.onNodeWithText(Money.format(200,"USD")).assertIsDisplayed()
-        capture("converter_landscape")
+        capture(if(initialOrientation==Configuration.ORIENTATION_PORTRAIT)"converter" else "converter_landscape")
+        rule.onNodeWithTag("converter-list").performScrollToNode(hasTestTag("converter-swap"))
+        rule.onNodeWithTag("converter-swap").performClick()
+        rule.onNodeWithTag("converter-list").performScrollToNode(hasTestTag("field:Сумма (USD)"))
+        rule.onNodeWithTag("field:Сумма (USD)").assertTextContains("2.00")
+        rule.onNodeWithTag("converter-list").performScrollToNode(hasTestTag("field:RUB за 1 USD"))
+        rule.onNodeWithTag("field:RUB за 1 USD").assertTextContains("100")
+        rule.onNodeWithTag("converter-list").performScrollToNode(hasText(Money.format(20000,"RUB")))
+        rule.onNodeWithText(Money.format(20000,"RUB")).assertIsDisplayed()
+        val prefs=Preferences(InstrumentationRegistry.getInstrumentation().targetContext)
+        val previousTheme=runBlocking{prefs.current().theme}
+        try {
+            rule.onNodeWithTag("nav-more").performClick()
+            rule.onNodeWithTag("drawer-settings").performScrollTo().performClick()
+            rule.onNodeWithTag("choice:Тема").performScrollTo().performClick()
+            rule.onNodeWithTag("choice-option:Тема:dark").performClick()
+            rule.waitUntil(20_000){runBlocking{prefs.current().theme}=="dark"}
+            rule.onNodeWithTag("nav-home").performClick()
+            capture(if(initialOrientation==Configuration.ORIENTATION_PORTRAIT)"dashboard_dark" else "dashboard_dark_landscape")
+        } finally {
+            runBlocking{prefs.theme(previousTheme)}
+        }
     }
 }

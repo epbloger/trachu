@@ -123,9 +123,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     internal fun finishOnboarding(currency:String,name:String,type:AccountType,opening:String) = perform {
         val s=preferences.current()
         require(!s.protected && !s.onboardingCompleted) { "Первоначальная настройка уже завершена" }
+        require(!pickerPending()) { "Сначала завершите восстановление резервной копии." }
         val next=store.change { firstAccountLedger(it,currency,name,type,opening) }
-        preferences.completeOnboarding()
-        preferences.lastAccount(next.accounts.single().id)
+        preferences.completeOnboarding(next.accounts.single().id)
         onboardingDraft=EntryDraft()
         runCatching { FinanceWorker.refresh(getApplication()) }
     }
@@ -209,6 +209,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _message.value="Файл сохранён"
     }
     fun import(uri: Uri, mode: String, password: String="", accountId: String="") = perform {
+        val protection=preferences.current()
+        require(!protection.protected || _unlocked.value) { "Сначала разблокируйте приложение" }
         val resolver=getApplication<Application>().contentResolver
         withContext(Dispatchers.IO) {
             requireNotNull(resolver.openInputStream(uri)).use { input ->

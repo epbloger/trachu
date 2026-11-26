@@ -10,6 +10,7 @@ on:
       - '.github/workflows/android.yml'
       - '.github/scripts/device-tests.sh'
       - '.github/scripts/offline-smoke.py'
+      - '.github/scripts/upgrade-smoke.py'
       - '.github/workflows/release-evidence.yml'
       - 'store/rustore/verify-evidence.py'
       - 'store/rustore/test-verify-evidence.py'
@@ -22,6 +23,7 @@ on:
       - '.github/workflows/android.yml'
       - '.github/scripts/device-tests.sh'
       - '.github/scripts/offline-smoke.py'
+      - '.github/scripts/upgrade-smoke.py'
       - '.github/workflows/release-evidence.yml'
       - 'store/rustore/verify-evidence.py'
       - 'store/rustore/test-verify-evidence.py'
@@ -30,8 +32,10 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: android-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep the evidence for each distinct source revision. A correction must
+  # not interrupt an already running device suite for an earlier revision.
+  group: android-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   plan:
@@ -78,6 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-java@v4
         with:
@@ -131,12 +136,41 @@ jobs:
             echo "::error::Unexpected sensitive permission in release manifest"
             exit 1
           fi
+          debug_config="$(find app/build/generated/source/buildConfig/debug -name BuildConfig.java -print -quit)"
+          release_config="$(find app/build/generated/source/buildConfig/release -name BuildConfig.java -print -quit)"
+          test -n "$debug_config" && test -n "$release_config"
+          grep -Eq 'YANDEX_BANNER_ID = "demo-banner-yandex";' "$debug_config"
+          if [[ "$ORG_GRADLE_PROJECT_trachuAdsEnabled" == true ]]; then
+            grep -Eq 'YANDEX_BANNER_ID = "R-M-[0-9]+-[0-9]+";' "$release_config"
+            printf 'Debug: official demo only\nRelease: explicitly enabled production placement; ownership requires publisher verification\n' > qa/ads-config.txt
+          else
+            grep -Eq 'YANDEX_BANNER_ID = "";' "$release_config"
+            printf 'Debug: official demo only\nRelease: disabled, empty placement\n' > qa/ads-config.txt
+          fi
       - name: Run unit tests and lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: gradle --no-daemon --continue --stacktrace testDebugUnitTest lintDebug lintRelease
+      - name: Build verified 1.0.0 baseline for real in-place upgrade
+        id: baseline
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="$RUNNER_TEMP/trachu-v1"
+          git worktree add --detach "$baseline" 55a0d207e709d6319426772c1bd46d70943b1062
+          gradle --project-dir "$baseline" --no-daemon assembleDebug
+          old="$baseline/app/build/outputs/apk/debug/app-debug.apk"
+          new="app/build/outputs/apk/debug/app-debug.apk"
+          signer="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$signer" verify --print-certs "$old" > qa/upgrade-baseline-cert.txt
+          "$signer" verify --print-certs "$new" > qa/upgrade-current-cert.txt
+          diff <(grep 'certificate SHA-256 digest:' qa/upgrade-baseline-cert.txt) <(grep 'certificate SHA-256 digest:' qa/upgrade-current-cert.txt)
+          echo "TRACHU_UPGRADE_BASELINE_APK=$old" >> "$GITHUB_ENV"
+          git -C "$baseline" rev-parse HEAD > qa/upgrade-baseline-commit.txt
+          sha256sum "$old" > qa/upgrade-baseline-sha256.txt
       - name: Enable KVM
         id: kvm
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' && steps.baseline.outcome == 'success' }}
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -172,7 +206,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 store/rustore/verify-evidence.py release --qa . --apk . --aab . --commit "$(git rev-parse HEAD)" | tee qa/current-evidence.txt
+          python3 store/rustore/verify-evidence.py release --qa . --apk . --aab . --commit "$(git rev-parse HEAD)" --require-ux-v11 | tee qa/current-evidence.txt
+          grep -F 'PASS: 1.0.0 -> 1.1.0, no clear or onboarding' qa/upgrade/result.txt
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/release/*.apk | tee qa/zipalign.txt
       - name: Upload APK
         if: always()

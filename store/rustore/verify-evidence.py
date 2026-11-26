@@ -13,6 +13,7 @@ import zipfile
 import zlib
 
 SCREENS = ('dashboard', 'operations', 'split_entry')
+SCREENS_V11 = SCREENS + ('onboarding', 'drawer', 'converter', 'quick_entry', 'dashboard_dark')
 PAGE = 16 * 1024
 
 
@@ -21,9 +22,9 @@ def require(ok, reason):
         raise ValueError(reason)
 
 
-def verify_screens(directory):
+def verify_screens(directory, names=SCREENS):
     sizes, hashes = set(), set()
-    for screen in SCREENS:
+    for screen in names:
         path = directory / (screen + '.png')
         data = path.read_bytes()
         require(len(data) <= 3_000_000, f'{screen}: exceeds phone image size limit')
@@ -56,7 +57,7 @@ def verify_screens(directory):
         sizes.add(dimensions)
         hashes.add(hashlib.sha256(data).hexdigest())
         print(f'PASS screen {screen}: {width}x{height}, {len(data)} bytes')
-    require(len(sizes) == 1 and len(hashes) == len(SCREENS),
+    require(len(sizes) == 1 and len(hashes) == len(names),
             'Screens must be distinct and use consistent portrait dimensions')
 
 
@@ -136,17 +137,25 @@ def verify_tests(root, pattern, minimum, critical=()):
     return count
 
 
-def verify_release(qa, apk, aab, commit):
+def verify_release(qa, apk, aab, commit, require_ux_v11=False):
     require(re.fullmatch('[0-9a-f]{40}', commit), 'Expected full Git SHA')
     expected = provenance(qa, commit)
     verify_binary(apk, 'apk', commit, expected)
     verify_binary(aab, 'aab', commit, expected)
-    count = verify_tests(qa, 'app/build/test-results/testDebugUnitTest/TEST-*.xml', 35, (
+    jvm = (
         'stagedBackupDoesNotOpenDestinationOnGenerationFailure',
         'backupRetainsLegacyEnvelopeAndAuthenticatesEntireFragmentedInput',
         'csvRoundTripAndIdempotence', 'statementRepeatedImportDoesNotDuplicate',
         'historicalRatesAndCrossCurrencyTransfer', 'refundAllocatesHistoricalAmountsExactly',
-        'singleFuturePaymentPostsOnlyWhenDueAndOnlyOnce', 'monthlyAnchorAndIdempotentGeneration'))
+        'singleFuturePaymentPostsOnlyWhenDueAndOnlyOnce', 'monthlyAnchorAndIdempotentGeneration')
+    if require_ux_v11:
+        jvm += ('crossCurrencyUsesHistoricalRateAndMinorUnits', 'nonRubBaseAndSameCurrency',
+                'roundsHalfEvenAcrossZeroAndThreeDecimalCurrencies', 'rejectsInvalidRateNegativeAndOverflow',
+                'storedCrossRateRoundsOnlyOnceAtExactHalf', 'pristineDatabaseInEitherCategoryOrderNeedsSetup',
+                'existingFinancialDataAndCustomizedCategoriesAreNeverReinitialized',
+                'firstAccountUsesChosenCurrencyAndExactOpeningWithoutIncome')
+    count = verify_tests(qa, 'app/build/test-results/testDebugUnitTest/TEST-*.xml',
+                         43 if require_ux_v11 else 35, jvm)
     storage = ('legacyEncryptedArchiveWithMultiMegabyteReceiptRestoresAtomically',
                'transactionRollbackAndRestore', 'concurrentDueProcessingAndCorruptImportAreAtomic',
                'migrationPreservesLegacyRowsAndReopen', 'keystorePinAndTampering')
@@ -157,9 +166,18 @@ def verify_release(qa, apk, aab, commit):
                'corruptedLedgerCanBeRecoveredFromBackupOnlyAfterUnlock',
                'selectedFileWaitsForUnlockAndExportsOnlyOnce',
                'completedScheduleCanBeEditedButCannotBeEnabledPastEnd')
-    for device, minimum in [('phone', 17), ('tablet', 17), ('store-phone', 1), ('api26', 9), ('api33', 16)]:
+    setup = ('actualFirstSetupSurvivesRecreationAndNewActivity', 'actualLegacyPreferencesAndExistingLedgerArePreserved',
+             'firstLaunchRestoreChecksPasswordAndCompletesEvenForEmptyBackup',
+             'protectedEmptyLedgerCannotEnterSetupOrRestoreBeforePin', 'recordExpenseAndNavigateAfterRotation')
+    if require_ux_v11:
+        editors += ('createCategoryFromEntryKeepsDraftAndSelectsIt', 'searchCurrencyAndConvertOnlyAfterConfirmation')
+    minima = [('phone', 23), ('tablet', 23), ('store-phone', 1), ('api26', 14), ('api33', 23)] if require_ux_v11 else [
+        ('phone', 17), ('tablet', 17), ('store-phone', 1), ('api26', 9), ('api33', 16)]
+    for device, minimum in minima:
         critical = (('recordExpenseAndNavigateAfterRotation',) if device == 'store-phone' else
                     storage if device == 'api26' else storage + editors)
+        if require_ux_v11 and device != 'store-phone':
+            critical += setup
         count += verify_tests(qa, f'qa/{device}/androidTest-results/connected/debug/TEST-*.xml', minimum, critical)
     for variant in ('debug', 'release'):
         lint = ET.parse(qa/f'app/build/reports/lint-results-{variant}.xml').getroot()
@@ -180,7 +198,7 @@ def verify_release(qa, apk, aab, commit):
         require(re.search(r'Active default network:\s*(none|null)\s*$',
                           (offline/f'connectivity-{stage}.txt').read_text(), re.I|re.M),
                 f'Offline {stage}: default network exists')
-    verify_screens(qa/'qa/store-phone')
+    verify_screens(qa/'qa/store-phone', SCREENS_V11 if require_ux_v11 else SCREENS)
     print(f'PASS {count} tests, lint, exact offline amount and release artifact checks for {commit}')
 
 
@@ -189,13 +207,15 @@ if __name__ == '__main__':
     sub = parser.add_subparsers(dest='mode', required=True)
     screens = sub.add_parser('screens')
     screens.add_argument('directory', type=pathlib.Path)
+    screens.add_argument('--require-ux-v11', action='store_true')
     release = sub.add_parser('release')
     release.add_argument('--qa', required=True, type=pathlib.Path)
     release.add_argument('--apk', required=True, type=pathlib.Path)
     release.add_argument('--aab', required=True, type=pathlib.Path)
     release.add_argument('--commit', required=True)
+    release.add_argument('--require-ux-v11', action='store_true')
     args = parser.parse_args()
     if args.mode == 'screens':
-        verify_screens(args.directory)
+        verify_screens(args.directory, SCREENS_V11 if args.require_ux_v11 else SCREENS)
     else:
-        verify_release(args.qa, args.apk, args.aab, args.commit)
+        verify_release(args.qa, args.apk, args.aab, args.commit, args.require_ux_v11)

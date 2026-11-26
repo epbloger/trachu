@@ -4,7 +4,7 @@ if [[ "${1:-}" == "api26" || "${1:-}" == "api33" ]]; then
   mkdir -p "qa/$1"
   status=0
   classes=ru.epbloger.trachu.data.LedgerStoreTest,ru.epbloger.trachu.security.DeviceSecurityTest,ru.epbloger.trachu.data.PdfReportTest
-  classes+=,ru.epbloger.trachu.ui.NavigationTest
+  classes+=,ru.epbloger.trachu.ui.NavigationTest,ru.epbloger.trachu.ui.OnboardingDeviceTest
   if [[ "$1" == "api33" ]]; then classes+=,ru.epbloger.trachu.ui.EditorRecreationTest; fi
   gradle --no-daemon --stacktrace connectedDebugAndroidTest "-Pandroid.testInstrumentationRunnerArguments.class=$classes" || status=1
   cp -a app/build/outputs/androidTest-results "qa/$1/" || true
@@ -50,7 +50,7 @@ if [[ "$status" == 0 ]]; then
   adb shell svc data disable
   gradle --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.epbloger.trachu.ui.NavigationTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || status=1
   adb pull /sdcard/Android/data/ru.epbloger.trachu/files/qa/. qa/store-phone/ || status=1
-  python3 store/rustore/verify-evidence.py screens qa/store-phone || status=1
+  python3 store/rustore/verify-evidence.py screens qa/store-phone --require-ux-v11 || status=1
   cp -a app/build/outputs/androidTest-results qa/store-phone/ || true
 fi
 adb shell wm size reset
@@ -58,4 +58,7 @@ adb shell wm density reset
 adb shell settings put system font_scale 1.0
 # The cold-start persistence check provides independent evidence even if UI tests fail.
 TRACHU_OFFLINE_QA_DIR=qa/offline python3 .github/scripts/offline-smoke.py app/build/outputs/apk/debug/app-debug.apk || status=1
+if [[ -n "${TRACHU_UPGRADE_BASELINE_APK:-}" ]]; then
+  python3 .github/scripts/upgrade-smoke.py "$TRACHU_UPGRADE_BASELINE_APK" app/build/outputs/apk/debug/app-debug.apk || status=1
+fi
 exit "$status"

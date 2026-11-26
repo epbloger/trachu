@@ -124,12 +124,17 @@ class EditorRecreationTest {
             rule.onNodeWithTag("category-quick:transport").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithTag("category-quick:food").assertIsNotSelected()
             rule.onNodeWithTag("field:Поиск категории").assertDoesNotExist()
-            rule.onNodeWithText("Вчера").performScrollTo().performClick()
+            rule.onNodeWithText("Сегодня").performScrollTo().assertIsSelected()
+            rule.onNodeWithText("Вчера").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(today()-1))
+            rule.onNodeWithText("Сегодня").performScrollTo().performClick().assertIsSelected()
+            rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(today()))
+            rule.onNodeWithText("Вчера").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithText("Комментарий, теги и чек").performScrollTo().performClick()
             enter("field:Комментарий","Комментарий до создания",imeDone=false)
             rule.onNodeWithTag("category-create:Категория").performScrollTo().performClick()
             rule.onNodeWithTag("field:Название категории").performTextReplacement(name)
+            rule.onNodeWithTag("field:Название категории").performImeAction()
             rule.activityRule.scenario.recreate()
             awaitTag("category-create-confirm")
             rule.onNodeWithTag("field:Название категории").assertTextContains(name)
@@ -166,7 +171,11 @@ class EditorRecreationTest {
         val second=Account(name="Другой счёт ${newId()}",currency=foreign)
         val third=Account(name="Та же валюта ${newId()}",currency=currency)
         val ids=setOf(account.id,second.id,third.id)
-        runBlocking{store.change{it.copy(accounts=it.accounts+listOf(account,second,third))}}
+        val conversionDay=today()
+        val storedRate=FxRate(source,conversionDay,"0.01")
+        val originalRate=initial.rates.find{it.currency==source&&it.day==conversionDay}
+        runBlocking{store.change{it.copy(accounts=it.accounts+listOf(account,second,third),
+            rates=it.rates.filterNot{r->r.currency==source&&r.day==conversionDay}+storedRate)}}
         try{
             awaitTag("nav-home")
             lateinit var vm:AppViewModel
@@ -177,6 +186,7 @@ class EditorRecreationTest {
             enter("field:Название","Счёт с поиском")
             rule.onNodeWithTag("currency:Валюта").performScrollTo().performClick()
             rule.onNodeWithTag("field:Поиск валюты").performTextReplacement("JPY")
+            rule.onNodeWithTag("field:Поиск валюты").performImeAction()
             rule.onNodeWithTag("currency-option:JPY").performClick()
             rule.onNodeWithTag("currency:Валюта").assertTextContains("JPY",substring=true)
             rule.onNodeWithTag("field:Название").performScrollTo().assertTextContains("Счёт с поиском")
@@ -189,6 +199,19 @@ class EditorRecreationTest {
             rule.onNodeWithTag("entry-convert").performScrollTo().performClick()
             rule.onNodeWithTag("currency:Исходная валюта").performScrollTo().performClick()
             rule.onNodeWithTag("field:Поиск валюты").performTextReplacement(source)
+            rule.onNodeWithTag("field:Поиск валюты").performImeAction()
+            rule.onNodeWithTag("currency-option:$source").performClick()
+            enter("field:Исходная сумма ($source)","1200")
+            // Stored-rate result must be applied in the account currency; the preview
+            // alone must not save an entry or replace the previous amount.
+            rule.onNodeWithTag("entry-convert-result").performScrollTo().assertTextContains(Money.format(Money.parse("12",currency),currency))
+            rule.onNodeWithTag("entry-convert-apply").assertIsEnabled().performClick()
+            rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(Money.parse("12",currency),currency))
+            assertTrue(runBlocking{store.current().entries.none{it.accountId in ids}})
+            rule.onNodeWithTag("entry-convert").performScrollTo().performClick()
+            rule.onNodeWithTag("currency:Исходная валюта").performScrollTo().performClick()
+            rule.onNodeWithTag("field:Поиск валюты").performTextReplacement(source)
+            rule.onNodeWithTag("field:Поиск валюты").performImeAction()
             rule.onNodeWithTag("currency-option:$source").performClick()
             enter("field:Исходная сумма ($source)","1200")
             rule.onNodeWithTag("toggle:Ручной курс").performScrollTo().performClick()
@@ -197,6 +220,7 @@ class EditorRecreationTest {
             assertTrue(runBlocking{store.current().entries.none{it.accountId in ids}})
             rule.activityRule.scenario.recreate()
             awaitTag("entry-convert-apply")
+            rule.onNodeWithTag("currency:Исходная валюта").assertExists()
             rule.onNodeWithTag("entry-convert-apply").assertIsEnabled().performClick()
             rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(Money.parse("30",currency),currency))
             // Same-currency account changes do not alter the amount; cross-currency changes
@@ -207,6 +231,7 @@ class EditorRecreationTest {
             rule.onNodeWithTag("choice:Счёт").performScrollTo().performClick()
             rule.onNodeWithTag("choice-option:Счёт:${second.id}").performClick()
             awaitTag("entry-convert-apply")
+            rule.onNodeWithTag("currency:Исходная валюта").assertDoesNotExist()
             rule.onNodeWithTag("field:Исходная сумма ($currency)").assertTextContains(Money.input(Money.parse("30",currency),currency))
             rule.onNodeWithTag("entry-convert-cancel").performClick()
             rule.onNodeWithTag("choice:Счёт").performScrollTo().assertTextContains(third.name,substring=true)
@@ -227,7 +252,8 @@ class EditorRecreationTest {
             assertEquals(Money.parse("30",currency),saved.baseMinor)
         }finally{
             withVm{it.editor=null}
-            runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id in ids},entries=it.entries.filterNot{e->e.accountId in ids})}}
+            runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id in ids},entries=it.entries.filterNot{e->e.accountId in ids},
+                rates=it.rates.filterNot{r->r.currency==source&&r.day==conversionDay}+listOfNotNull(originalRate))}}
         }
     }
 
@@ -295,20 +321,30 @@ class EditorRecreationTest {
             rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(today()))
             rule.onNodeWithTag("field:Комментарий").performScrollTo().assertTextContains(original.note)
             assertEquals(listOf(original),runBlocking{store.current().entries.filter{it.accountId==account.id}})
+            val editedMinor=4321L
+            val editedNote="Повтор с изменённой суммой"
+            enter(amountTag,Money.input(editedMinor,account.currency))
+            enter("field:Комментарий",editedNote,imeDone=false)
+            rule.onNodeWithText("Сегодня").performScrollTo().assertIsSelected()
+            rule.activityRule.scenario.recreate()
+            awaitTag(amountTag)
+            rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(editedMinor,account.currency))
+            rule.onNodeWithTag("field:Комментарий").performScrollTo().assertTextContains(editedNote)
+            assertEquals(listOf(original),runBlocking{store.current().entries.filter{it.accountId==account.id}})
             rule.onNodeWithTag("form_save").performClick()
             rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
             val saved=runBlocking{store.current().entries.filter{it.accountId==account.id}}
             assertEquals(2,saved.size)
             assertTrue(original in saved)
             val copy=saved.single{it.id!=original.id}
-            assertEquals(original.minor,copy.minor)
-            assertEquals(original.splits,copy.splits)
-            assertEquals(original.note,copy.note)
+            assertEquals(editedMinor,copy.minor)
+            assertEquals(listOf(Split(category.id,editedMinor,editedMinor)),copy.splits)
+            assertEquals(editedNote,copy.note)
             assertEquals(original.tags,copy.tags)
             assertEquals(today(),copy.day)
             assertTrue(copy.receiptIds.isEmpty())
             assertFalse(copy.autoPostPlanned)
-            assertEquals(-2468L,Finance.balance(runBlocking{store.current()},account.id))
+            assertEquals(-(original.minor+editedMinor),Finance.balance(runBlocking{store.current()},account.id))
         } finally {
             withVm{it.editor=null}
             runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id},entries=it.entries.filterNot{e->e.accountId==account.id})}}
