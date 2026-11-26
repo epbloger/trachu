@@ -72,7 +72,12 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
                         Progress(d.principalMinor-left,d.principalMinor)
                         if(d.annualPercent!="0") {
                             Text("Годовая ставка: ${d.annualPercent}%")
-                            Text("Оценка процентов за 30 дней: "+Money.format(Finance.estimatedInterest(ledger,d,30),a.currency),style=MaterialTheme.typography.bodySmall)
+                            runCatching{Finance.estimatedInterest(ledger,d,30)}.getOrNull()?.let{Text("Оценка процентов за 30 дней: "+Money.format(it,a.currency),style=MaterialTheme.typography.bodySmall)}
+                            val accrued=runCatching{Finance.accruedInterest(ledger,d)}.getOrNull()
+                            val paid=runCatching{Finance.paidInterest(ledger,d)}.getOrNull()
+                            if(accrued!=null)Text("Начислено по оценке: "+Money.format(accrued,a.currency),style=MaterialTheme.typography.bodySmall)
+                            if(paid!=null)Text("Фактически учтённые проценты: "+Money.format(paid,a.currency),style=MaterialTheme.typography.bodySmall)
+                            Text("Простая оценка Actual/365, без банковского графика и капитализации.",style=MaterialTheme.typography.bodySmall)
                         }
                         d.dueDay?.let{Text("Срок: "+dayLabel(it),color=if(it<today()&&left>0)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)}
                         if(d.note.isNotBlank())Text(d.note)

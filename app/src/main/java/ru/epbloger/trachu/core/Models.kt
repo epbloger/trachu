@@ -34,7 +34,8 @@ fun today(): Long = LocalDate.now().toEpochDay()
     val targetAccountId: String? = null, val targetMinor: Long? = null,
     val originalId: String? = null, val debtId: String? = null,
     val principalMinor: Long = 0, val essential: Boolean = false,
-    val receiptIds: List<String> = emptyList(), val rate: String = "1"
+    val receiptIds: List<String> = emptyList(), val rate: String = "1",
+    val autoPostPlanned: Boolean = false
 )
 @Serializable data class Budget(
     val id: String = newId(), val name: String, val categoryId: String? = null,

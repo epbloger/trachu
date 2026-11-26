@@ -6,8 +6,13 @@ import java.io.OutputStream
 import java.time.LocalDate
 
 object Csv {
-    private val header = listOf("type", "id", "date", "account", "operation", "amount", "currency", "note", "data")
-    private fun safe(s: String) = if (s.firstOrNull() in listOf('=', '+', '-', '@', '\t', '\r')) "'$s" else s
+    private val legacyHeader = listOf("type", "id", "date", "account", "operation", "amount", "currency", "note", "data")
+    private val header = legacyHeader.dropLast(1) + "data_v2"
+    private fun needsEscaping(s: String) =
+        s.firstOrNull() in listOf('\t', '\r', '\n', '\'') ||
+            s.trimStart().firstOrNull() in listOf('=', '+', '-', '@')
+    private fun safe(s: String) = if (needsEscaping(s)) "'$s" else s
+    private fun unsafe(s: String) = if (s.startsWith("'") && needsEscaping(s.substring(1))) s.substring(1) else s
     private fun line(fields: List<String>) = fields.joinToString(",") { "\""+it.replace("\"", "\"\"")+"\"" }+"\r\n"
     fun write(ledger: Ledger, output: OutputStream) {
         val account = ledger.accounts.associateBy { it.id }
@@ -33,7 +38,19 @@ object Csv {
         var closed = false
         var i = 0
         val s = text.removePrefix("\uFEFF")
-        val separator = if (s.lineSequence().firstOrNull()?.let { it.count { c -> c == ';' } > it.count { c -> c == ',' } } == true) ';' else ','
+        // Count delimiters in the header outside quotes, not in quoted fields.
+        var headerQuoted = false
+        var commas = 0
+        var semicolons = 0
+        for (c in s) {
+            if (c == '"') headerQuoted = !headerQuoted
+            else if (!headerQuoted) when (c) {
+                '\r', '\n' -> break
+                ',' -> commas++
+                ';' -> semicolons++
+            }
+        }
+        val separator = if (semicolons > commas) ';' else ','
         fun finishField() { row.add(field.toString()); field.setLength(0); closed = false }
         fun finishRow() { finishField(); if (row.any { it.isNotEmpty() }) result.add(row); row = mutableListOf() }
         while (i < s.length) {
@@ -57,12 +74,15 @@ object Csv {
     /** Import the complete lossless Trachu CSV. Identical IDs are idempotent; conflicts are rejected. */
     fun read(input: InputStream): Ledger {
         val rows = parse(input.readBounded(100*1024*1024).toString(Charsets.UTF_8))
-        require(rows.firstOrNull() == header) { "Нужна таблица ТРАЧУ. или формат выписки" }
+        val legacy = rows.firstOrNull() == legacyHeader
+        require(legacy || rows.firstOrNull() == header) { "Нужна таблица ТРАЧУ. или формат выписки" }
+        fun unescape(value: String): String = if (!legacy) unsafe(value) else
+            if (value.startsWith("'") && value.getOrNull(1) in listOf('=', '+', '-', '@', '\t', '\r')) value.substring(1) else value
         val records = rows.drop(1).map {
             require(it.size == header.size)
             // Undo Excel formula protection on raw payloads.
-            val payload = it[8].let { p -> if (p.startsWith("'") && p.getOrNull(1) in listOf('=', '+', '-', '@', '\t', '\r')) p.substring(1) else p }
-            val id=it[1].let { p->if(p.startsWith("'")&&p.getOrNull(1) in listOf('=', '+', '-', '@', '\t', '\r'))p.substring(1) else p }
+            val payload = unescape(it[8])
+            val id = unescape(it[1])
             LedgerRecord(it[0], id, payload)
         }
         require(records.isNotEmpty())
@@ -88,7 +108,9 @@ object Csv {
         val h = rows.firstOrNull()?.map { it.trim().lowercase() } ?: error("Таблица пуста")
         require(h.distinct().size == h.size && listOf("date","amount","category").all { it in h }) { "Столбцы: date,amount,category,note,id" }
         val account = ledger.accounts.first { it.id == accountId && !it.archived }
-        var next = ledger
+        val categories = ledger.categories.toMutableList()
+        val entries = ledger.entries.associateBy { it.id }.toMutableMap()
+        val categoryIndex = categories.associateBy { it.name.lowercase() to it.income }.toMutableMap()
         val seen = mutableMapOf<String,Int>()
         rows.drop(1).forEachIndexed { index, row ->
             try {
@@ -99,20 +121,25 @@ object Csv {
                 val day = LocalDate.parse(col("date")).toEpochDay()
                 val income = signed > 0
                 val name = col("category").ifBlank { if (income) "Другие доходы" else "Другое" }
-                val category = next.categories.find { it.name.equals(name,true) && it.income == income }
-                    ?: Category(name=name,income=income).also { next = next.copy(categories=next.categories+it) }
+                val category = categoryIndex.getOrPut(name.lowercase() to income) {
+                    Category(name=name,income=income).also { categories.add(it) }
+                }
                 val raw = listOf(accountId,col("date"),signed.toString(),name,col("note")).joinToString("\u001f")
                 val count = seen.getOrDefault(raw,0); seen[raw] = count+1
                 val identity = col("id").takeIf { it.isNotBlank() }?.let { "$accountId:id:$it" } ?: "$raw:$count"
                 val id = java.util.UUID.nameUUIDFromBytes(identity.toByteArray(Charsets.UTF_8)).toString()
-                val e = Finance.makeEntry(next,if(income) Kind.INCOME else Kind.EXPENSE,accountId,kotlin.math.abs(signed),day,
-                    listOf(category.id to kotlin.math.abs(signed)),col("note"),id=id)
-                val old = next.entries.find { it.id == id }
-                if (old == null) next = Finance.putEntry(next,e)
-                else require(old.accountId == e.accountId && old.minor == e.minor && old.kind == e.kind && old.day == e.day &&
-                    old.note == e.note && old.splits.map { it.categoryId } == e.splits.map { it.categoryId }) { "Конфликт операции" }
+                val kind = if(income) Kind.INCOME else Kind.EXPENSE
+                val minor = kotlin.math.abs(signed)
+                val old = entries[id]
+                if (old == null) {
+                    entries[id] = Finance.makeEntry(ledger,kind,accountId,minor,day,
+                        listOf(category.id to minor),col("note"),id=id)
+                } else require(old.accountId == accountId && old.minor == minor && old.kind == kind && old.day == day &&
+                    old.note == col("note") && old.splits.map { it.categoryId } == listOf(category.id)) { "Конфликт операции" }
             } catch (e: Exception) { throw IllegalArgumentException("Строка ${index+2}: ${e.message ?: "ошибка импорта"}",e) }
         }
-        return next.validated()
+        // One final validation, not one full ledger traversal per CSV row.
+        // The caller commits the resulting snapshot in a single Room transaction.
+        return ledger.copy(categories=categories,entries=entries.values.toList()).validated()
     }
 }

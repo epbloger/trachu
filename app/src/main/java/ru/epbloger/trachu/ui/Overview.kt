@@ -8,12 +8,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.core.*
 import java.time.LocalDate
@@ -47,9 +51,15 @@ import java.time.temporal.TemporalAdjusters
                             if(valuation.missingCurrencies.isNotEmpty()) Text("Не включены валюты: "+valuation.missingCurrencies.joinToString(),color=Mint,style=MaterialTheme.typography.bodyMedium)
                             Text("Результат месяца",color=Mint,style=MaterialTheme.typography.bodyMedium)
                             MoneyText(totals.net,ledger.baseCurrency,color=Color.White)
-                            Row(horizontalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.fillMaxWidth()) {
-                                Button(onClick={add(Kind.EXPENSE)},modifier=Modifier.weight(1f).testTag("add-expense"),colors=ButtonDefaults.buttonColors(containerColor=Mint,contentColor=Deep)) { Text("− Расход") }
-                                OutlinedButton(onClick={add(Kind.INCOME)},modifier=Modifier.weight(1f),colors=ButtonDefaults.outlinedButtonColors(contentColor=Color.White)) { Text("+ Доход") }
+                            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                                @Composable fun Expense(modifier:Modifier) {
+                                    Button(onClick={add(Kind.EXPENSE)},modifier=modifier.testTag("add-expense"),colors=ButtonDefaults.buttonColors(containerColor=Mint,contentColor=Deep)) { Text("− Расход") }
+                                }
+                                @Composable fun Income(modifier:Modifier) {
+                                    OutlinedButton(onClick={add(Kind.INCOME)},modifier=modifier,colors=ButtonDefaults.outlinedButtonColors(contentColor=Color.White)) { Text("+ Доход") }
+                                }
+                                if(maxWidth<260.dp||LocalDensity.current.fontScale>=1.3f)Column(verticalArrangement=Arrangement.spacedBy(8.dp)){Expense(Modifier.fillMaxWidth());Income(Modifier.fillMaxWidth())}
+                                else Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Expense(Modifier.weight(1f));Income(Modifier.weight(1f))}
                             }
                         }
                     }
@@ -132,14 +142,20 @@ import java.time.temporal.TemporalAdjusters
                 Text("Итого",style=MaterialTheme.typography.labelSmall)
                 MoneyText(total,ledger.baseCurrency,large=true)
             }
+            if(categories.any{it.second<0})Text("Диаграмма показывает положительные суммы. Отрицательные значения означают превышение возвратов над расходами категории.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             categories.forEach { (id,v)->
+                val category=ledger.categories.find{it.id==id}
                 Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                    CategoryDot(ledger.categories.find{it.id==id},Modifier)
-                    Column(Modifier.weight(1f)) {
+                    CategoryDot(category)
+                    Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
                         Text(ledger.categoryName(id),style=MaterialTheme.typography.titleMedium)
-                        Progress(v,positiveTotal,Color(ledger.categories.find{it.id==id}?.color ?: 0xFF218C75))
+                        MoneyText(v,ledger.baseCurrency)
+                        if(v>0&&positiveTotal>0) {
+                            val share=(v.toDouble()/positiveTotal.toDouble()*100).coerceIn(0.0,100.0)
+                            Text(String.format(java.util.Locale("ru"),"%.1f%% положительных сумм",share),style=MaterialTheme.typography.labelSmall)
+                            Progress(v,positiveTotal,Color(category?.color ?: 0xFF218C75))
+                        }
                     }
-                    MoneyText(v,ledger.baseCurrency)
                 }
             }
         }
@@ -147,6 +163,8 @@ import java.time.temporal.TemporalAdjusters
 }
 
 enum class PeriodType(val label: String) { DAY("День"),WEEK("Неделя"),MONTH("Месяц"),YEAR("Год"),CUSTOM("Период") }
+internal val PeriodSaver=Saver<Period,LongArray>(
+    save={longArrayOf(it.from,it.through)},restore={Period(it[0],it[1])})
 fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
     val d=LocalDate.ofEpochDay(day)
     return when(type) {
@@ -157,9 +175,9 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
     }
 }
 @Composable fun PeriodControls(type: PeriodType, onType: (PeriodType)->Unit, period: Period, onPeriod: (Period)->Unit, monthStart:Int=1) {
-    var from by remember(period){mutableStateOf(iso(period.from))}
-    var to by remember(period){mutableStateOf(iso(period.through))}
-    var error by remember{mutableStateOf("")}
+    var from by rememberSaveable(period.from,period.through){mutableStateOf(iso(period.from))}
+    var to by rememberSaveable(period.from,period.through){mutableStateOf(iso(period.through))}
+    var error by rememberSaveable{mutableStateOf("")}
     Chips(PeriodType.entries,type,{it.label}) { onType(it); if(it!=PeriodType.CUSTOM)onPeriod(periodFor(it,monthStart=monthStart)) }
     if(type==PeriodType.CUSTOM) {
         DateField("С",from,{from=it})
@@ -170,18 +188,18 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
             TextButton(onClick={
                 onPeriod(periodFor(type,period.from-1,monthStart))
-            }){Text("‹")}
+            },modifier=Modifier.semantics{contentDescription="Предыдущий период"}){Text("‹")}
             Text("${iso(period.from)} — ${iso(period.through)}",style=MaterialTheme.typography.labelMedium,modifier=Modifier.weight(1f))
             TextButton(onClick={
                 onPeriod(periodFor(type,period.through+1,monthStart))
-            }){Text("›")}
+            },modifier=Modifier.semantics{contentDescription="Следующий период"}){Text("›")}
         }
     }
 }
 @Composable fun Reports(ledger: Ledger, monthStart:Int=1, exportPdf: (Period)->Unit) {
-    var type by remember { mutableStateOf(PeriodType.MONTH) }
-    var period by remember(monthStart) { mutableStateOf(Period.month(startDay=monthStart)) }
-    var income by remember { mutableStateOf(false) }
+    var type by rememberSaveable { mutableStateOf(PeriodType.MONTH) }
+    var period by rememberSaveable(monthStart,stateSaver=PeriodSaver) { mutableStateOf(Period.month(startDay=monthStart)) }
+    var income by rememberSaveable { mutableStateOf(false) }
     val totals=remember(ledger,period){Finance.totals(ledger,period)}
     val length=period.through-period.from+1
     val previous=remember(ledger,period,type) {
@@ -200,7 +218,11 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
                 label to Finance.totals(ledger,p)
             }.takeLast(60)
     }
-    val forecast=remember(ledger) { runCatching { Finance.generate(ledger,today()+30,true).entries.filter{it.status==EntryStatus.PLANNED && it.day in today()..today()+30} }.getOrDefault(emptyList()) }
+    val forecastStart=today()
+    val forecastEnd=forecastStart+29
+    val forecast=remember(ledger,forecastStart) { runCatching {
+        Finance.generate(ledger,forecastEnd,true).entries.filter{it.status==EntryStatus.PLANNED && it.day in forecastStart..forecastEnd}
+    } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide=maxWidth>=840.dp && LocalDensity.current.fontScale<1.5f
         LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
@@ -240,26 +262,41 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
             }
             item {
                 Panel {
-                    SectionTitle("Динамика",if(length<=31)"По дням" else "По месяцам")
+                    SectionTitle("Динамика",if(length<=31)"По дням · дни с операциями" else "По месяцам · до 60 последних месяцев с операциями")
                     val max=groups.maxOfOrNull{maxOf(it.second.income,it.second.expense,0)} ?: 0
                     if(groups.isEmpty())Text("Нет данных для графика.")
                     groups.forEach { (label,t)->
                         Text(label,style=MaterialTheme.typography.labelMedium)
-                        Text("+ "+Money.format(t.income,ledger.baseCurrency),style=MaterialTheme.typography.bodySmall);Progress(t.income,max)
-                        Text("− "+Money.format(t.expense,ledger.baseCurrency),style=MaterialTheme.typography.bodySmall);Progress(t.expense,max,MaterialTheme.colorScheme.error)
+                        Text("Доходы: "+Money.format(t.income,ledger.baseCurrency),style=MaterialTheme.typography.bodySmall);Progress(t.income,max)
+                        Text("Расходы за вычетом возвратов: "+Money.format(t.expense,ledger.baseCurrency),style=MaterialTheme.typography.bodySmall)
+                        if(t.expense>=0)Progress(t.expense,max,MaterialTheme.colorScheme.error)
+                        else Text("Возвраты превышают расходы",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary)
                     }
                 }
             }
             item {
                 Panel {
-                    SectionTitle("Прогноз на 30 дней")
-                    val expectedIncome=Money.sum(forecast.filter{it.kind==Kind.INCOME}.map{it.baseMinor})
-                    val expectedExpense=Money.sum(forecast.filter{it.kind==Kind.EXPENSE}.map{it.baseMinor})
-                    val net=Money.sub(expectedIncome,expectedExpense)
-                    Text("Плановые доходы: "+Money.format(expectedIncome,ledger.baseCurrency))
-                    Text("Плановые расходы: "+Money.format(expectedExpense,ledger.baseCurrency))
-                    MoneyText(net,ledger.baseCurrency,large=true)
-                    Text("Оценка по будущим записям и расписаниям. Переводы между счетами не входят в доходы и расходы.",style=MaterialTheme.typography.bodySmall)
+                    SectionTitle("Прогноз на 30 дней","${dayLabel(forecastStart)} — ${dayLabel(forecastEnd)}")
+                    val upcoming=forecast.getOrNull()
+                    if(upcoming==null)Warning("Не удалось рассчитать расписания. Проверьте регулярные операции и валютные курсы.")
+                    else {
+                        val expected=Finance.totals(ledger.copy(entries=upcoming.map{it.copy(status=EntryStatus.POSTED)}),Period(forecastStart,forecastEnd))
+                        Text("Плановые доходы: "+Money.format(expected.income,ledger.baseCurrency))
+                        Text("Плановые расходы: "+Money.format(expected.expense,ledger.baseCurrency))
+                        Text("Ожидаемый финансовый результат",style=MaterialTheme.typography.labelLarge)
+                        MoneyText(expected.net,ledger.baseCurrency,large=true,color=if(expected.net<0)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                        val projected=runCatching{Finance.projectedValuation(ledger,upcoming,forecastEnd,forecastStart)}.getOrNull()
+                        if(projected!=null){
+                            HorizontalDivider()
+                            Text("Ожидаемый общий баланс",style=MaterialTheme.typography.labelLarge)
+                            MoneyText(projected.minor,ledger.baseCurrency,large=true)
+                            if(projected.missingCurrencies.isNotEmpty())Warning("Не включены валюты без курса: "+projected.missingCurrencies.joinToString())
+                            Text("По текущим известным курсам, с учётом переводов и настроек счетов.",style=MaterialTheme.typography.bodySmall)
+                        }else Warning("Не удалось рассчитать ожидаемый баланс.")
+                        if(upcoming.isEmpty())Text("Нет запланированных операций на этот период.")
+                        else Text("Запланированных операций: ${upcoming.size}")
+                        Text("Это ожидаемая разница доходов и расходов по счетам, включённым в отчёты. Переводы не учитываются. Фактический баланс не изменяется.",style=MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }

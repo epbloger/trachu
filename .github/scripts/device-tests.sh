@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 set -eu
+if [[ "${1:-}" == "api26" ]]; then
+  mkdir -p qa/api26
+  status=0
+  gradle --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.epbloger.trachu.data.LedgerStoreTest,ru.epbloger.trachu.security.DeviceSecurityTest || status=1
+  cp -a app/build/outputs/androidTest-results qa/api26/ || true
+  exit "$status"
+fi
 mkdir -p qa/phone qa/tablet
 status=0
 gradle --no-daemon --stacktrace connectedDebugAndroidTest || status=1

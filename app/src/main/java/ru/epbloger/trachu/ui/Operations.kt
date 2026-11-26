@@ -9,20 +9,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.core.*
 
 @Composable fun Operations(ledger: Ledger, add: (Kind)->Unit, open: (Entry)->Unit, monthStart:Int=1) {
-    var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf("Все") }
-    var account by remember { mutableStateOf("") }
-    var categories by remember { mutableStateOf(emptySet<String>()) }
-    var type by remember { mutableStateOf(PeriodType.MONTH) }
-    var period by remember(monthStart) { mutableStateOf(Period.month(startDay=monthStart)) }
-    var allDates by remember { mutableStateOf(true) }
-    var sort by remember { mutableStateOf("Новые") }
-    var expanded by remember { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var filter by rememberSaveable { mutableStateOf("Все") }
+    var account by rememberSaveable { mutableStateOf("") }
+    var categoryIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    val categories=categoryIds.toSet()
+    var type by rememberSaveable { mutableStateOf(PeriodType.MONTH) }
+    var period by rememberSaveable(monthStart,stateSaver=PeriodSaver) { mutableStateOf(Period.month(startDay=monthStart)) }
+    var allDates by rememberSaveable { mutableStateOf(true) }
+    var sort by rememberSaveable { mutableStateOf("Новые") }
+    var expanded by rememberSaveable { mutableStateOf(false) }
     val entries=remember(ledger,query,filter,account,categories,period,allDates,sort) {
         val q=query.trim().lowercase()
         val selected=ledger.entries.filter { e->
@@ -34,7 +36,7 @@ import ru.epbloger.trachu.core.*
         }
         when(sort){ "Старые"->selected.sortedWith(compareBy<Entry>{it.day}.thenBy{it.timeMinutes});"Сумма"->selected.sortedByDescending{it.baseMinor};else->selected.sortedWith(compareByDescending<Entry>{it.day}.thenByDescending{it.timeMinutes}) }
     }
-    var selectedId by remember { mutableStateOf<String?>(null) }
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
       val wide=maxWidth>=760.dp && LocalDensity.current.fontScale<1.5f
       Row(Modifier.fillMaxSize()) {
@@ -43,20 +45,22 @@ import ru.epbloger.trachu.core.*
         item {
             Field("Поиск по сумме, заметке, тегу",query,{query=it})
             Chips(listOf("Все","Расход","Доход","Перевод","Возврат","План"),filter,{it}){filter=it}
-            TextButton(onClick={expanded=!expanded}){Text(if(expanded)"Скрыть фильтры" else "Фильтры и сортировка")}
+            val activeFilters=(if(account.isNotEmpty())1 else 0)+(if(categories.isNotEmpty())1 else 0)+(if(!allDates)1 else 0)+(if(sort!="Новые")1 else 0)
+            TextButton(onClick={expanded=!expanded}){Text((if(expanded)"Скрыть фильтры" else "Фильтры и сортировка")+if(activeFilters>0)" ($activeFilters)" else "")}
         }
         if(expanded)item {
             Panel {
                 Choice("Счёт",account,listOf("")+ledger.accounts.map{it.id},{if(it.isEmpty())"Все счета" else ledger.accountName(it)}){account=it}
-                MultiChoice("Категории",categories,ledger.categories.map{it.id},{ledger.categoryName(it)}){categories=it}
+                MultiChoice("Категории",categories,ledger.categories.map{it.id},{ledger.categoryName(it)}){categoryIds=ArrayList(it)}
                 Choice("Сортировка",sort,listOf("Новые","Старые","Сумма"),{it}){sort=it}
                 Toggle("Все даты",allDates,{allDates=it})
                 if(!allDates)PeriodControls(type,{type=it},period,{period=it},monthStart)
+                TextButton(onClick={query="";filter="Все";account="";categoryIds=arrayListOf();type=PeriodType.MONTH;period=Period.month(startDay=monthStart);allDates=true;sort="Новые"}){Text("Сбросить все фильтры")}
             }
         }
         item { Text("Найдено: ${entries.size}",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant) }
         if(entries.isEmpty()) item { EmptyState("Нет операций","Добавьте расход или измените фильтры.","Добавить",{add(Kind.EXPENSE)}) }
-        items(entries,key={it.id}) { entry->Panel { EntryRow(ledger,entry){if(wide)selectedId=entry.id else open(entry)} } }
+        items(entries,key={it.id}) { entry->Panel(Modifier.testTag("operation:${entry.id}")) { EntryRow(ledger,entry){if(wide)selectedId=entry.id else open(entry)} } }
        }
        if(wide) {
         val selected=entries.find{it.id==selectedId} ?: entries.firstOrNull()

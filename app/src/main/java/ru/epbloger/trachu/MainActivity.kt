@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.epbloger.trachu.core.*
+import ru.epbloger.trachu.ads.OverviewAdBanner
 import ru.epbloger.trachu.security.Settings
 import ru.epbloger.trachu.ui.*
 
@@ -206,6 +207,11 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
                                 MorePage.ABOUT->AboutPage{more=MorePage.INDEX}
                             }
                         }
+                    }
+                    // Only the overview may show an ad. Editors, details, quick entry,
+                    // lock screen and financial actions remove it from composition.
+                    if(tab==Tab.HOME && editor==null && quick==null && !busy) {
+                        OverviewAdBanner()
                     }
                 }
             }

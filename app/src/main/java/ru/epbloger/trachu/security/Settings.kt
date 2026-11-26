@@ -64,4 +64,17 @@ class Preferences(context: Context) {
         store.edit { p -> if (p[key] != value) { p[key]=value; changed=true } }
         return changed
     }
+    /** Notify once per increasing threshold in the same calendar month. */
+    suspend fun markBudgetNotice(id: String, month: String, level: Int): Boolean {
+        require(level in 0..3)
+        if(level==0)return false
+        var changed=false
+        val key=stringPreferencesKey("notice_budget_$id")
+        store.edit { p ->
+            val previous=p[key].orEmpty()
+            val prior=if(previous.substringBefore(':')==month)previous.substringAfter(':').toIntOrNull() ?: 0 else 0
+            if(level>prior){p[key]="$month:$level";changed=true}
+        }
+        return changed
+    }
 }

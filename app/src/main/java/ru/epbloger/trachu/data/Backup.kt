@@ -27,20 +27,23 @@ object Backup {
         } finally { spec.clearPassword() }
     }
     fun write(ledger: Ledger, password: CharArray, output: OutputStream) {
-        require(password.size >= 8) { "Пароль резервной копии: минимум 8 символов" }
-        val salt = ByteArray(16).also(random::nextBytes)
-        val iv = ByteArray(12).also(random::nextBytes)
-        val header = magic + salt + iv
-        val clear = LedgerRecords.json.encodeToString(BackupEnvelope(ledger = ledger.validated())).toByteArray(Charsets.UTF_8)
         try {
-            require(clear.size <= maxBytes - header.size - 16) { "Резервная копия слишком большая" }
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.ENCRYPT_MODE, key(password, salt), GCMParameterSpec(128, iv))
-            cipher.updateAAD(header)
-            output.write(header)
-            output.write(cipher.doFinal(clear))
-            output.flush()
-        } finally { clear.fill(0); password.fill('\u0000') }
+            require(password.size >= 8) { "Пароль резервной копии: минимум 8 символов" }
+            val salt = ByteArray(16).also(random::nextBytes)
+            val iv = ByteArray(12).also(random::nextBytes)
+            val header = magic + salt + iv
+            val clear = LedgerRecords.json.encodeToString(BackupEnvelope(ledger = ledger.validated())).toByteArray(Charsets.UTF_8)
+            try {
+                require(clear.size <= maxBytes - header.size - 16) { "Резервная копия слишком большая" }
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.ENCRYPT_MODE, key(password, salt), GCMParameterSpec(128, iv))
+                cipher.updateAAD(header)
+                val encrypted = cipher.doFinal(clear)
+                output.write(header)
+                output.write(encrypted)
+                output.flush()
+            } finally { clear.fill(0) }
+        } finally { password.fill('\u0000') }
     }
     fun read(password: CharArray, input: InputStream): Ledger {
         try {

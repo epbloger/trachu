@@ -6,6 +6,20 @@ plugins {
     id("org.jetbrains.kotlin.kapt")
     id("androidx.room")
 }
+
+// A release build never serves ads until its own RSYA banner is configured explicitly.
+val trachuAdsEnabled = providers.gradleProperty("trachuAdsEnabled").orElse("false").get()
+require(trachuAdsEnabled == "true" || trachuAdsEnabled == "false") {
+    "trachuAdsEnabled must be true or false"
+}
+val trachuBannerId = providers.gradleProperty("trachuBannerId").orElse("").get().trim()
+require(trachuBannerId.isEmpty() || Regex("R-M-[0-9]+-[0-9]+").matches(trachuBannerId)) {
+    "trachuBannerId must be an RSYA banner ID (R-M-...-...)"
+}
+require(trachuAdsEnabled != "true" || trachuBannerId.isNotEmpty()) {
+    "Enable release ads only after configuring this app's own trachuBannerId"
+}
+
 android {
     namespace = "ru.epbloger.trachu"
     compileSdk = 36
@@ -16,13 +30,24 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "YANDEX_BANNER_ID", "\"\"")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
+    buildTypes {
+        getByName("debug") {
+            // Yandex's official demo placement; never a production ad unit.
+            buildConfigField("String", "YANDEX_BANNER_ID", "\"demo-banner-yandex\"")
+        }
+        getByName("release") {
+            val activeId = if (trachuAdsEnabled == "true") trachuBannerId else ""
+            buildConfigField("String", "YANDEX_BANNER_ID", "\"$activeId\"")
+        }
+    }
     testOptions { unitTests.isReturnDefaultValues = false }
 }
 room {
@@ -31,6 +56,8 @@ room {
     schemaDirectory("$projectDir/schemas")
 }
 dependencies {
+    implementation("com.yandex.android:mobileads:8.7.0")
+    implementation("com.yandex.android:mobileads-compose:8.7.0")
     implementation(platform("androidx.compose:compose-bom:2025.10.01"))
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")

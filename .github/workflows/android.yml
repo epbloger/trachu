@@ -8,12 +8,14 @@ on:
       - '*.gradle.kts'
       - 'gradle.properties'
       - '.github/workflows/android.yml'
+      - '.github/scripts/device-tests.sh'
   pull_request:
     paths:
       - 'app/**'
       - '*.gradle.kts'
       - 'gradle.properties'
       - '.github/workflows/android.yml'
+      - '.github/scripts/device-tests.sh'
 
 permissions:
   contents: read
@@ -25,6 +27,9 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 50
+    env:
+      ORG_GRADLE_PROJECT_trachuAdsEnabled: ${{ vars.TRACHU_ADS_ENABLED || 'false' }}
+      ORG_GRADLE_PROJECT_trachuBannerId: ${{ vars.TRACHU_BANNER_ID || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,6 +57,28 @@ jobs:
           test -f "$SDK/platforms/android-36/android.jar"
       - name: Build APK and unsigned release AAB, unit tests and lint
         run: gradle --no-daemon --continue --stacktrace assembleDebug bundleRelease testDebugUnitTest lintDebug assembleDebugAndroidTest
+      - name: Record artifact provenance and inspect merged permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p qa
+          git rev-parse HEAD > qa/source-commit.txt
+          sha256sum app/build/outputs/apk/debug/*.apk app/build/outputs/bundle/release/*.aab > qa/SHA256SUMS
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          "$AAPT" dump permissions app/build/outputs/apk/debug/*.apk | tee qa/apk-permissions.txt
+          if grep -E 'permission\.(AD_ID|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|READ_CONTACTS|READ_SMS|RECORD_AUDIO)' qa/apk-permissions.txt; then
+            echo "::error::Unexpected advertising identifier or sensitive Android permission"
+            exit 1
+          fi
+          "$AAPT" dump badging app/build/outputs/apk/debug/*.apk > qa/apk-badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose app/build/outputs/apk/debug/*.apk > qa/apk-signature.txt
+          release_manifest="$(find app/build/intermediates/merged_manifests/release -name AndroidManifest.xml -print -quit)"
+          test -n "$release_manifest"
+          cp "$release_manifest" qa/release-manifest.xml
+          if grep -E 'android:name="[^"]*permission\.(AD_ID|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|READ_CONTACTS|READ_SMS|RECORD_AUDIO)"' "$release_manifest"; then
+            echo "::error::Unexpected sensitive permission in release manifest"
+            exit 1
+          fi
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -65,12 +92,23 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh
+      - name: Android 8 compatibility smoke tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 26
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: bash .github/scripts/device-tests.sh api26
       - name: Upload APK
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: trachu-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            qa/source-commit.txt
+            qa/SHA256SUMS
           if-no-files-found: warn
           retention-days: 14
       - name: Upload unsigned AAB
@@ -78,7 +116,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: trachu-unsigned-release-aab
-          path: app/build/outputs/bundle/release/*.aab
+          path: |
+            app/build/outputs/bundle/release/*.aab
+            qa/source-commit.txt
+            qa/SHA256SUMS
           if-no-files-found: warn
           retention-days: 14
       - name: Upload verification reports and generated Room schema

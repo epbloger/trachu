@@ -6,15 +6,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DateRange
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.graphics.luminance
 import java.time.LocalTime
 import androidx.compose.runtime.*
@@ -23,9 +27,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.testTag
@@ -83,8 +89,10 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
     }
 }
 @Composable fun Field(label: String, value: String, onChange: (String)->Unit, numeric: Boolean=false, modifier: Modifier=Modifier, singleLine: Boolean=true, supporting: String?=null, trailing:@Composable (() -> Unit)?=null) {
+    val focusManager=LocalFocusManager.current
     OutlinedTextField(value,onChange,modifier.fillMaxWidth().testTag("field:$label"),label={ Text(label) },singleLine=singleLine,
-        keyboardOptions=KeyboardOptions(keyboardType=if(numeric) KeyboardType.Decimal else KeyboardType.Text),
+        keyboardOptions=KeyboardOptions(keyboardType=if(numeric) KeyboardType.Decimal else KeyboardType.Text,imeAction=if(singleLine)ImeAction.Done else ImeAction.Default),
+        keyboardActions=KeyboardActions(onDone={focusManager.clearFocus()}),
         supportingText=if(supporting==null) null else { { Text(supporting) } },trailingIcon=trailing)
 }
 @Composable fun DateField(label:String,value:String,onChange:(String)->Unit,supporting:String="ГГГГ-ММ-ДД") {
@@ -124,6 +132,42 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
         }
     }
 }
+@Composable fun CategoryChoice(label:String, value:String, options:List<Category>, ledger:Ledger, onChoose:(String)->Unit) {
+    var open by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    fun title(c:Category)=c.parentId?.let{ledger.categoryName(it)+" / "+c.name} ?: c.name
+    val current=options.find{it.id==value}
+    Column(verticalArrangement=Arrangement.spacedBy(4.dp)) {
+        Text(label,style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedButton(onClick={query="";open=true},enabled=options.isNotEmpty(),modifier=Modifier.fillMaxWidth().testTag("category-choice:$label")) {
+            if(current!=null)CategoryDot(current,Modifier.padding(end=4.dp))
+            Text(current?.let(::title) ?: "Выбрать категорию",Modifier.weight(1f))
+            Text("⌄")
+        }
+        if(options.isEmpty())Text("Создайте категорию в разделе «Ещё».",style=MaterialTheme.typography.bodySmall)
+    }
+    if(open)Dialog(onDismissRequest={open=false},properties=DialogProperties(usePlatformDefaultWidth=false)) {
+        Surface(Modifier.widthIn(max=540.dp).fillMaxWidth(.94f).fillMaxHeight(.85f),shape=MaterialTheme.shapes.extraLarge) {
+            Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                Text("Выберите категорию",style=MaterialTheme.typography.headlineSmall)
+                Field("Поиск категории",query,{query=it})
+                val matches=options.filter{title(it).contains(query.trim(),ignoreCase=true)}.sortedBy{title(it)}
+                LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("category-list")) {
+                    items(matches,key={it.id}) { category ->
+                        Row(Modifier.fillMaxWidth().clickable{onChoose(category.id);open=false}.semantics{selected=category.id==value}.padding(vertical=8.dp),
+                            verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                            CategoryDot(category)
+                            Text(title(category),Modifier.weight(1f),style=MaterialTheme.typography.bodyLarge)
+                            if(category.id==value)Text("✓",color=MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                    if(matches.isEmpty())item{Text("Категории не найдены.",Modifier.padding(8.dp))}
+                }
+                TextButton(onClick={open=false},modifier=Modifier.align(Alignment.End)){Text("Отмена")}
+            }
+        }
+    }
+}
 @Composable fun MultiChoice(label:String, selected:Set<String>, options:List<String>, title:(String)->String,onChange:(Set<String>)->Unit){
     var open by remember { mutableStateOf(false) }
     Column(verticalArrangement=Arrangement.spacedBy(4.dp)) {
@@ -149,7 +193,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
             Text(label,style=MaterialTheme.typography.bodyLarge)
             if(detail!=null) Text(detail,style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Switch(checked,onCheckedChange=onChange)
+        Switch(checked,onCheckedChange=onChange,modifier=Modifier.testTag("toggle:$label").semantics{contentDescription=label})
     }
 }
 @Composable fun Form(title: String, onClose: ()->Unit, busy: Boolean, saveLabel: String="Сохранить", onSave: ()->Unit,
@@ -160,11 +204,13 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
             Column(Modifier.padding(20.dp)) {
                 Text(title,style=MaterialTheme.typography.headlineSmall)
                 Spacer(Modifier.height(12.dp))
-                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp),content=content)
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).testTag("form_content"),verticalArrangement=Arrangement.spacedBy(12.dp),content=content)
                 Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.End,verticalAlignment=Alignment.CenterVertically) {
-                    TextButton(onClick=onClose,enabled=!busy) { Text("Отмена") }
-                    Button(onClick=onSave,enabled=!busy,modifier=Modifier.testTag("form_save")) { if(busy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Text(saveLabel) }
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    @Composable fun Cancel(modifier:Modifier=Modifier) { TextButton(onClick=onClose,enabled=!busy,modifier=modifier) { Text("Отмена") } }
+                    @Composable fun Save(modifier:Modifier=Modifier) { Button(onClick=onSave,enabled=!busy,modifier=modifier.testTag("form_save")) { if(busy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Text(saveLabel) } }
+                    if(maxWidth<240.dp||LocalDensity.current.fontScale>=1.5f)Column(Modifier.fillMaxWidth()){Save(Modifier.fillMaxWidth());Cancel(Modifier.fillMaxWidth())}
+                    else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.End,verticalAlignment=Alignment.CenterVertically){Cancel();Save()}
                 }
             }
         }
@@ -211,7 +257,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
     val sign=when(entry.kind) { Kind.INCOME,Kind.REFUND,Kind.DEBT_IN,Kind.LOAN_IN->"+"; Kind.EXPENSE,Kind.DEBT_OUT,Kind.LOAN_OUT->"−"; Kind.TRANSFER->"" }
     val amount=sign+Money.format(entry.minor,a.currency)
     val amountColor=if(incoming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-    BoxWithConstraints(Modifier.fillMaxWidth().clickable(onClick=onClick).padding(vertical=10.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().testTag("operation-row").clickable(onClick=onClick).padding(vertical=10.dp)) {
         val stack=maxWidth<320.dp || LocalDensity.current.fontScale>=1.3f || amount.length>15
         Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
             CategoryDot(category)
@@ -219,10 +265,10 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
                 Text(ledger.entryName(entry),style=MaterialTheme.typography.titleMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
                 Text(listOf(dayLabel(entry.day),a.name,entry.note.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" · "),
                     style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2,overflow=TextOverflow.Ellipsis)
-                if(entry.status==EntryStatus.PLANNED)Text("Запланировано",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.tertiary)
-                if(stack)Text(amount,style=MaterialTheme.typography.titleMedium,color=amountColor)
+                if(entry.status==EntryStatus.PLANNED)Text(if(entry.autoPostPlanned)"Запланировано · автопроведение" else "Запланировано",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.tertiary)
+                if(stack)Text(amount,modifier=Modifier.testTag("operation-amount"),style=MaterialTheme.typography.titleMedium,color=amountColor)
             }
-            if(!stack)Text(amount,modifier=Modifier.widthIn(max=156.dp),style=MaterialTheme.typography.titleMedium,color=amountColor)
+            if(!stack)Text(amount,modifier=Modifier.widthIn(max=156.dp).testTag("operation-amount"),style=MaterialTheme.typography.titleMedium,color=amountColor)
         }
     }
 }

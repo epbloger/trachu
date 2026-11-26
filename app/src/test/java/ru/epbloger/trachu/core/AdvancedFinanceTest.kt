@@ -65,6 +65,36 @@ class AdvancedFinanceTest {
         assertEquals(months*100,progress.available)
         assertEquals(0L,progress.spent)
     }
+    @Test fun rolloverRejectsOverflowInsteadOfWrappingOnOlderAndroid() {
+        val budget=Budget(name="Лимит",monthlyMinor=Long.MAX_VALUE,startMonth=d("2026-01-01"),rollover=true)
+        assertEquals(Long.MAX_VALUE,Finance.budget(l,budget,d("2026-01-31")).available)
+        assertTrue(runCatching{Finance.budget(l,budget,d("2026-02-01"))}.exceptionOrNull() is ArithmeticException)
+    }
+    @Test fun refundCanTargetOneCategoryAndPreserveHistoricalRounding() {
+        val original=Finance.makeEntry(l,Kind.EXPENSE,"usd",333,day,listOf("food" to 111L,"home" to 222L))
+        val purchased=Finance.putEntry(l,original)
+        val refund=Finance.refund(purchased,original.id,100,day+1,categoryAmounts=listOf("home" to 100L))
+        val refunded=Finance.putEntry(purchased,refund)
+        assertEquals("home",refund.splits.single().categoryId)
+        assertEquals(111L,Finance.refundableSplits(refunded,original.id).first{it.categoryId=="food"}.minor)
+        assertEquals(122L,Finance.refundableSplits(refunded,original.id).first{it.categoryId=="home"}.minor)
+        assertTrue(runCatching{Finance.refund(refunded,original.id,123,day+2,categoryAmounts=listOf("home" to 123L))}.isFailure)
+        val closed=Finance.putEntry(refunded,Finance.refund(refunded,original.id,233,day+2))
+        assertEquals(0L,Finance.totals(closed,Period.month(day)).expense)
+        assertEquals(usd.openingMinor,Finance.balance(closed,"usd",day+2))
+        assertTrue(Finance.refundableSplits(closed,original.id).isEmpty())
+    }
+    @Test fun accruedInterestUsesHistoricalPrincipalRatherThanCurrentBalance() {
+        val debt=Debt("interest","Кредитор","a",true,100000,"36.5",openedDay=day)
+        val initial=l.copy(debts=listOf(debt))
+        val opened=Finance.putEntry(initial,Finance.makeEntry(initial,Kind.LOAN_IN,"a",100000,day,debtId=debt.id,principalMinor=100000))
+        val payment=Finance.makeEntry(opened,Kind.DEBT_OUT,"a",51000,day+10,debtId=debt.id,principalMinor=50000)
+        val paid=Finance.putEntry(opened,payment)
+        assertEquals(1500L,Finance.accruedInterest(paid,debt,day+20))
+        assertEquals(1000L,Finance.paidInterest(paid,debt,day+20))
+        assertEquals(500L,Finance.estimatedInterest(paid,debt,10))
+        assertEquals(null,Finance.accruedInterest(l,debt.copy(openedDay=null),day+20))
+    }
     @Test fun monthDaysAndAlternatingWeeks() {
         val monday=d("2026-11-02")
         val t=Finance.makeEntry(l,Kind.EXPENSE,"a",100,monday,listOf("food" to 100),status=EntryStatus.PLANNED)
@@ -86,6 +116,31 @@ class AdvancedFinanceTest {
         val excluded=actual.copy(accounts=actual.accounts.map{if(it.id=="a")it.copy(includeInStats=false) else it})
         assertEquals(0L,Finance.totals(excluded,Period.month(day)).expense)
         assertEquals(999000L,Finance.balance(excluded,"a",day))
+    }
+    @Test fun singleFuturePaymentPostsOnlyWhenDueAndOnlyOnce() {
+        val e=Finance.makeEntry(l,Kind.EXPENSE,"a",1000,day,listOf("food" to 1000),
+            status=EntryStatus.PLANNED,timeMinutes=720,autoPostPlanned=true)
+        val state=Finance.putEntry(l,e)
+        assertEquals(state,Finance.generate(state,day,throughMinutes=719))
+        assertEquals(state,Finance.generate(state,day,forecast=true))
+        val actual=Finance.generate(state,day,throughMinutes=720).validated()
+        assertEquals(EntryStatus.POSTED,actual.entries.single().status)
+        assertFalse(actual.entries.single().autoPostPlanned)
+        assertEquals(999000L,Finance.balance(actual,"a",day))
+        assertEquals(actual,Finance.generate(actual,day+1))
+        val archived=state.copy(accounts=state.accounts.map{if(it.id=="a")it.copy(archived=true)else it})
+        val skipped=Finance.generate(archived,day,throughMinutes=720).validated()
+        assertEquals(EntryStatus.PLANNED,skipped.entries.single().status)
+        assertFalse(skipped.entries.single().autoPostPlanned)
+    }
+    @Test fun projectedBalanceIncludesTransfersWithoutCountingThemAsIncome() {
+        val transfer=Finance.makeEntry(l,Kind.TRANSFER,"a",9000,day+1,targetId="usd",targetMinor=100,status=EntryStatus.PLANNED)
+        val state=Finance.putEntry(l,transfer)
+        val actual=Finance.valuation(state,day)
+        val projected=Finance.projectedValuation(state,listOf(transfer),day+2,day)
+        assertEquals(actual.minor-9000L+Money.convert(100,"USD","RUB","90.1234"),projected.minor)
+        assertEquals(0L,Finance.totals(state,Period.month(day)).net)
+        assertEquals(EntryStatus.PLANNED,state.entries.single().status)
     }
     @Test fun goalChangesAndRefundEditStayExact() {
         val g=Goal(name="Цель",targetMinor=10000,savedMinor=1000,adjustments=listOf(GoalAdjustment(minor=500),GoalAdjustment(minor=-200)))

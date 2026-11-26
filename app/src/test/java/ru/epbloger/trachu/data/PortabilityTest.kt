@@ -34,6 +34,32 @@ class PortabilityTest {
         assertEquals(first,second)
         assertEquals(2,first.entries.size)
     }
+    @Test fun spreadsheetEscapingRoundTripsLeadingApostrophes() {
+        val account=Account("''id","  =SUM(1,1)")
+        val initial=Ledger.initial().copy(accounts=listOf(account))
+        val state=Finance.putEntry(initial,Finance.makeEntry(initial,Kind.EXPENSE,account.id,123,today(),listOf("food" to 123L)))
+        val bytes=ByteArrayOutputStream().also{Csv.write(state,it)}.toByteArray()
+        assertEquals(state,Csv.read(bytes.inputStream()))
+        val text=bytes.toString(Charsets.UTF_8)
+        assertTrue(text.contains("'${account.name}"))
+        assertTrue(text.contains("data_v2"))
+        // Old exported files still read with the historical escaping format.
+        val legacy=ByteArrayOutputStream().also{Csv.write(original,it)}.toString("UTF-8").replace("data_v2","data")
+        assertEquals(original,Csv.read(legacy.byteInputStream()))
+    }
+    @Test fun spreadsheetSeparatorsInsideQuotedHeadersDoNotChangeDialect() {
+        assertEquals(listOf(listOf("a;b;c","d"),listOf("x","y")),Csv.parse("\"a;b;c\",d\nx,y\n"))
+    }
+    @Test fun invalidBackupWriteWipesPasswordBeforeReturning() {
+        val password="short".toCharArray()
+        assertTrue(runCatching{Backup.write(original,password,ByteArrayOutputStream())}.isFailure)
+        assertTrue(password.all{it=='\u0000'})
+    }
+    @Test fun oldOperationPayloadUsesSafeManualConfirmationDefault() {
+        val encoded=LedgerRecords.json.encodeToString(Entry.serializer(),original.entries.single())
+        val legacy=encoded.replace(",\"autoPostPlanned\":false","")
+        assertFalse(LedgerRecords.json.decodeFromString(Entry.serializer(),legacy).autoPostPlanned)
+    }
     @Test fun cbrNominalAndCrossRate() {
         val xml = """<ValCurs Date="26.11.2026"><Valute><CharCode>JPY</CharCode><Nominal>100</Nominal><Value>50,00</Value></Valute><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>100,00</Value></Valute></ValCurs>"""
         val rate = ExchangeRates.parse(xml.toByteArray(),"USD").first { it.currency=="JPY" }
