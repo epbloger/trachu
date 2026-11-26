@@ -20,12 +20,17 @@ import ru.epbloger.trachu.security.Preferences
 
 class BalanceWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context,id: GlanceId) {
-        val prefs=Preferences(context).current()
-        val ledger=LedgerStore.get(context).current()
-        val value=if(!prefs.protected && prefs.showWidgetBalance) {
-            val v=Finance.valuation(ledger)
-            Money.format(v.minor,ledger.baseCurrency)+(if(v.missingCurrencies.isNotEmpty()) " *" else "")
-        } else "••••••"
+        // Fail closed on unreadable preferences or ledger; never retain a stale
+        // visible balance after a failed refresh.
+        val value=try {
+            val prefs=Preferences(context).current()
+            if(!prefs.protected && prefs.showWidgetBalance) {
+                val ledger=LedgerStore.get(context).current()
+                val v=Finance.valuation(ledger)
+                Money.format(v.minor,ledger.baseCurrency)+(if(v.missingCurrencies.isNotEmpty()) " *" else "")
+            } else "••••••"
+        } catch(e:kotlinx.coroutines.CancellationException){throw e}
+        catch(_:Exception){"••••••"}
         provideContent { Content(context,value) }
     }
     @Composable private fun Content(context: Context,value: String) {

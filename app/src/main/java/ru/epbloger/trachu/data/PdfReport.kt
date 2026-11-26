@@ -10,7 +10,10 @@ import java.io.OutputStream
 import java.time.LocalDate
 
 object PdfReport {
-    fun write(ledger: Ledger, period: Period, output: OutputStream) {
+    fun write(ledger: Ledger, period: Period, output: OutputStream, accountId:String="") {
+        require(accountId.isEmpty() || ledger.accounts.any{it.id==accountId && it.includeInStats}) { "Счёт исключён из отчётов или удалён" }
+        val report=if(accountId.isEmpty())ledger else ledger.copy(accounts=ledger.accounts.map{it.copy(includeInStats=it.id==accountId && it.includeInStats)})
+        val included=report.accounts.filter{it.includeInStats}.map{it.id}.toSet()
         val doc = PdfDocument()
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         var page: PdfDocument.Page? = null
@@ -51,21 +54,35 @@ object PdfReport {
         }
         try {
             newPage()
-            val totals=Finance.totals(ledger,period)
+            row(if(accountId.isEmpty())"Счета: все включённые в отчёты" else "Счёт: "+ledger.accounts.first{it.id==accountId}.name)
+            row("Переводы и основной долг не входят в доходы и расходы.",false)
+            val totals=Finance.totals(report,period)
             row("Доходы: ${Money.format(totals.income,ledger.baseCurrency)}",true)
             row("Расходы: ${Money.format(totals.expense,ledger.baseCurrency)}",true)
             row("Результат: ${Money.format(totals.net,ledger.baseCurrency)}",true)
             y+=12
             row("По категориям",true)
-            Finance.byCategory(ledger,period).toList().sortedByDescending { it.second }.forEach { (id,amount) ->
+            Finance.byCategory(report,period).toList().sortedByDescending { it.second }.forEach { (id,amount) ->
+                row("${Finance.categoryLabel(ledger,id)}: ${Money.format(amount,ledger.baseCurrency)}")
+            }
+            row("Категории доходов",true)
+            Finance.byCategory(report,period,true).toList().sortedByDescending{it.second}.forEach{(id,amount)->
                 row("${Finance.categoryLabel(ledger,id)}: ${Money.format(amount,ledger.baseCurrency)}")
             }
             y+=12
             row("Операции",true)
-            ledger.entries.filter { it.status==EntryStatus.POSTED && it.day in period }.sortedByDescending { it.day }.forEach { e ->
+            ledger.entries.filter { it.status==EntryStatus.POSTED && it.day in period && (it.accountId in included || it.targetAccountId in included) }.sortedByDescending { it.day }.forEach { e ->
                 val a=ledger.accounts.first { it.id==e.accountId }
                 val kind=when(e.kind) { Kind.EXPENSE->"Расход"; Kind.INCOME->"Доход"; Kind.TRANSFER->"Перевод"; Kind.REFUND->"Возврат"; Kind.DEBT_IN,Kind.DEBT_OUT->"Погашение долга"; Kind.LOAN_IN,Kind.LOAN_OUT->"Получение / выдача займа" }
                 row("${LocalDate.ofEpochDay(e.day)}  $kind  ${Money.format(e.minor,a.currency)}  ${a.name}")
+                if(e.targetAccountId!=null && e.targetMinor!=null) {
+                    val target=ledger.accounts.first{it.id==e.targetAccountId}
+                    row("  → ${target.name}: ${Money.format(e.targetMinor,target.currency)}")
+                }
+                e.splits.forEach{row("  ${Finance.categoryLabel(ledger,it.categoryId)}: ${Money.format(it.minor,a.currency)}")}
+                if(e.debtId!=null)row("  Основная сумма: ${Money.format(e.principalMinor,a.currency)}; проценты: ${Money.format(Money.sub(e.minor,e.principalMinor),a.currency)}")
+                if(a.currency!=ledger.baseCurrency)row("  Исторический курс: ${e.rate}; ${Money.format(e.baseMinor,ledger.baseCurrency)}")
+                if(e.tags.isNotEmpty())row(e.tags.joinToString(" "){ "#$it" })
                 if(e.note.isNotBlank()) row(e.note)
             }
             page?.let { doc.finishPage(it); page=null }

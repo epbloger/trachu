@@ -1,6 +1,7 @@
 package ru.epbloger.trachu.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -173,7 +174,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
     Column(verticalArrangement=Arrangement.spacedBy(4.dp)) {
         Text(label,style=MaterialTheme.typography.labelLarge)
         Box {
-            OutlinedButton(onClick={open=true},modifier=Modifier.fillMaxWidth()){Text(if(selected.isEmpty())"Все категории" else "Выбрано: ${selected.size}")}
+            OutlinedButton(onClick={open=true},modifier=Modifier.fillMaxWidth()){Text(if(selected.isEmpty())"Все" else "Выбрано: ${selected.size}")}
             DropdownMenu(expanded=open,onDismissRequest={open=false},modifier=Modifier.heightIn(max=420.dp)){
                 DropdownMenuItem(text={Text("Сбросить")},onClick={onChange(emptySet())})
                 options.forEach { id->DropdownMenuItem(text={Text(title(id))},leadingIcon={Checkbox(checked=id in selected,onCheckedChange=null)},
@@ -226,7 +227,8 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
 }
 @Composable fun Progress(amount: Long, total: Long, color: Color=MaterialTheme.colorScheme.primary) {
     val p=if(total<=0L) 0f else (amount.toDouble()/total.toDouble()).coerceIn(0.0,1.0).toFloat()
-    LinearProgressIndicator(progress={p},modifier=Modifier.fillMaxWidth().height(8.dp),color=color,trackColor=MaterialTheme.colorScheme.surfaceVariant)
+    val displayed by animateFloatAsState(p,label="budget progress")
+    LinearProgressIndicator(progress={displayed},modifier=Modifier.fillMaxWidth().height(8.dp),color=color,trackColor=MaterialTheme.colorScheme.surfaceVariant)
 }
 @Composable fun Donut(segments: List<Pair<Color,Long>>, label: String, modifier: Modifier=Modifier) {
     val positive=segments.filter { it.second>0 }

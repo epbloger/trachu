@@ -20,6 +20,13 @@ require(trachuAdsEnabled != "true" || trachuBannerId.isNotEmpty()) {
     "Enable release ads only after configuring this app's own trachuBannerId"
 }
 
+// Release signing is deliberately opt-in. Keep the permanent keystore outside
+// the repository; secrets come only from the invoking environment.
+val signingEnabled = providers.environmentVariable("TRACHU_SIGNING_ENABLED").orElse("false").get()
+require(signingEnabled in listOf("true","false")) { "TRACHU_SIGNING_ENABLED must be true or false" }
+fun signingEnv(name:String):String = providers.environmentVariable(name).orNull
+    ?.takeIf{it.isNotBlank()} ?: error("Missing release signing environment variable: $name")
+
 android {
     namespace = "ru.epbloger.trachu"
     compileSdk = 36
@@ -38,12 +45,25 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true; buildConfig = true }
+    signingConfigs {
+        if(signingEnabled=="true")create("publisher") {
+            val keyFile=file(signingEnv("TRACHU_KEYSTORE_PATH")).canonicalFile
+            require(keyFile.isFile && !keyFile.toPath().startsWith(rootProject.projectDir.canonicalFile.toPath())) {
+                "Use a valid permanent keystore outside the project directory"
+            }
+            storeFile=keyFile
+            storePassword=signingEnv("TRACHU_KEYSTORE_PASSWORD")
+            keyAlias=signingEnv("TRACHU_KEY_ALIAS")
+            keyPassword=signingEnv("TRACHU_KEY_PASSWORD")
+        }
+    }
     buildTypes {
         getByName("debug") {
             // Yandex's official demo placement; never a production ad unit.
             buildConfigField("String", "YANDEX_BANNER_ID", "\"demo-banner-yandex\"")
         }
         getByName("release") {
+            if(signingEnabled=="true")signingConfig=signingConfigs.getByName("publisher")
             val activeId = if (trachuAdsEnabled == "true") trachuBannerId else ""
             buildConfigField("String", "YANDEX_BANNER_ID", "\"$activeId\"")
         }

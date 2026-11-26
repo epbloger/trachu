@@ -124,15 +124,16 @@ class EntryDraft {
         ids.value=ids.value+receipt.id
     }
 }
-@Composable fun EntryEditor(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, initialKind: Kind, current: Entry?=null, schedule: Schedule?=null, recurring: Boolean=false, close: ()->Unit, forcePlanned: Boolean=false, draft: EntryDraft, chooseReceipt: ()->Unit) {
+@Composable fun EntryEditor(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, initialKind: Kind, current: Entry?=null, schedule: Schedule?=null, recurring: Boolean=false, close: ()->Unit, forcePlanned: Boolean=false, draft: EntryDraft, chooseReceipt: ()->Unit, initialDay:Long?=null) {
     // Keep the snapshot from opening the draft, even if the ledger emits a newer entry.
     val original by draft.state("originalEntry") { schedule?.template ?: current }
+    val originalSchedule by draft.state("originalSchedule"){schedule}
     val active=ledger.accounts.filter{!it.archived || it.id==original?.accountId || it.id==original?.targetAccountId}.sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name})
     val defaultAccount=active.find{it.id==original?.accountId} ?: active.find{it.id==settings.lastAccount} ?: active.firstOrNull()
     var accountId by draft.state("accountId") { defaultAccount?.id.orEmpty() }
     var kind by draft.state("kind") { original?.kind ?: initialKind }
     var amount by draft.state("amount") { original?.let{Money.input(it.minor,ledger.accounts.first{a->a.id==it.accountId}.currency)}.orEmpty() }
-    var day by draft.state("day") { iso(schedule?.nextDay ?: original?.day ?: today()) }
+    var day by draft.state("day") { iso(schedule?.nextDay ?: original?.day ?: initialDay ?: today()) }
     var time by draft.state("time") { original?.timeMinutes?.let{"%02d:%02d".format(it/60,it%60)} ?: LocalTime.now().withSecond(0).withNano(0).toString() }
     var note by draft.state("note") { original?.note.orEmpty() }
     var tags by draft.state("tags") { original?.tags?.joinToString(", ").orEmpty() }
@@ -191,6 +192,7 @@ class EntryDraft {
                     status=if(plan)EntryStatus.PLANNED else EntryStatus.POSTED,explicitRate=rate,essential=essential,
                     timeMinutes=t.hour*60+t.minute,id=id,receiptIds=receiptIds,allowArchived=original!=null,autoPostPlanned=plan&&!recurring&&autoPostPlanned)
                 if(recurring) {
+                    if(originalSchedule!=null)require(old.schedules.find{it.id==originalSchedule?.id}==originalSchedule){"Расписание изменилось. Откройте его снова."}
                     val s=Schedule(schedule?.id ?: newId(),e,date,frequency,interval.toInt(),
                         endDay.trim().takeIf{it.isNotEmpty()}?.let(::parseDay),autoPost,enabled,
                         if(schedule!=null && schedule.nextDay==date)schedule.anchorDay else LocalDate.ofEpochDay(date).dayOfMonth,
@@ -368,7 +370,11 @@ class EntryDraft {
             require(date<=today()){"Дата возврата не может быть в будущем"}
             require(minor>0){"Введите положительную сумму возврата"}
             if(selected!=null)require(selected.all{(id,value)->value>0 && refundable.any{it.categoryId==id && value<=it.minor}}){"Проверьте доступные суммы по категориям"}
-            vm.change({l->Finance.putEntry(l,Finance.refund(l,entry.id,minor,date,note,current?.id ?: newId(),categoryAmounts=selected))},close)
+            vm.change({l->
+                require(l.entries.find{it.id==entry.id}==entry){"Покупка изменилась. Откройте её снова."}
+                if(current!=null)require(l.entries.find{it.id==current.id}==current){"Возврат изменился. Откройте его снова."}
+                Finance.putEntry(l,Finance.refund(l,entry.id,minor,date,note,current?.id ?: newId(),categoryAmounts=selected))
+            },close)
         }.onFailure{error=it.message ?: "Проверьте сумму"}
     }) {
         Text(ledger.entryName(entry));Text("Максимум: "+Money.format(left,account.currency))

@@ -97,5 +97,10 @@ class NavigationTest {
         rule.onNodeWithTag("nav-reports").performClick()
         rule.onNodeWithText("Аналитика").assertExists()
         capture("analytics_landscape")
+        rule.onNodeWithTag("nav-plan").performClick()
+        rule.onNodeWithText("Календарь",substring=false).performScrollTo().performClick()
+        rule.onNodeWithTag("calendar-next").performScrollTo().performClick()
+        rule.onNodeWithText("Добавить",substring=false).performScrollTo().performClick()
+        rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(java.time.YearMonth.now().plusMonths(1).atDay(1).toString())
     }
 }

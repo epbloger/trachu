@@ -7,9 +7,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.AppViewModel
 import ru.epbloger.trachu.core.*
@@ -20,10 +22,11 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"),DEBT("Долги"),RECURRING("Регулярные"),CALENDAR("Календарь")}
-@Composable fun Planner(ledger:Ledger,initial:PlannerTab=PlannerTab.BUDGET,editBudget:(Budget?)->Unit,editGoal:(Goal?)->Unit,editDebt:(Debt?)->Unit,payDebt:(Debt)->Unit,editSchedule:(Schedule?)->Unit,openEntry:(Entry)->Unit,addPlanned:()->Unit) {
-    var tab by remember(initial){mutableStateOf(initial)}
-    var month by remember{mutableStateOf(YearMonth.now())}
-    var selectedDay by remember{mutableStateOf(today())}
+@Composable fun Planner(ledger:Ledger,initial:PlannerTab=PlannerTab.BUDGET,editBudget:(Budget?)->Unit,editGoal:(Goal?)->Unit,editDebt:(Debt?)->Unit,payDebt:(Debt)->Unit,editSchedule:(Schedule?)->Unit,openEntry:(Entry)->Unit,addPlanned:(Long)->Unit) {
+    var tab by rememberSaveable(initial){mutableStateOf(initial)}
+    var monthKey by rememberSaveable{mutableStateOf(YearMonth.now().toString())}
+    val month=YearMonth.parse(monthKey)
+    var selectedDay by rememberSaveable{mutableStateOf(today())}
     val calendar=remember(ledger,month) {
         runCatching { Finance.generate(ledger,month.atEndOfMonth().toEpochDay(),true).entries }.getOrElse{ledger.entries}
             .filter{it.day in month.atDay(1).toEpochDay()..month.atEndOfMonth().toEpochDay()}
@@ -35,15 +38,18 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
                 item{SectionTitle("Бюджеты",action="Добавить"){editBudget(null)}}
                 if(ledger.budgets.isEmpty())item{EmptyState("Поставьте лимит","Общий месячный бюджет или лимит отдельной категории.","Создать бюджет"){editBudget(null)}}
                 items(ledger.budgets,key={it.id}){b->
-                    val r=Finance.budget(ledger,b,today())
+                    val r=runCatching{Finance.budget(ledger,b,today()).also{it.remaining}}.getOrNull()
                     Panel {
                         SectionTitle(b.name,b.categoryId?.let{ledger.categoryName(it)} ?: "Все расходы",action="Изменить"){editBudget(b)}
+                        if(r==null)Warning("Слишком большой накопленный лимит. Измените сумму или перенос.")
+                        else {
                         MoneyText(r.remaining,ledger.baseCurrency,large=true,color=if(r.remaining<0)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
                         Text("Остаток · ${Money.format(r.available,ledger.baseCurrency)} доступно")
                         Progress(r.spent,r.available,if(r.level>=2)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
                         Text("Факт: ${Money.format(r.spent,ledger.baseCurrency)} · ${r.percent}%")
                         Text(if(b.rollover)"Остаток переносится" else "Без переноса остатка",style=MaterialTheme.typography.bodySmall)
                         if(r.level>0)Warning(if(r.level==3)"Бюджет превышен" else if(r.level==2)"Лимит достигнут" else "Использовано 80% или больше")
+                        }
                     }
                 }
             }
@@ -101,11 +107,11 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
             PlannerTab.CALENDAR->{
                 item{
                     Panel {
-                        SectionTitle("Календарь",action="Добавить"){addPlanned()}
+                        SectionTitle("Календарь",action="Добавить"){addPlanned(selectedDay)}
                         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){
-                            TextButton(onClick={month=month.minusMonths(1);selectedDay=month.atDay(1).toEpochDay()}){Text("‹")}
+                            TextButton(onClick={val next=month.minusMonths(1);monthKey=next.toString();selectedDay=next.atDay(1).toEpochDay()}){Text("‹")}
                             Text(month.format(DateTimeFormatter.ofPattern("LLLL yyyy",Locale("ru"))),Modifier.weight(1f),style=MaterialTheme.typography.titleMedium)
-                            TextButton(onClick={month=month.plusMonths(1);selectedDay=month.atDay(1).toEpochDay()}){Text("›")}
+                            TextButton(modifier=Modifier.testTag("calendar-next"),onClick={val next=month.plusMonths(1);monthKey=next.toString();selectedDay=next.atDay(1).toEpochDay()}){Text("›")}
                         }
                         BoxWithConstraints(Modifier.fillMaxWidth()){
                             val compact=maxWidth<290.dp || LocalDensity.current.fontScale>1.35f
@@ -166,6 +172,7 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
         runCatching{
             val b=Budget(current?.id ?: newId(),name.trim(),category.ifBlank{null},Money.parse(amount,ledger.baseCurrency),parseDay(start),carry)
             require(b.monthlyMinor>0&&b.name.isNotBlank())
+            Finance.budget(ledger,b,today()).remaining
             vm.change({l->l.copy(budgets=l.budgets.filterNot{it.id==b.id}+b)},close)
         }.onFailure{error=it.message ?: "Проверьте данные"}
     }){
@@ -213,8 +220,10 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
                 runCatching {
                     val m=Money.parse(adjustment,current.currency);require(m>0)
                     val a=GoalAdjustment(minor=if(withdraw)-m else m,note=adjustmentNote)
-                    vm.change({l->l.copy(goals=l.goals.map{g->if(g.id==current.id)g.copy(adjustments=g.adjustments+a) else g})})
-                    adjustment="";adjustmentNote=""
+                    vm.change({l->
+                        require(l.goals.any{it.id==current.id}){"Цель удалена"}
+                        l.copy(goals=l.goals.map{g->if(g.id==current.id)g.copy(adjustments=g.adjustments+a) else g})
+                    }) { adjustment="";adjustmentNote="" }
                 }.onFailure{error=it.message ?: "Проверьте сумму"}
             },enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Записать изменение")}
             current.adjustments.takeLast(10).asReversed().forEach { a ->

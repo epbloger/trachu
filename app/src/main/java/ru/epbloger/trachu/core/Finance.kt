@@ -98,6 +98,10 @@ object Finance {
         require(planned.none { it.id in postedIds })
         return valuation(ledger.copy(entries=posted+planned.map{it.copy(status=EntryStatus.POSTED,autoPostPlanned=false)}),through,rateDay)
     }
+    /** Includes unresolved overdue items, plus occurrences through the forecast horizon.
+     * The original snapshot and occurrence cursors are never mutated. */
+    fun forecastEntries(ledger: Ledger, through:Long):List<Entry> =
+        generate(ledger,through,forecast=true).entries.filter{it.status==EntryStatus.PLANNED && it.day<=through}
     fun makeEntry(
         ledger: Ledger, kind: Kind, accountId: String, minor: Long, day: Long,
         categoryAmounts: List<Pair<String, Long>> = emptyList(), note: String = "",
@@ -205,7 +209,7 @@ object Finance {
         val ids=ledger.categories.filter{it.id==budget.categoryId || it.parentId==budget.categoryId}.map{it.id}.toSet()
         val spentByMonth=ledger.entries.asSequence().filter{
             it.status==EntryStatus.POSTED && it.accountId in included &&
-                it.day in first.atDay(1).toEpochDay()..target.atEndOfMonth().toEpochDay()
+                it.day in first.atDay(1).toEpochDay()..day
         }.map { entry ->
             val spent=if(budget.categoryId==null)expenseBase(entry)
             else if(entry.kind in setOf(Kind.EXPENSE,Kind.REFUND)) {
@@ -370,7 +374,7 @@ fun Ledger.validated(): Ledger {
         c.parentId?.let { p -> require(cc[p]?.parentId == null && cc[p]?.income == c.income && p != c.id && p in cc) }
     }
     require(rates.map { it.currency to it.day }.distinct().size == rates.size)
-    rates.forEach { Money.digits(it.currency); require(it.currency != baseCurrency); Money.convert(0, it.currency, baseCurrency, it.unitsOfBasePerUnit) }
+    rates.forEach { Money.digits(it.currency); require(it.currency != baseCurrency); LocalDate.ofEpochDay(it.day); Money.convert(0, it.currency, baseCurrency, it.unitsOfBasePerUnit) }
     fun checkEntry(e: Entry, template: Boolean = false) {
         val account = requireNotNull(aa[e.accountId])
         require(e.minor > 0 && e.baseMinor >= 0 && e.timeMinutes in 0..1439)
@@ -379,7 +383,8 @@ fun Ledger.validated(): Ledger {
         LocalDate.ofEpochDay(e.day)
         if (e.kind != Kind.REFUND) require(e.baseMinor == Money.convert(e.minor, account.currency, baseCurrency, e.rate))
         if (account.currency == baseCurrency) require(BigDecimal(e.rate).compareTo(BigDecimal.ONE) == 0)
-        require(e.receiptIds.all { it in rr })
+        require(e.receiptIds.size<=4 && e.receiptIds.distinct().size==e.receiptIds.size && e.receiptIds.all { it in rr })
+        require(e.note.length<=8_000 && e.tags.size<=100 && e.tags.all{it.length<=100} && e.splits.size<=200)
         when (e.kind) {
             Kind.INCOME, Kind.EXPENSE, Kind.REFUND -> {
                 require(e.targetAccountId == null && e.targetMinor == null && e.debtId == null && e.principalMinor == 0L)
@@ -418,7 +423,6 @@ fun Ledger.validated(): Ledger {
     // Bound the absolute reporting volume so arbitrary period aggregation and
     // per-category arithmetic cannot overflow on a valid ledger.
     Money.sum(entries.map { it.baseMinor })
-    require(entries.all { it.note.length <= 8_000 && it.tags.size <= 100 && it.tags.all { tag -> tag.length <= 100 } && it.splits.size <= 200 && it.receiptIds.size <= 4 })
     require(accounts.all { it.name.length <= 160 } && categories.all { it.name.length <= 160 && it.icon.length <= 24 })
     require(debts.all { it.note.length <= 8_000 && it.person.length <= 160 })
     entries.filter { it.kind == Kind.REFUND }.groupBy { it.originalId }.forEach { (id, refunds) ->
@@ -431,6 +435,8 @@ fun Ledger.validated(): Ledger {
         }
     }
     debts.forEach {
+        it.dueDay?.let(LocalDate::ofEpochDay)
+        it.openedDay?.let(LocalDate::ofEpochDay)
         val percent=BigDecimal(it.annualPercent)
         require(it.person.isNotBlank() && it.accountId in aa && it.principalMinor > 0 && percent >= BigDecimal.ZERO && percent <= BigDecimal("1000") && percent.scale() in -3..6)
         val openings=entries.filter { e -> e.debtId == it.id && e.kind in setOf(Kind.LOAN_IN,Kind.LOAN_OUT) }
@@ -438,6 +444,7 @@ fun Ledger.validated(): Ledger {
         require(Finance.debtRemaining(this, it) >= 0) { "Погашение больше остатка долга" }
     }
     goals.forEach {
+        it.dueDay?.let(LocalDate::ofEpochDay)
         Money.digits(it.currency)
         require(it.name.isNotBlank() && it.targetMinor > 0 && it.savedMinor >= 0 && it.adjustments.size <= 500)
         unique(it.adjustments.map { a -> a.id })
@@ -447,7 +454,9 @@ fun Ledger.validated(): Ledger {
     budgets.forEach {
         require(it.name.isNotBlank() && it.monthlyMinor>0 && (it.categoryId==null || cc[it.categoryId]?.income==false))
         LocalDate.ofEpochDay(it.startMonth)
-        Finance.budget(this,it,today()).remaining
+        // Calendar progression must never invalidate an otherwise valid stored
+        // ledger. A very large rollover can overflow the display later; handle
+        // this on the budget screen/worker instead of preventing database reads.
     }
     schedules.forEach { require(it.interval in 1..365 && it.anchorDay in 1..31 && it.template.kind in setOf(Kind.EXPENSE, Kind.INCOME, Kind.TRANSFER)); checkEntry(it.template, true); LocalDate.ofEpochDay(it.nextDay)
         require(it.weekdays.all { d->d in 1..7 } && it.weekdays.distinct().size==it.weekdays.size)
@@ -455,8 +464,15 @@ fun Ledger.validated(): Ledger {
         require(it.alternateWeekdays.isEmpty() || it.interval==2 && it.frequency==Frequency.WEEKLY && it.weekdays.isNotEmpty())
         require(it.monthDays.all { d->d in 1..31 } && it.monthDays.distinct().size==it.monthDays.size)
         LocalDate.ofEpochDay(it.anchorEpochDay)
+        it.endDay?.let(LocalDate::ofEpochDay)
+        require(it.endDay==null || !it.enabled || it.nextDay<=it.endDay)
     }
-    receipts.forEach { require(it.mime in setOf("image/jpeg", "image/png", "image/webp") && it.base64.length <= 8_000_000) }
+    receipts.forEach {
+        require(it.mime in setOf("image/jpeg", "image/png", "image/webp") && it.base64.isNotEmpty() && it.base64.length <= 8_000_000)
+        require(it.base64.length%4==0 && it.base64.all { c-> c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' || c=='+' || c=='/' || c=='=' }) { "Повреждённые данные чека" }
+        val firstPadding=it.base64.indexOf('=')
+        require(firstPadding<0 || it.base64.length-firstPadding<=2 && it.base64.substring(firstPadding).all{c->c=='='}) { "Повреждённые данные чека" }
+    }
     accounts.forEach { Finance.balance(this, it.id, Long.MAX_VALUE) }
     Finance.valuation(this)
     return this

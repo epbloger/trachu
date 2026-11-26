@@ -6,6 +6,10 @@ import java.io.OutputStream
 import java.time.LocalDate
 
 object Csv {
+    private fun decodeUtf8(bytes:ByteArray):String = Charsets.UTF_8.newDecoder()
+        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+        .decode(java.nio.ByteBuffer.wrap(bytes)).toString()
     private val legacyHeader = listOf("type", "id", "date", "account", "operation", "amount", "currency", "note", "data")
     private val header = legacyHeader.dropLast(1) + "data_v2"
     private fun needsEscaping(s: String) =
@@ -73,7 +77,7 @@ object Csv {
     }
     /** Import the complete lossless Trachu CSV. Identical IDs are idempotent; conflicts are rejected. */
     fun read(input: InputStream): Ledger {
-        val rows = parse(input.readBounded(100*1024*1024).toString(Charsets.UTF_8))
+        val rows = parse(decodeUtf8(input.readBounded(100*1024*1024)))
         val legacy = rows.firstOrNull() == legacyHeader
         require(legacy || rows.firstOrNull() == header) { "Нужна таблица ТРАЧУ. или формат выписки" }
         fun unescape(value: String): String = if (!legacy) unsafe(value) else
@@ -104,7 +108,7 @@ object Csv {
      * content+occurrence ID unless the source provides its own ID.
      */
     fun importStatement(input: InputStream, ledger: Ledger, accountId: String): Ledger {
-        val rows = parse(input.readBounded(20*1024*1024).toString(Charsets.UTF_8))
+        val rows = parse(decodeUtf8(input.readBounded(20*1024*1024)))
         val h = rows.firstOrNull()?.map { it.trim().lowercase() } ?: error("Таблица пуста")
         require(h.distinct().size == h.size && listOf("date","amount","category").all { it in h }) { "Столбцы: date,amount,category,note,id" }
         val account = ledger.accounts.first { it.id == accountId && !it.archived }
@@ -119,6 +123,7 @@ object Csv {
                 val signed = Money.parse(col("amount"), account.currency)
                 require(signed != 0L && signed != Long.MIN_VALUE)
                 val day = LocalDate.parse(col("date")).toEpochDay()
+                require(day<=today()){"Выписка не может содержать будущие операции"}
                 val income = signed > 0
                 val name = col("category").ifBlank { if (income) "Другие доходы" else "Другое" }
                 val category = categoryIndex.getOrPut(name.lowercase() to income) {
@@ -134,7 +139,7 @@ object Csv {
                 if (old == null) {
                     entries[id] = Finance.makeEntry(ledger,kind,accountId,minor,day,
                         listOf(category.id to minor),col("note"),id=id)
-                } else require(old.accountId == accountId && old.minor == minor && old.kind == kind && old.day == day &&
+                } else require(old.status==EntryStatus.POSTED && old.accountId == accountId && old.minor == minor && old.kind == kind && old.day == day &&
                     old.note == col("note") && old.splits.map { it.categoryId } == listOf(category.id)) { "Конфликт операции" }
             } catch (e: Exception) { throw IllegalArgumentException("Строка ${index+2}: ${e.message ?: "ошибка импорта"}",e) }
         }

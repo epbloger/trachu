@@ -8,6 +8,8 @@ import org.junit.runner.RunWith
 import ru.epbloger.trachu.core.Ledger
 import ru.epbloger.trachu.data.Backup
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.runBlocking
+import androidx.test.platform.app.InstrumentationRegistry
 
 @RunWith(AndroidJUnit4::class)
 class DeviceSecurityTest {
@@ -27,5 +29,29 @@ class DeviceSecurityTest {
         Backup.write(ledger,"test-password-2026".toCharArray(),out)
         assertEquals(ledger,Backup.read("test-password-2026".toCharArray(),out.toByteArray().inputStream()))
         assertTrue(runCatching{Backup.read("wrong-password".toCharArray(),out.toByteArray().inputStream())}.isFailure)
+    }
+    @Test fun persistedPinRateLimitConsentAndBudgetThreshold()=runBlocking {
+        // Instrumented runs use a fresh app sandbox; restore security defaults afterwards.
+        val prefs=Preferences(InstrumentationRegistry.getInstrumentation().targetContext)
+        prefs.setCredential("test-credential")
+        try {
+            repeat(5){prefs.pinResult(false)}
+            assertEquals(5,prefs.current().failedAttempts)
+            assertTrue(prefs.current().lockedUntil>System.currentTimeMillis())
+            repeat(2){prefs.pinResult(false)}
+            assertEquals(5,prefs.current().failedAttempts)
+            prefs.pinResult(true)
+            assertEquals(0,prefs.current().failedAttempts)
+            assertEquals(0L,prefs.current().lockedUntil)
+            prefs.adsConsent(true);assertEquals(true,prefs.current().adsConsent)
+            prefs.adsConsent(false);assertEquals(false,prefs.current().adsConsent)
+            val id=java.util.UUID.randomUUID().toString()
+            assertTrue(prefs.markBudgetNotice(id,"2026-11",1))
+            assertFalse(prefs.markBudgetNotice(id,"2026-11",0))
+            assertFalse(prefs.markBudgetNotice(id,"2026-11",1))
+            assertTrue(prefs.markBudgetNotice(id,"2026-11",2))
+            assertFalse(prefs.markBudgetNotice(id,"2026-11",1))
+            assertTrue(prefs.markBudgetNotice(id,"2026-12",1))
+        } finally { prefs.setCredential("");prefs.adsConsent(false) }
     }
 }

@@ -15,6 +15,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.AppViewModel
+import ru.epbloger.trachu.BuildConfig
 import ru.epbloger.trachu.core.*
 import ru.epbloger.trachu.security.Settings
 import ru.epbloger.trachu.widget.refreshWidgets
@@ -138,7 +139,9 @@ enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"),
 @Composable fun SettingsPage(settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,authenticate:((()->Unit)->Unit),back:()->Unit){
     var pinDialog by remember{mutableStateOf(false)}
     var removeDialog by remember{mutableStateOf(false)}
-    val notify=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){}
+    val notify=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){ granted ->
+        if(granted) ru.epbloger.trachu.worker.FinanceWorker.refresh(vm.getApplication())
+    }
     LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
         item{SectionTitle("Настройки",action="Назад",onAction=back)}
         item{Panel{
@@ -165,10 +168,14 @@ enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"),
         item{Panel{
             SectionTitle("Виджет и уведомления")
             Toggle("Показывать баланс на виджете",settings.showWidgetBalance,{v->vm.perform{
-                vm.preferences.widget(v);ru.epbloger.trachu.worker.FinanceWorker.refresh(vm.getApplication())
+                vm.preferences.widget(v);ru.epbloger.trachu.widget.refreshWidgets(vm.getApplication())
             }},"При включённом PIN сумма всегда скрыта.")
             if(Build.VERSION.SDK_INT>=33)Button(onClick={notify.launch(Manifest.permission.POST_NOTIFICATIONS)}){Text("Разрешить уведомления")}
             Text("Напоминания о плановых операциях, долгах и превышении бюджета. Android может откладывать фоновые задачи.",style=MaterialTheme.typography.bodyMedium)
+        }}
+        if(!BuildConfig.DEBUG && BuildConfig.YANDEX_BANNER_ID.isNotEmpty())item{Panel{
+            SectionTitle("Реклама и конфиденциальность")
+            AdConsentPanel(settings.adsConsent){value->vm.perform{vm.preferences.adsConsent(value)}}
         }}
     }
     if(pinDialog||removeDialog){
@@ -186,6 +193,19 @@ enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"),
             if(!removeDialog){PinField("Новый PIN",pin,{pin=it});PinField("Повторите PIN",repeat,{repeat=it})}
             if(error.isNotEmpty())Warning(error)
         }
+    }
+}
+
+@Composable fun AdConsentPanel(current:Boolean?=null,onChoose:(Boolean)->Unit) {
+    val uri=androidx.compose.ui.platform.LocalUriHandler.current
+    Column(Modifier.fillMaxWidth().padding(12.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+        Text("Поддержать приложение рекламой",style=MaterialTheme.typography.titleSmall)
+        Text("При согласии Яндекс может обрабатывать технические данные и использовать их для рекламы. Финансовые записи не передаются. Можно отказаться без потери функций.",style=MaterialTheme.typography.bodySmall)
+        TextButton(onClick={runCatching{uri.openUri("https://epbloger.github.io/trachu/privacy.html")}}){Text("Политика конфиденциальности")}
+        if(current==null)Column(Modifier.fillMaxWidth()){
+            Button(onClick={onChoose(true)},modifier=Modifier.fillMaxWidth()){Text("Согласен")}
+            OutlinedButton(onClick={onChoose(false)},modifier=Modifier.fillMaxWidth()){Text("Отказаться")}
+        }else Toggle("Разрешить рекламу",current,onChoose,"Отказ прекращает новые рекламные запросы.")
     }
 }
 data class FileRequest(val mode:String,val save:Boolean,val password:String="",val account:String="",val period:Period=Period.month())
@@ -226,8 +246,8 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
             else {launch(FileRequest("backup",save,password));backup=null}
         }){
             if(!save)Warning("Восстановление полностью заменит текущие финансовые данные после проверки пароля и целостности файла.")
-            OutlinedTextField(password,{password=it},Modifier.fillMaxWidth(),label={Text("Пароль")},visualTransformation=PasswordVisualTransformation(),singleLine=true)
-            if(save)OutlinedTextField(repeat,{repeat=it},Modifier.fillMaxWidth(),label={Text("Повторите пароль")},visualTransformation=PasswordVisualTransformation(),singleLine=true)
+            OutlinedTextField(password,{password=it},Modifier.fillMaxWidth(),label={Text("Пароль")},visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),singleLine=true)
+            if(save)OutlinedTextField(repeat,{repeat=it},Modifier.fillMaxWidth(),label={Text("Повторите пароль")},visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),singleLine=true)
             Text("Пароль нигде не хранится. Восстановить забытый пароль невозможно.")
             if(error.isNotEmpty())Warning(error)
         }

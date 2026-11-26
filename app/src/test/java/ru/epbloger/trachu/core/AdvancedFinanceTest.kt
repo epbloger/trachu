@@ -153,4 +153,29 @@ class AdvancedFinanceTest {
         assertEquals(213L,Finance.totals(edited,Period.month(day)).expense)
         assertEquals(2,edited.entries.size)
     }
+    @Test fun forecastIncludesOverdueWithoutMutatingActualLedger() {
+        val old=Finance.makeEntry(l,Kind.EXPENSE,"a",200,day-1,listOf("food" to 200L),status=EntryStatus.PLANNED)
+        val next=Finance.makeEntry(l,Kind.INCOME,"a",500,day+2,listOf("salary" to 500L),status=EntryStatus.PLANNED)
+        val state=Finance.putEntry(Finance.putEntry(l,old),next)
+        val planned=Finance.forecastEntries(state,day+3)
+        assertEquals(setOf(old.id,next.id),planned.map{it.id}.toSet())
+        assertEquals(Finance.valuation(state,day).minor+300L,Finance.projectedValuation(state,planned,day+3,day).minor)
+        assertEquals(a.openingMinor,Finance.balance(state,a.id,day+3))
+    }
+    @Test fun budgetAsOfDateIgnoresLaterPostedMovementsAndOverflowDoesNotInvalidateLedger() {
+        val entry=Finance.makeEntry(l,Kind.EXPENSE,"a",200,day+3,listOf("food" to 200L))
+        val state=Finance.putEntry(l,entry)
+        val budget=Budget(name="Лимит",monthlyMinor=1000,startMonth=day)
+        assertEquals(0L,Finance.budget(state,budget,day).spent)
+        assertEquals(200L,Finance.budget(state,budget,day+3).spent)
+        val huge=budget.copy(monthlyMinor=Long.MAX_VALUE,rollover=true,startMonth=day-365)
+        val stored=state.copy(budgets=listOf(huge)).validated()
+        assertTrue(runCatching{Finance.budget(stored,huge,day)}.isFailure)
+        assertEquals(999800L,Finance.balance(stored,"a",day+3))
+    }
+    @Test fun malformedImportedDatesAndReceiptDataAreRejected() {
+        assertTrue(runCatching{l.copy(goals=listOf(Goal(name="Цель",targetMinor=100,dueDay=Long.MAX_VALUE))).validated()}.isFailure)
+        assertTrue(runCatching{l.copy(receipts=listOf(Receipt(mime="image/png",base64="!!=="))).validated()}.isFailure)
+        assertTrue(runCatching{l.copy(rates=l.rates+FxRate("USD",Long.MAX_VALUE,"1")).validated()}.isFailure)
+    }
 }

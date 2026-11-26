@@ -27,7 +27,8 @@ class FinanceWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         val prefs=Preferences(applicationContext)
         val manager=applicationContext.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("finance","Финансовые напоминания",NotificationManager.IMPORTANCE_DEFAULT))
-        if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(applicationContext,Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED) {
+        if (manager.areNotificationsEnabled() && manager.getNotificationChannel("finance")?.importance!=NotificationManager.IMPORTANCE_NONE &&
+            (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(applicationContext,Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED)) {
             val pending=PendingIntent.getActivity(applicationContext,0,Intent(applicationContext,MainActivity::class.java),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             fun show(id: Int, message: String) {
                 manager.notify(id,NotificationCompat.Builder(applicationContext,"finance")
@@ -43,7 +44,7 @@ class FinanceWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 show(101,"Есть обязательства с наступившим сроком.")
             val month=YearMonth.now().toString()
             ledger.budgets.forEach { budget ->
-                 val level=Finance.budget(ledger,budget,day).level
+                val level=runCatching{Finance.budget(ledger,budget,day).level}.getOrNull() ?: return@forEach
                 if(prefs.markBudgetNotice(budget.id,month,level))
                     show(1000+budget.id.hashCode().and(0x3fffffff),when(level){1->"Бюджет использован на 80%.";2->"Достигнут лимит бюджета.";else->"Лимит бюджета превышен."})
             }

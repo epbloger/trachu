@@ -65,4 +65,10 @@ class PortabilityTest {
         val rate = ExchangeRates.parse(xml.toByteArray(),"USD").first { it.currency=="JPY" }
         assertEquals("0.005",rate.unitsOfBasePerUnit)
     }
+    @Test fun malformedUtf8AndFutureStatementAreRejected() {
+        val invalid="date,amount,category,note\n2026-01-01,-1,Продукты,".toByteArray()+byteArrayOf(0xc3.toByte(),0x28)
+        assertTrue(runCatching{Csv.importStatement(invalid.inputStream(),original,"a")}.isFailure)
+        val future="date,amount,category\n${java.time.LocalDate.now().plusDays(1)},-1,Продукты\n"
+        assertTrue(runCatching{Csv.importStatement(future.byteInputStream(),original,"a")}.isFailure)
+    }
 }

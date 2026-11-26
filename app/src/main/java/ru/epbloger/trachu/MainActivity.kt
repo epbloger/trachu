@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.epbloger.trachu.core.*
 import ru.epbloger.trachu.ads.OverviewAdBanner
+import ru.epbloger.trachu.ads.updateAdsConsent
 import ru.epbloger.trachu.security.Settings
 import ru.epbloger.trachu.ui.*
 
@@ -43,6 +44,7 @@ class MainActivity : FragmentActivity() {
     private var biometricInProgress=false
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         enableEdgeToEdge()
          handleIntent(intent)
         setContent {
@@ -53,7 +55,7 @@ class MainActivity : FragmentActivity() {
             val loadingError by vm.loadingError.collectAsStateWithLifecycle()
             val unlocked by vm.unlocked.collectAsStateWithLifecycle()
             SideEffect {
-                if(settings?.protected == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                if(settings==null || settings?.protected == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
             }
             TrachuTheme(settings?.theme ?: "system") {
@@ -115,7 +117,7 @@ private enum class Tab(val label:String,val icon:ImageVector) {
     HOME("Обзор",Icons.Outlined.Home), OPERATIONS("Операции",Icons.Outlined.AccountBalanceWallet),
     PLAN("План",Icons.Outlined.CalendarMonth), REPORTS("Отчёты",Icons.Outlined.BarChart), MORE("Ещё",Icons.Outlined.MoreHoriz)
 }
-private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXPENSE)
+private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXPENSE,val initialDay:Long?=null)
 
 @Composable private fun AppShell(ledger:Ledger,settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,locked:Boolean,authenticate:((()->Unit)->Unit)){
     var tab by rememberSaveable{mutableStateOf(Tab.HOME)}
@@ -132,10 +134,11 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
     }
     fun chooseReceipt(){receiptRequest=entryDraft;receiptPicker.launch("image/*")}
     val quick by vm.quick.collectAsStateWithLifecycle()
+    LaunchedEffect(settings.adsConsent){updateAdsConsent(settings.adsConsent==true)}
     val save=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
         val request=fileRequest;fileRequest=null
         val uri=result.data?.data
-        if(result.resultCode==android.app.Activity.RESULT_OK && request!=null && uri!=null)vm.export(uri,request.mode,request.password,request.period)
+        if(result.resultCode==android.app.Activity.RESULT_OK && request!=null && uri!=null)vm.export(uri,request.mode,request.password,request.period,request.account)
     }
     val load=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){uri->
         val request=fileRequest;fileRequest=null
@@ -152,9 +155,9 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
         }else load.launch(if(request.mode=="backup")arrayOf("*/*") else arrayOf("text/*","application/csv","application/vnd.ms-excel","application/octet-stream"))
     }
     fun openMore(page:MorePage){tab=Tab.MORE;more=page}
-    fun add(kind:Kind,planned:Boolean=false){
+    fun add(kind:Kind,planned:Boolean=false,initialDay:Long?=null){
         if(ledger.accounts.none{!it.archived}){openMore(MorePage.ACCOUNTS);editor=Editor("account")}
-        else editor=Editor(if(planned)"planned" else "entry",kind=kind)
+        else editor=Editor(if(planned)"planned" else "entry",kind=kind,initialDay=initialDay)
     }
     fun schedule(s:Schedule?){
         if(ledger.accounts.none{!it.archived}){openMore(MorePage.ACCOUNTS);editor=Editor("account")}
@@ -169,6 +172,7 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
     BoxWithConstraints(Modifier.fillMaxSize()){
         // Keep every navigation destination reachable on short landscape phones.
         val rail=maxWidth>=680.dp && maxHeight>=460.dp
+        val allowBanner=maxHeight>=460.dp && LocalDensity.current.fontScale<1.5f
         val largeFont=LocalDensity.current.fontScale>=1.5f
         Row(Modifier.fillMaxSize()){
             if(rail)NavigationRail(modifier=Modifier.fillMaxHeight().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start+WindowInsetsSides.Top+WindowInsetsSides.Bottom)),
@@ -185,12 +189,14 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
                     if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
                     Box(Modifier.weight(1f)){
                         when(tab){
-                            Tab.HOME->Dashboard(ledger,{add(it)},{editor=Editor("detail",it.id)},{openMore(MorePage.ACCOUNTS)},{tab=Tab.REPORTS},{tab=Tab.PLAN;plan=PlannerTab.BUDGET},{tab=Tab.OPERATIONS},{tab=Tab.PLAN;plan=PlannerTab.CALENDAR},settings.monthStart)
+                            Tab.HOME->Dashboard(ledger,{add(it)},{editor=Editor("detail",it.id)},{openMore(MorePage.ACCOUNTS)},{tab=Tab.REPORTS},{tab=Tab.PLAN;plan=PlannerTab.BUDGET},{tab=Tab.OPERATIONS},{tab=Tab.PLAN;plan=PlannerTab.CALENDAR},settings.monthStart,
+                                consentContent=if(!BuildConfig.DEBUG && BuildConfig.YANDEX_BANNER_ID.isNotEmpty() && settings.adsConsent==null)
+                                    {{AdConsentPanel { accepted->vm.perform{vm.preferences.adsConsent(accepted)} }}} else null)
                             Tab.OPERATIONS->Operations(ledger,{add(it)},{editor=Editor("detail",it.id)},settings.monthStart)
                             Tab.PLAN->Planner(ledger,plan,{editor=Editor("budget",it?.id)},{editor=Editor("goal",it?.id)},
                                 {if(ledger.accounts.isEmpty()){openMore(MorePage.ACCOUNTS);editor=Editor("account")}else editor=Editor("debt",it?.id)},
-                                {editor=Editor("payment",it.id)},::schedule,{editor=Editor("detail",it.id)},{add(Kind.EXPENSE,true)})
-                            Tab.REPORTS->Reports(ledger,settings.monthStart){file(FileRequest("pdf",true,period=it))}
+                                {editor=Editor("payment",it.id)},::schedule,{editor=Editor("detail",it.id)},{day->add(Kind.EXPENSE,true,day)})
+                            Tab.REPORTS->Reports(ledger,settings.monthStart){period,account->file(FileRequest("pdf",true,period=period,account=account))}
                             Tab.MORE->when(more){
                                 MorePage.INDEX->MoreIndex{more=it}
                                 MorePage.ACCOUNTS->Accounts(ledger,{editor=Editor("account",it?.id)},{add(Kind.TRANSFER)},{more=MorePage.INDEX}){id,delta->
@@ -211,8 +217,8 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
                     }
                     // Only the overview may show an ad. Editors, details, quick entry,
                     // lock screen and financial actions remove it from composition.
-                    if(tab==Tab.HOME && editor==null && quick==null && !busy) {
-                        OverviewAdBanner()
+                    if(tab==Tab.HOME && editor==null && quick==null && !busy && allowBanner) {
+                        OverviewAdBanner(settings.adsConsent)
                     }
                 }
             }
@@ -228,7 +234,7 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
             when(current.type){
                 "account"->AccountEditor(ledger,ledger.accounts.find{it.id==current.id},busy,vm,close)
                 "category"->CategoryEditor(ledger,ledger.categories.find{it.id==current.id},busy,vm,close)
-                "entry","planned"->EntryEditor(ledger,settings,vm,busy,current.kind,current=ledger.entries.find{it.id==current.id},close=close,forcePlanned=current.type=="planned",draft=entryDraft,chooseReceipt=::chooseReceipt)
+                "entry","planned"->EntryEditor(ledger,settings,vm,busy,current.kind,current=ledger.entries.find{it.id==current.id},close=close,forcePlanned=current.type=="planned",draft=entryDraft,chooseReceipt=::chooseReceipt,initialDay=current.initialDay)
                 "schedule"->EntryEditor(ledger,settings,vm,busy,Kind.EXPENSE,schedule=ledger.schedules.find{it.id==current.id},recurring=true,close=close,draft=entryDraft,chooseReceipt=::chooseReceipt)
                 "detail"->ledger.entries.find{it.id==current.id}?.let{e->EntryDetails(ledger,e,vm,busy,close,{
                     editor=when(e.kind){

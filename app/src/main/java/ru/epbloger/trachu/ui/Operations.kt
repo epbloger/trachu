@@ -20,19 +20,24 @@ import ru.epbloger.trachu.core.*
     var account by rememberSaveable { mutableStateOf("") }
     var categoryIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     val categories=categoryIds.toSet()
+    var tagIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    val tags=tagIds.toSet()
+    val availableTags=remember(ledger){ledger.entries.flatMap{it.tags}.distinct().sorted()}
     var type by rememberSaveable { mutableStateOf(PeriodType.MONTH) }
     var period by rememberSaveable(monthStart,stateSaver=PeriodSaver) { mutableStateOf(Period.month(startDay=monthStart)) }
     var allDates by rememberSaveable { mutableStateOf(true) }
     var sort by rememberSaveable { mutableStateOf("Новые") }
     var expanded by rememberSaveable { mutableStateOf(false) }
-    val entries=remember(ledger,query,filter,account,categories,period,allDates,sort) {
+    val entries=remember(ledger,query,filter,account,categories,tags,period,allDates,sort) {
         val q=query.trim().lowercase()
         val selected=ledger.entries.filter { e->
             (allDates || e.day in period) &&
             (account.isEmpty() || e.accountId==account || e.targetAccountId==account) &&
             (categories.isEmpty() || e.splits.any{it.categoryId in categories || ledger.categories.find{c->c.id==it.categoryId}?.parentId in categories}) &&
+            (tags.isEmpty() || e.tags.any{it in tags}) &&
             (filter=="Все" || filter=="План" && e.status==EntryStatus.PLANNED || filter==e.kind.label() && e.status==EntryStatus.POSTED) &&
-            (q.isBlank() || listOf(e.note,ledger.entryName(e),ledger.accountName(e.accountId),e.tags.joinToString(" "),iso(e.day),Money.input(e.minor,ledger.accounts.first{it.id==e.accountId}.currency)).any{it.lowercase().contains(q)})
+            (q.isBlank() || listOf(e.note,ledger.entryName(e),ledger.accountName(e.accountId),e.tags.joinToString(" "),iso(e.day),Money.input(e.minor,ledger.accounts.first{it.id==e.accountId}.currency)).any{it.lowercase().contains(q)} ||
+                q.replace(',','.')==Money.input(e.minor,ledger.accounts.first{it.id==e.accountId}.currency))
         }
         when(sort){ "Старые"->selected.sortedWith(compareBy<Entry>{it.day}.thenBy{it.timeMinutes});"Сумма"->selected.sortedByDescending{it.baseMinor};else->selected.sortedWith(compareByDescending<Entry>{it.day}.thenByDescending{it.timeMinutes}) }
     }
@@ -44,18 +49,19 @@ import ru.epbloger.trachu.core.*
         item { SectionTitle("Операции",action="Добавить"){add(Kind.EXPENSE)} }
         item {
             Field("Поиск по сумме, заметке, тегу",query,{query=it})
-            Chips(listOf("Все","Расход","Доход","Перевод","Возврат","План"),filter,{it}){filter=it}
-            val activeFilters=(if(account.isNotEmpty())1 else 0)+(if(categories.isNotEmpty())1 else 0)+(if(!allDates)1 else 0)+(if(sort!="Новые")1 else 0)
+            Chips(listOf("Все","Расход","Доход","Перевод","Возврат","План","Погашение долга","Возврат долга вам","Получение займа","Выдача займа"),filter,{it}){filter=it}
+            val activeFilters=(if(account.isNotEmpty())1 else 0)+(if(categories.isNotEmpty())1 else 0)+(if(tags.isNotEmpty())1 else 0)+(if(!allDates)1 else 0)+(if(sort!="Новые")1 else 0)
             TextButton(onClick={expanded=!expanded}){Text((if(expanded)"Скрыть фильтры" else "Фильтры и сортировка")+if(activeFilters>0)" ($activeFilters)" else "")}
         }
         if(expanded)item {
             Panel {
                 Choice("Счёт",account,listOf("")+ledger.accounts.map{it.id},{if(it.isEmpty())"Все счета" else ledger.accountName(it)}){account=it}
                 MultiChoice("Категории",categories,ledger.categories.map{it.id},{ledger.categoryName(it)}){categoryIds=it.toList()}
+                if(availableTags.isNotEmpty()||tags.isNotEmpty())MultiChoice("Теги (любой выбранный)",tags,availableTags,{it}){tagIds=it.toList()}
                 Choice("Сортировка",sort,listOf("Новые","Старые","Сумма"),{it}){sort=it}
                 Toggle("Все даты",allDates,{allDates=it})
                 if(!allDates)PeriodControls(type,{type=it},period,{period=it},monthStart)
-                TextButton(onClick={query="";filter="Все";account="";categoryIds=emptyList();type=PeriodType.MONTH;period=Period.month(startDay=monthStart);allDates=true;sort="Новые"}){Text("Сбросить все фильтры")}
+                TextButton(onClick={query="";filter="Все";account="";categoryIds=emptyList();tagIds=emptyList();type=PeriodType.MONTH;period=Period.month(startDay=monthStart);allDates=true;sort="Новые"}){Text("Сбросить все фильтры")}
             }
         }
         item { Text("Найдено: ${entries.size}",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant) }

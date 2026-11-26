@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -55,5 +56,25 @@ class LedgerStoreTest {
         val reopened=open()
         try { assertEquals(43210L,Finance.balance(LedgerStore(reopened).current(),account.id)) }
         finally {reopened.close();context.deleteDatabase(name)}
+    }
+    @Test fun concurrentDueProcessingAndCorruptImportAreAtomic()=runBlocking {
+        val db=Room.inMemoryDatabaseBuilder(context,TrachuDatabase::class.java).build()
+        try {
+            val store=LedgerStore(db)
+            val state=Ledger.initial().copy(accounts=listOf(Account("a","Карта",openingMinor=10000)))
+            val template=Finance.makeEntry(state,Kind.EXPENSE,"a",500,today()-2,listOf("food" to 500L),status=EntryStatus.PLANNED)
+            store.restore(state.copy(schedules=listOf(Schedule("s",template,today()-2,Frequency.DAILY,autoPost=true))))
+            kotlinx.coroutines.coroutineScope {
+                repeat(3){launch{store.processDue(today()-1)}}
+            }
+            val before=store.current()
+            assertEquals(2,before.entries.size)
+            assertEquals(9000L,Finance.balance(before,"a"))
+            assertTrue(runCatching{store.restore(before.copy(accounts=emptyList()))}.isFailure)
+            assertEquals(before,store.current())
+            val bad="date,amount,category\n2026-01-01,-2,Продукты\nbad,-1,Другое\n"
+            assertTrue(runCatching{store.change{Csv.importStatement(bad.byteInputStream(),it,"a")}}.isFailure)
+            assertEquals(before,store.current())
+        }finally{db.close()}
     }
 }

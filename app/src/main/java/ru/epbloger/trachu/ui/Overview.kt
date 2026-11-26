@@ -25,9 +25,11 @@ import java.time.YearMonth
 import java.time.DayOfWeek
 import java.time.temporal.TemporalAdjusters
 
-@Composable fun Dashboard(ledger: Ledger, add: (Kind)->Unit, openEntry: (Entry)->Unit, accounts: ()->Unit, reports: ()->Unit, plans: ()->Unit, operations: ()->Unit, calendar: ()->Unit, monthStart: Int=1) {
+@Composable fun Dashboard(ledger: Ledger, add: (Kind)->Unit, openEntry: (Entry)->Unit, accounts: ()->Unit, reports: ()->Unit, plans: ()->Unit, operations: ()->Unit, calendar: ()->Unit, monthStart: Int=1, consentContent:(@Composable ()->Unit)?=null) {
     val day=today()
-    val p=Period.month(day,monthStart)
+    var periodType by rememberSaveable{mutableStateOf(PeriodType.MONTH)}
+    var p by rememberSaveable(monthStart,stateSaver=PeriodSaver){mutableStateOf(Period.month(day,monthStart))}
+    var showPeriod by rememberSaveable{mutableStateOf(false)}
     val totals=remember(ledger,p){Finance.totals(ledger,p)}
     val valuation=remember(ledger,day){Finance.valuation(ledger,day)}
     val recent=remember(ledger){ledger.entries.filter { it.status==EntryStatus.POSTED }.sortedWith(compareByDescending<Entry>{it.day}.thenByDescending{it.timeMinutes}).take(5)}
@@ -49,7 +51,7 @@ import java.time.temporal.TemporalAdjusters
                             Text("Общий баланс",color=Mint,style=MaterialTheme.typography.labelLarge)
                             MoneyText(valuation.minor,ledger.baseCurrency,color=Color.White,large=true)
                             if(valuation.missingCurrencies.isNotEmpty()) Text("Не включены валюты: "+valuation.missingCurrencies.joinToString(),color=Mint,style=MaterialTheme.typography.bodyMedium)
-                            Text("Результат месяца",color=Mint,style=MaterialTheme.typography.bodyMedium)
+                            Text("Результат выбранного периода",color=Mint,style=MaterialTheme.typography.bodyMedium)
                             MoneyText(totals.net,ledger.baseCurrency,color=Color.White)
                             BoxWithConstraints(Modifier.fillMaxWidth()) {
                                 @Composable fun Expense(modifier:Modifier) {
@@ -67,11 +69,13 @@ import java.time.temporal.TemporalAdjusters
                 @Composable fun Summary() {
                     Panel {
                         SectionTitle("Движение денег",action="Отчёты",onAction=reports)
+                        TextButton(onClick={showPeriod=!showPeriod}){Text("${periodType.label} · ${iso(p.from)} — ${iso(p.through)}")}
+                        if(showPeriod)PeriodControls(periodType,{periodType=it},p,{p=it},monthStart)
                         Text("Доходы",color=MaterialTheme.colorScheme.onSurfaceVariant)
                         MoneyText(totals.income,ledger.baseCurrency,color=MaterialTheme.colorScheme.primary,large=true)
                         HorizontalDivider()
                         Text("Расходы",color=MaterialTheme.colorScheme.onSurfaceVariant)
-                        MoneyText(totals.expense,ledger.baseCurrency,large=true)
+                        MoneyText(totals.expense,ledger.baseCurrency,color=MaterialTheme.colorScheme.error,large=true)
                     }
                 }
                 if(wide) Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
@@ -98,12 +102,15 @@ import java.time.temporal.TemporalAdjusters
                         SectionTitle("Бюджет",action="План",onAction=plans)
                         if(budget==null) { Text("Установите лимит на месяц, чтобы отслеживать остаток."); TextButton(onClick=plans){Text("Настроить бюджет")} }
                         else {
-                            val result=Finance.budget(ledger,budget,day)
+                            val result=runCatching{Finance.budget(ledger,budget,day).also{it.remaining}}.getOrNull()
                             Text(budget.name,style=MaterialTheme.typography.titleMedium)
-                            MoneyText(result.remaining,ledger.baseCurrency,large=true,color=if(result.remaining<0)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
-                            Text("Осталось из "+Money.format(result.available,ledger.baseCurrency))
-                            Progress(result.spent,result.available)
-                            Text("Использовано ${result.percent}%")
+                            if(result==null)Warning("Слишком большой накопленный лимит. Измените бюджет в плане.")
+                            else {
+                                MoneyText(result.remaining,ledger.baseCurrency,large=true,color=if(result.remaining<0)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                                Text("Осталось из "+Money.format(result.available,ledger.baseCurrency))
+                                Progress(result.spent,result.available)
+                                Text("Использовано ${result.percent}%")
+                            }
                         }
                     }
                 }
@@ -124,6 +131,7 @@ import java.time.temporal.TemporalAdjusters
                     planned.forEach { EntryRow(ledger,it){openEntry(it)} }
                 }
             }
+            if(consentContent!=null)item{Panel{consentContent()}}
         }
     }
 }
@@ -196,38 +204,47 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
         }
     }
 }
-@Composable fun Reports(ledger: Ledger, monthStart:Int=1, exportPdf: (Period)->Unit) {
+@Composable fun Reports(ledger: Ledger, monthStart:Int=1, exportPdf: (Period,String)->Unit) {
     var type by rememberSaveable { mutableStateOf(PeriodType.MONTH) }
     var period by rememberSaveable(monthStart,stateSaver=PeriodSaver) { mutableStateOf(Period.month(startDay=monthStart)) }
     var income by rememberSaveable { mutableStateOf(false) }
-    val totals=remember(ledger,period){Finance.totals(ledger,period)}
+    var selectedAccount by rememberSaveable{mutableStateOf("")}
+    val reportLedger=remember(ledger,selectedAccount){
+        if(selectedAccount.isEmpty())ledger else ledger.copy(accounts=ledger.accounts.map{it.copy(includeInStats=it.id==selectedAccount && it.includeInStats)})
+    }
+    val totals=remember(reportLedger,period){Finance.totals(reportLedger,period)}
     val length=period.through-period.from+1
-    val previous=remember(ledger,period,type) {
+    val previous=remember(reportLedger,period,type) {
         val prev=when(type) {
             PeriodType.MONTH->Period.month(period.from-1,monthStart)
             PeriodType.YEAR->periodFor(type,LocalDate.ofEpochDay(period.from).minusYears(1).toEpochDay())
             else->Period(period.from-length,period.from-1)
         }
-        Finance.totals(ledger,prev)
+        Finance.totals(reportLedger,prev)
     }
-    val groups=remember(ledger,period){
-        ledger.entries.filter { it.status==EntryStatus.POSTED && it.day in period }
+    val groups=remember(reportLedger,period){
+        val included=reportLedger.accounts.filter{it.includeInStats}.map{it.id}.toSet()
+        reportLedger.entries.filter { it.status==EntryStatus.POSTED && it.day in period && it.accountId in included }
             .groupBy { if(length<=31) iso(it.day) else YearMonth.from(LocalDate.ofEpochDay(it.day)).toString() }
             .toSortedMap().map { (label,entries) ->
                 val p=Period(entries.minOf{it.day},entries.maxOf{it.day})
-                label to Finance.totals(ledger,p)
+                label to Finance.totals(reportLedger,p)
             }.takeLast(60)
     }
     val forecastStart=today()
     val forecastEnd=forecastStart+29
     val forecast=remember(ledger,forecastStart) { runCatching {
-        Finance.generate(ledger,forecastEnd,true).entries.filter{it.status==EntryStatus.PLANNED && it.day in forecastStart..forecastEnd}
+        Finance.forecastEntries(ledger,forecastEnd)
     } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide=maxWidth>=840.dp && LocalDensity.current.fontScale<1.5f
         LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
-            item { SectionTitle("Аналитика",action="PDF"){exportPdf(period)} }
-            item { Panel { PeriodControls(type,{type=it},period,{period=it},monthStart) } }
+            item { SectionTitle("Аналитика",action="PDF"){exportPdf(period,selectedAccount)} }
+            item { Panel {
+                PeriodControls(type,{type=it},period,{period=it},monthStart)
+                Choice("Счёт в отчёте",selectedAccount,listOf("")+ledger.accounts.filter{it.includeInStats}.map{it.id},{if(it.isEmpty())"Все счета отчётов" else ledger.accountName(it)}){selectedAccount=it}
+                if(selectedAccount.isNotEmpty())Text("Фильтр применяется к отчётам и PDF. Прогноз показывает все счета.",style=MaterialTheme.typography.bodySmall)
+            } }
             item {
                 Panel {
                     Text("Финансовый результат",style=MaterialTheme.typography.titleMedium)
@@ -235,7 +252,7 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
                     Text("Доходы: "+Money.format(totals.income,ledger.baseCurrency))
                     Text("Расходы: "+Money.format(totals.expense,ledger.baseCurrency))
                     Text("Средние расходы в день: "+Money.format(totals.expense/length,ledger.baseCurrency))
-                    val expenseEntries=ledger.entries.filter{it.status==EntryStatus.POSTED && it.day in period && it.kind in setOf(Kind.EXPENSE,Kind.REFUND) && ledger.accounts.any{a->a.id==it.accountId&&a.includeInStats}}
+                    val expenseEntries=reportLedger.entries.filter{it.status==EntryStatus.POSTED && it.day in period && it.kind in setOf(Kind.EXPENSE,Kind.REFUND) && reportLedger.accounts.any{a->a.id==it.accountId&&a.includeInStats}}
                     val essential=Money.sum(expenseEntries.filter{it.essential}.map{if(it.kind==Kind.REFUND)-it.baseMinor else it.baseMinor})
                     val discretionary=Money.sum(expenseEntries.filterNot{it.essential}.map{if(it.kind==Kind.REFUND)-it.baseMinor else it.baseMinor})
                     Text("Обязательные траты: "+Money.format(essential,ledger.baseCurrency))
@@ -249,10 +266,10 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
                 }
             }
             item {
-                @Composable fun Cats(){ Column(verticalArrangement=Arrangement.spacedBy(8.dp)) { Chips(listOf(false,true),income,{if(it)"Доходы" else "Расходы"}){income=it};CategoryReport(ledger,period,income) } }
+                @Composable fun Cats(){ Column(verticalArrangement=Arrangement.spacedBy(8.dp)) { Chips(listOf(false,true),income,{if(it)"Доходы" else "Расходы"}){income=it};CategoryReport(reportLedger,period,income) } }
                 @Composable fun Tags(){ Panel {
                     SectionTitle("Расходы по тегам")
-                    val tags=Finance.byTag(ledger,period).toList().sortedByDescending{it.second}
+                    val tags=Finance.byTag(reportLedger,period).toList().sortedByDescending{it.second}
                     if(tags.isEmpty())Text("Добавьте теги к операциям.")
                     else tags.forEach { (tag,value)->Row(horizontalArrangement=Arrangement.SpaceBetween,modifier=Modifier.fillMaxWidth()){Text("#$tag",Modifier.weight(1f));MoneyText(value,ledger.baseCurrency)} }
                     if(tags.isNotEmpty())Text("Одна операция может входить в несколько тегов.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -280,7 +297,10 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
                     val upcoming=forecast.getOrNull()
                     if(upcoming==null)Warning("Не удалось рассчитать расписания. Проверьте регулярные операции и валютные курсы.")
                     else {
-                        val expected=Finance.totals(ledger.copy(entries=upcoming.map{it.copy(status=EntryStatus.POSTED)}),Period(forecastStart,forecastEnd))
+                        val firstDay=minOf(forecastStart,upcoming.minOfOrNull{it.day} ?: forecastStart)
+                        val expected=Finance.totals(ledger.copy(entries=upcoming.map{it.copy(status=EntryStatus.POSTED)}),Period(firstDay,forecastEnd))
+                        val overdue=upcoming.count{it.day<forecastStart}
+                        if(overdue>0)Text("Включены просроченные операции: $overdue",color=MaterialTheme.colorScheme.tertiary)
                         Text("Плановые доходы: "+Money.format(expected.income,ledger.baseCurrency))
                         Text("Плановые расходы: "+Money.format(expected.expense,ledger.baseCurrency))
                         Text("Ожидаемый финансовый результат",style=MaterialTheme.typography.labelLarge)

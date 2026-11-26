@@ -45,12 +45,15 @@ private object AdsRuntime {
         else mainHandler.post(action)
     }
 
-    fun initializeIfNeeded(context: Context) {
+    fun consent(value:Boolean) {
+        if(requested || ready) runCatching { YandexAds.setUserConsent(value) }
+    }
+
+    fun initializeIfNeeded(context: Context, consent:Boolean) {
         if (requested || ready) return
         requested = true
         runCatching {
-            // The app has no personalization consent flow. Do not imply users are children.
-            YandexAds.setUserConsent(false)
+            YandexAds.setUserConsent(consent)
             YandexAds.setLocationTracking(false)
             YandexAds.initialize(context.applicationContext) {
                 mainHandler.post { ready = true }
@@ -61,6 +64,9 @@ private object AdsRuntime {
         }
     }
 }
+
+/** Called even when the banner is no longer composed, to pass withdrawal to a running SDK. */
+fun updateAdsConsent(accepted:Boolean) = AdsRuntime.consent(accepted && !BuildConfig.DEBUG)
 
 /** Rate-limit new requests when a user returns to the overview repeatedly. */
 private object BannerRequestGate {
@@ -86,13 +92,13 @@ private object BannerRequestGate {
  * this on the lock screen or while any financial editor/details overlay is open.
  */
 @Composable
-fun OverviewAdBanner() {
+fun OverviewAdBanner(consent:Boolean?=null) {
     val adUnitId = BuildConfig.YANDEX_BANNER_ID
     // No SDK call in release until a production ID AND enabling flag are supplied.
-    if (adUnitId.isEmpty()) return
+    if (adUnitId.isEmpty() || (!BuildConfig.DEBUG && consent!=true)) return
 
     val context = LocalContext.current.applicationContext
-    LaunchedEffect(context) { AdsRuntime.initializeIfNeeded(context) }
+    LaunchedEffect(context) { AdsRuntime.initializeIfNeeded(context,consent==true && !BuildConfig.DEBUG) }
 
     if (!AdsRuntime.ready) return
     BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -116,7 +122,8 @@ fun OverviewAdBanner() {
             )
             LaunchedEffect(bannerState, adUnitId) {
                 BannerRequestGate.awaitNext()
-                if (!failed) bannerState.loadAd(AdRequest.Builder(adUnitId).build())
+                if (!failed) runCatching { bannerState.loadAd(AdRequest.Builder(adUnitId).build()) }
+                    .onFailure { failed=true; loaded=false }
             }
             if (!failed) {
                 Column(

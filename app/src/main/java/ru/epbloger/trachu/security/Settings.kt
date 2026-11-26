@@ -17,7 +17,8 @@ data class Settings(
     val lastAccount: String = "",
     val showWidgetBalance: Boolean = false,
     val failedAttempts: Int = 0,
-    val lockedUntil: Long = 0L, val monthStart: Int = 1, val automaticRates:Boolean=false
+    val lockedUntil: Long = 0L, val monthStart: Int = 1, val automaticRates:Boolean=false,
+    val adsConsent:Boolean?=null
 ) { val protected get() = credential.isNotEmpty() }
 
 class Preferences(context: Context) {
@@ -33,17 +34,19 @@ class Preferences(context: Context) {
         val until = longPreferencesKey("pin_until")
         val monthStart = intPreferencesKey("month_start")
         val automaticRates = booleanPreferencesKey("automatic_rates")
+        val adsConsent = booleanPreferencesKey("ads_consent_v1")
     }
     val settings: Flow<Settings> = store.data.map { p ->
         Settings(p[K.theme] ?: "system",p[K.pin] ?: "",p[K.biometric] ?: false,
             p[K.timeout] ?: 30,p[K.account] ?: "",p[K.widget] ?: false,
-            p[K.failures] ?: 0,p[K.until] ?: 0,p[K.monthStart] ?: 1,p[K.automaticRates] ?: false)
+            p[K.failures] ?: 0,p[K.until] ?: 0,p[K.monthStart] ?: 1,p[K.automaticRates] ?: false,p[K.adsConsent])
     }
     suspend fun current() = settings.first()
     suspend fun theme(value: String) { require(value in listOf("system","light","dark")); store.edit { it[K.theme]=value } }
     suspend fun lastAccount(value: String) { store.edit { it[K.account]=value } }
     suspend fun widget(value: Boolean) { store.edit { it[K.widget]=value } }
     suspend fun automaticRates(value:Boolean) { store.edit { it[K.automaticRates]=value } }
+    suspend fun adsConsent(value:Boolean) { store.edit { it[K.adsConsent]=value } }
     suspend fun monthStart(value: Int) { require(value in 1..31); store.edit { it[K.monthStart]=value } }
     suspend fun timeout(value: Int) { require(value in listOf(0,15,30,60,300)); store.edit { it[K.timeout]=value } }
     suspend fun biometric(value: Boolean) { store.edit { require(!value || !it[K.pin].isNullOrEmpty()); it[K.biometric]=value } }
@@ -53,7 +56,7 @@ class Preferences(context: Context) {
     suspend fun pinResult(success: Boolean) { store.edit {
         if (success) { it[K.failures]=0; it[K.until]=0L }
         else {
-            val count = (it[K.failures] ?: 0)+1
+            val count = ((it[K.failures] ?: 0).coerceIn(0,5)+1).coerceAtMost(5)
             it[K.failures]=count
             if (count >= 5) it[K.until]=System.currentTimeMillis()+30_000L
         }

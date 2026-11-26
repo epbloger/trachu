@@ -55,9 +55,9 @@ jobs:
             "$manager" --sdk_root="$SDK" 'platforms;android-36' 'build-tools;35.0.0'
           fi
           test -f "$SDK/platforms/android-36/android.jar"
-      - name: Build APK, unsigned release AAB and device tests
+      - name: Build debug and unsigned release APK/AAB and device tests
         id: build
-        run: gradle --no-daemon --continue --stacktrace assembleDebug bundleRelease assembleDebugAndroidTest
+        run: gradle --no-daemon --continue --stacktrace assembleDebug assembleRelease bundleRelease assembleDebugAndroidTest
       - name: Record artifact provenance and inspect merged permissions
         id: provenance
         shell: bash
@@ -65,7 +65,7 @@ jobs:
           set -euo pipefail
           mkdir -p qa
           git rev-parse HEAD > qa/source-commit.txt
-          sha256sum app/build/outputs/apk/debug/*.apk app/build/outputs/bundle/release/*.aab > qa/SHA256SUMS
+          sha256sum app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk app/build/outputs/bundle/release/*.aab > qa/SHA256SUMS
           AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
           "$AAPT" dump permissions app/build/outputs/apk/debug/*.apk | tee qa/apk-permissions.txt
           if grep -E 'permission\.(AD_ID|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|READ_CONTACTS|READ_SMS|RECORD_AUDIO)' qa/apk-permissions.txt; then
@@ -73,6 +73,9 @@ jobs:
             exit 1
           fi
           "$AAPT" dump badging app/build/outputs/apk/debug/*.apk > qa/apk-badging.txt
+          "$AAPT" dump badging app/build/outputs/apk/release/*.apk > qa/release-apk-badging.txt
+          "$AAPT" dump permissions app/build/outputs/apk/release/*.apk > qa/release-apk-permissions.txt
+          if grep -E 'permission\.(AD_ID|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|READ_CONTACTS|READ_SMS|RECORD_AUDIO)' qa/release-apk-permissions.txt; then exit 1; fi
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose app/build/outputs/apk/debug/*.apk > qa/apk-signature.txt
           release_manifest="$(find app/build/intermediates/merged_manifests/release -name AndroidManifest.xml -print -quit)"
           test -n "$release_manifest"
@@ -83,7 +86,7 @@ jobs:
           fi
       - name: Run unit tests and lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: gradle --no-daemon --continue --stacktrace testDebugUnitTest lintDebug
+        run: gradle --no-daemon --continue --stacktrace testDebugUnitTest lintDebug lintRelease
       - name: Enable KVM
         id: kvm
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' }}
@@ -95,7 +98,7 @@ jobs:
         if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 36
           arch: x86_64
           target: default
           disable-animations: true
@@ -127,6 +130,17 @@ jobs:
           name: trachu-unsigned-release-aab
           path: |
             app/build/outputs/bundle/release/*.aab
+            qa/source-commit.txt
+            qa/SHA256SUMS
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload unsigned release APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trachu-unsigned-release-apk
+          path: |
+            app/build/outputs/apk/release/*.apk
             qa/source-commit.txt
             qa/SHA256SUMS
           if-no-files-found: warn
