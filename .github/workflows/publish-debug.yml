@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAG: v1.2.0-debug
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +23,8 @@ jobs:
           persist-credentials: false
       - name: Require reviewed tag and full successful integration on exact main
         id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -64,24 +65,41 @@ jobs:
           signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
           test -x "$signer"
           "$signer" verify --verbose --print-certs evidence/trachu-debug-apk/app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/debug-signature.txt"
-          python3 store/rustore/prepare-debug-release.py evidence "$SOURCE_COMMIT" "$SOURCE_RUN" "$RUNNER_TEMP/debug-signature.txt" delivery
       - name: VerifyOnly both original unsigned artifacts
         env:
           SOURCE_COMMIT: ${{ steps.gate.outputs.sha }}
         shell: pwsh
         run: |
-          & ./store/rustore/sign-release.ps1 -ArtifactDir evidence/trachu-unsigned-release-apk -ExpectedCommit $env:SOURCE_COMMIT -VerifyOnly
-          & ./store/rustore/sign-release.ps1 -ArtifactDir evidence/trachu-unsigned-release-aab -ExpectedCommit $env:SOURCE_COMMIT -VerifyOnly
-      - name: Create reviewed draft, verify uploaded assets, publish and verify public bytes
+          & ./store/rustore/sign-release.ps1 -ArtifactDir evidence/trachu-unsigned-release-apk -ExpectedCommit $env:SOURCE_COMMIT -VerifyOnly 6>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/verify-apk.txt"
+          & ./store/rustore/sign-release.ps1 -ArtifactDir evidence/trachu-unsigned-release-aab -ExpectedCommit $env:SOURCE_COMMIT -VerifyOnly 6>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/verify-aab.txt"
+      - name: Prepare minimized QA and original debug APK
         env:
           SOURCE_COMMIT: ${{ steps.gate.outputs.sha }}
+          SOURCE_RUN: ${{ steps.gate.outputs.run }}
         shell: bash
         run: |
           set -euo pipefail
-          test "$SOURCE_COMMIT" = "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          python3 store/rustore/prepare-debug-release.py evidence "$SOURCE_COMMIT" "$SOURCE_RUN" "$RUNNER_TEMP/debug-signature.txt" "$RUNNER_TEMP/verify-apk.txt" "$RUNNER_TEMP/verify-aab.txt" delivery
+      - name: Create reviewed draft, verify uploaded assets, publish and verify public bytes
+        env:
+          SOURCE_COMMIT: ${{ steps.gate.outputs.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_live_refs() {
+            test "$SOURCE_COMMIT" = "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+            remote_tag=$(git ls-remote origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+            remote_object=$(awk '$2=="refs/tags/'"$TAG"'" {print $1}' <<< "$remote_tag")
+            remote_commit=$(awk '$2=="refs/tags/'"$TAG"'^{}" {print $1}' <<< "$remote_tag")
+            test "$remote_object" = "$(git rev-parse "$GITHUB_REF")"
+            test "$remote_commit" = "$SOURCE_COMMIT"
+          }
+          verify_live_refs
           gh release create "$TAG" --verify-tag --draft --prerelease --title 'ТРАЧУ. 1.2.0 — тестовая debug-сборка' --notes-file delivery/release-notes.md delivery/trachu-1.2.0-debug.apk delivery/trachu-1.2.0-debug.apk.sha256 delivery/trachu-1.2.0-qa.zip
           gh release download "$TAG" --dir uploaded
           for name in trachu-1.2.0-debug.apk trachu-1.2.0-debug.apk.sha256 trachu-1.2.0-qa.zip; do cmp "delivery/$name" "uploaded/$name"; done
+          verify_live_refs
           gh release edit "$TAG" --draft=false --prerelease
           mkdir public-download
           for name in trachu-1.2.0-debug.apk trachu-1.2.0-debug.apk.sha256 trachu-1.2.0-qa.zip; do

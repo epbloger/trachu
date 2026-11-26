@@ -6,6 +6,7 @@ import pathlib
 import struct
 import tempfile
 import unittest
+import zipfile
 import zlib
 
 spec = importlib.util.spec_from_file_location('verify_evidence', pathlib.Path(__file__).with_name('verify-evidence.py'))
@@ -135,9 +136,43 @@ class EvidenceTest(unittest.TestCase):
         (self.root/'TEST.xml').write_text('<testsuite tests="1" failures="0" errors="0"><testcase classname="Example" name="required"><failure/></testcase></testsuite>')
         with self.assertRaises(ValueError): delivery.reduced_tests(self.root, 'TEST.xml', 'phone')
 
-    def test_public_text_rejects_runner_path(self):
-        self.assertEqual(delivery.safe_text('PASS: synthetic ledger'), 'PASS: synthetic ledger')
-        with self.assertRaises(ValueError): delivery.safe_text('/home/runner/work/private/file')
+    def test_release_upgrade_summary_parses_actual_ledger_count(self):
+        path = self.root/'qa'/'upgrade'
+        path.mkdir(parents=True)
+        (path/'result.txt').write_text(
+            'PASS: 1.1.0 -> 1.2.0, no clear or onboarding, 23 identical ledger records, '
+            '4250 minor units; SHA256 ' + 'b'*64)
+        summary = delivery.upgrade_summary(self.root, 'upgrade', '1.1.0')
+        self.assertEqual(summary['identicalLedgerRecords'], 23)
+        self.assertEqual(summary['exactBalanceMinorUnits'], 4250)
+        (path/'result.txt').write_text((path/'result.txt').read_text().replace('1.2.0', '1x2x0'))
+        with self.assertRaises(ValueError):
+            delivery.upgrade_summary(self.root, 'upgrade', '1.1.0')
+
+    def test_public_qa_zip_contains_only_allowlisted_material(self):
+        qa = self.root/'evidence'
+        screenshots = qa/'qa'/'store-phone'
+        screenshots.mkdir(parents=True)
+        (screenshots/'dashboard.png').write_bytes(png(1080, 1920, 7))
+        (qa/'qa'/'current-evidence.txt').parent.mkdir(parents=True, exist_ok=True)
+        (qa/'qa'/'current-evidence.txt').write_text('/home/runner/private diagnostic')
+        archive = self.root/'public-qa.zip'
+        report = b'<?xml version=\"1.0\"?><testsuite name=\"phone\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"><testcase classname=\"Example\" name=\"safe\"/></testsuite>'
+        delivery.write_qa_archive(archive, qa, {'phone': (report, 1)}, {'dashboard'}, {'sourceCommit': 'a'*40}, 'a'*40, '123')
+        with zipfile.ZipFile(archive) as result:
+            names = set(result.namelist())
+            self.assertEqual(names, {'tests/phone.xml', 'screens/store-phone/dashboard.png', 'summary.json', 'README.txt'})
+            self.assertNotIn(b'private diagnostic', b''.join(result.read(name) for name in names))
+
+    def test_public_qa_zip_rejects_corrupt_original_screenshot(self):
+        qa = self.root/'evidence'
+        screenshots = qa/'qa'/'tablet'
+        screenshots.mkdir(parents=True)
+        (screenshots/'dashboard.png').write_bytes(png(1280, 800, 9)[:-5])
+        with self.assertRaises(ValueError):
+            delivery.write_qa_archive(
+                self.root/'bad-qa.zip', qa, {'phone': (b'<testsuite/>', 0)},
+                {'dashboard'}, {'sourceCommit': 'a'*40}, 'a'*40, '123')
 
 
 if __name__ == '__main__':
