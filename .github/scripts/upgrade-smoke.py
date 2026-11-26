@@ -1,4 +1,4 @@
-"""Install real 1.0.0, record data through its UI, then install 1.1.0 over it.
+"""Install a pinned baseline (1.0.0 or earlier 1.1.0), record data through its UI, then update it.
 
 Only run on an isolated CI emulator. Both APKs must have a common debug
 certificate. Never clear app data between the two installations.
@@ -16,7 +16,9 @@ import time
 import xml.etree.ElementTree as ET
 
 PACKAGE = "ru.epbloger.trachu"
-OUT = pathlib.Path("qa/upgrade")
+BASELINE_VERSION = sys.argv[3] if len(sys.argv) == 4 else "1.0.0"
+assert BASELINE_VERSION in ("1.0.0", "1.1.0")
+OUT = pathlib.Path("qa/upgrade" if BASELINE_VERSION == "1.0.0" else "qa/upgrade-v11")
 OUT.mkdir(parents=True, exist_ok=True)
 
 
@@ -81,10 +83,15 @@ try:
     # The existing smoke exercises the real legacy UI and creates an exact
     # 42.50 RUB expense. It clears only the freshly installed legacy package.
     adb("uninstall", PACKAGE, check=False)
-    subprocess.run([sys.executable, ".github/scripts/offline-smoke.py", sys.argv[1], "--legacy"],
+    baseline_args = [sys.executable, ".github/scripts/offline-smoke.py", sys.argv[1]]
+    if BASELINE_VERSION == "1.0.0":
+        baseline_args.append("--legacy")
+    else:
+        baseline_args.append("--previous-v11")
+    subprocess.run(baseline_args,
                    env={**os.environ, "TRACHU_OFFLINE_QA_DIR": str(OUT / "baseline")},
                    check=True, timeout=300)
-    (OUT / "before-package.txt").write_text(version("1.0.0"), encoding="utf-8")
+    (OUT / "before-package.txt").write_text(version(BASELINE_VERSION), encoding="utf-8")
     before = snapshot()
     assert any(kind == "entry" and data["minor"] == 4250 for kind, _, data in before)
     adb("shell", "cmd", "connectivity", "airplane-mode", "enable")
@@ -98,7 +105,7 @@ try:
     after = snapshot()
     assert before == after, "Financial ledger changed during update"
     digest = hashlib.sha256(json.dumps(after, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-    result = f"PASS: 1.0.0 -> 1.1.0, no clear or onboarding, {len(after)} identical ledger records, 4250 minor units; SHA256 {digest}\n"
+    result = f"PASS: {BASELINE_VERSION} -> 1.1.0, no clear or onboarding, {len(after)} identical ledger records, 4250 minor units; SHA256 {digest}\n"
     (OUT / "result.txt").write_text(result, encoding="utf-8")
     print(result)
 finally:

@@ -80,12 +80,22 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
     LaunchedEffect(ledger.baseCurrency,day,automatic,manual,from==to) {
         if(automatic&&!manual&&from!=to&&day!=null){
             delay(350)
-            vm.refreshConverterRates(day)
+            while(true){
+                vm.refreshConverterRates(day)
+                // Retry a failed connection while the converter stays open;
+                // successful dates are throttled by the ViewModel.
+                delay(60_000)
+            }
         }
     }
     val saved = remember(ledger, from, to, day) { day?.let { selectedDay ->
         runCatching { CurrencyConversion.quote(ledger, from, to, selectedDay) }.getOrNull()
     } }
+    val quoteRates=remember(ledger,from,to,day){
+        listOf(from,to).distinct().filter{it!=ledger.baseCurrency}.mapNotNull{code->
+            ledger.rates.filter{it.currency==code&&day!=null&&it.day<=day}.maxByOrNull{it.day}
+        }
+    }
     val result = runCatching {
         val minor = Money.parse(amount, from)
         if (from == to) CurrencyConversion.convert(minor, from, to, java.math.BigDecimal.ONE)
@@ -128,10 +138,14 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
                         else Warning(it.message ?: "Проверьте сумму и курс")
                     }
                 if(!manual&&from!=to&&currentStatus?.loading==true){
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    LinearProgressIndicator(Modifier.fillMaxWidth().testTag("converter-loading"))
                     if(saved!=null)Text("Обновляем курс. Пока показан сохранённый.",style=MaterialTheme.typography.bodyMedium)
                 }
-                if(!manual&&from!=to)currentStatus?.error?.let{Text(it,style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                if(!manual&&from!=to&&saved!=null&&day!=null&&quoteRates.any{it.day<day}){
+                    Text("Курс опубликован ранее выбранной даты. Используется последний доступный.",
+                        modifier=Modifier.testTag("converter-rate-age"),style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if(!manual&&from!=to)currentStatus?.error?.let{Text(it,modifier=Modifier.testTag("converter-error"),style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}
             }
         }
         item {
@@ -143,11 +157,9 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
                         Text("Ручной курс применяется только к этому расчёту.")
                     } else if (saved != null) {
                         Text("1 $from ≈ ${saved.toPlainString()} $to")
-                        listOf(from, to).filter { it != ledger.baseCurrency }.distinct().forEach { code ->
-                            ledger.rates.filter { it.currency == code && day != null && it.day <= day }.maxByOrNull { it.day }?.let { rate ->
-                                Text("$code · ${dayLabel(rate.day)} · ${if (rate.source == "CBR") "ЦБ РФ" else "Ручной курс"}",
-                                    style = MaterialTheme.typography.bodySmall)
-                            }
+                        quoteRates.forEach { rate ->
+                            Text("${rate.currency} · ${dayLabel(rate.day)} · ${if (rate.source == "CBR") "ЦБ РФ" else "Ручной курс"}",
+                                style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                     if (!manual) DateField("Курс на дату", date, { date = it }, supporting = "Используется последний сохранённый курс не позже этой даты.")

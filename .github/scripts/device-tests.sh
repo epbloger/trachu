@@ -61,4 +61,7 @@ TRACHU_OFFLINE_QA_DIR=qa/offline python3 .github/scripts/offline-smoke.py app/bu
 if [[ -n "${TRACHU_UPGRADE_BASELINE_APK:-}" ]]; then
   python3 .github/scripts/upgrade-smoke.py "$TRACHU_UPGRADE_BASELINE_APK" app/build/outputs/apk/debug/app-debug.apk || status=1
 fi
+if [[ -n "${TRACHU_UPGRADE_V11_APK:-}" ]]; then
+  python3 .github/scripts/upgrade-smoke.py "$TRACHU_UPGRADE_V11_APK" app/build/outputs/apk/debug/app-debug.apk 1.1.0 || status=1
+fi
 exit "$status"

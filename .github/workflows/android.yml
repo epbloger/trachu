@@ -150,7 +150,7 @@ jobs:
       - name: Run unit tests and lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: gradle --no-daemon --continue --stacktrace testDebugUnitTest lintDebug lintRelease
-      - name: Build verified 1.0.0 baseline for real in-place upgrade
+      - name: Build verified 1.0.0 and previous 1.1.0 baselines for real in-place upgrades
         id: baseline
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' }}
         shell: bash
@@ -168,6 +168,15 @@ jobs:
           echo "TRACHU_UPGRADE_BASELINE_APK=$old" >> "$GITHUB_ENV"
           git -C "$baseline" rev-parse HEAD > qa/upgrade-baseline-commit.txt
           sha256sum "$old" > qa/upgrade-baseline-sha256.txt
+          baseline11="$RUNNER_TEMP/trachu-v11"
+          git worktree add --detach "$baseline11" b58080ef4b755130ad45f62a6aab75e7617ea920
+          gradle --project-dir "$baseline11" --no-daemon assembleDebug
+          old11="$baseline11/app/build/outputs/apk/debug/app-debug.apk"
+          "$signer" verify --print-certs "$old11" > qa/upgrade-v11-baseline-cert.txt
+          diff <(grep 'certificate SHA-256 digest:' qa/upgrade-v11-baseline-cert.txt) <(grep 'certificate SHA-256 digest:' qa/upgrade-current-cert.txt)
+          echo "TRACHU_UPGRADE_V11_APK=$old11" >> "$GITHUB_ENV"
+          git -C "$baseline11" rev-parse HEAD > qa/upgrade-v11-baseline-commit.txt
+          sha256sum "$old11" > qa/upgrade-v11-baseline-sha256.txt
       - name: Enable KVM
         id: kvm
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' && steps.baseline.outcome == 'success' }}
@@ -208,6 +217,7 @@ jobs:
           set -euo pipefail
           python3 store/rustore/verify-evidence.py release --qa . --apk . --aab . --commit "$(git rev-parse HEAD)" --require-ux-v11 | tee qa/current-evidence.txt
           grep -F 'PASS: 1.0.0 -> 1.1.0, no clear or onboarding' qa/upgrade/result.txt
+          grep -F 'PASS: 1.1.0 -> 1.1.0, no clear or onboarding' qa/upgrade-v11/result.txt
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/release/*.apk | tee qa/zipalign.txt
       - name: Upload APK
         if: always()

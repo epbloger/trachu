@@ -257,7 +257,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
         Switch(checked,onCheckedChange=onChange,modifier=Modifier.testTag("toggle:$label").semantics{contentDescription=label})
     }
 }
-@Composable fun Form(title: String, onClose: ()->Unit, busy: Boolean, saveLabel: String="Сохранить", onSave: ()->Unit, spacing: Int=12, compact:Boolean=false,
+@Composable fun Form(title: String, onClose: ()->Unit, busy: Boolean, saveLabel: String="Сохранить", onSave: ()->Unit, spacing: Int=12, compact:Boolean=false, validationError:String="",
     content: @Composable ColumnScope.()->Unit) {
     Dialog(onDismissRequest={if(!busy)onClose()},properties=DialogProperties(usePlatformDefaultWidth=false)) {
         Surface(Modifier.widthIn(max=620.dp).fillMaxWidth(if(compact).96f else .94f).fillMaxHeight(if(compact).94f else .88f),shape=MaterialTheme.shapes.extraLarge,
@@ -267,6 +267,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
                 Spacer(Modifier.height(if(compact)6.dp else 12.dp))
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).testTag("form_content"),verticalArrangement=Arrangement.spacedBy(spacing.dp),content=content)
                 Spacer(Modifier.height(if(compact)6.dp else 12.dp))
+                if(validationError.isNotBlank())Warning(validationError)
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
                     @Composable fun Cancel(modifier:Modifier=Modifier) { TextButton(onClick=onClose,enabled=!busy,modifier=modifier) { Text("Отмена") } }
                     @Composable fun Save(modifier:Modifier=Modifier) { Button(onClick=onSave,enabled=!busy,modifier=modifier.testTag("form_save")) { if(busy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Text(saveLabel) } }

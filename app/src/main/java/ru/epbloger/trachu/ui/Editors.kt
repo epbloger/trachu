@@ -41,7 +41,6 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     var archived by draft.state("archived"){current?.archived ?: false}
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
-    val colorOptions=(CategoryColors.palette+listOfNotNull(current?.color)).distinct()
     val used=current!=null && (ledger.entries.any{it.accountId==current.id || it.targetAccountId==current.id} || ledger.debts.any{it.accountId==current.id} || ledger.schedules.any{it.template.accountId==current.id || it.template.targetAccountId==current.id})
     Form(if(current==null)"Новый счёт" else "Настройки счёта",close,busy,onSave={
         runCatching {
@@ -80,6 +79,7 @@ private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","�
     var parent by draft.state("parent"){current?.parentId.orEmpty()}
     var icon by draft.state("icon"){current?.icon ?: "•"}
     var color by draft.state("color"){current?.color ?: CategoryColors.next(ledger.categories)}
+    val colorOptions=(CategoryColors.palette+listOfNotNull(current?.color)+color).distinct()
     var archived by draft.state("archived"){current?.archived ?: false}
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
@@ -232,7 +232,7 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         error=""
         if(targetId==id){targetId="";targetAmount=""}
     }
-    Form(if(recurring)"Регулярная операция" else if(current==null)"Новая операция" else "Редактировать операцию",close,busy,spacing=6,compact=true,onSave={
+    Form(if(recurring)"Регулярная операция" else if(current==null)"Новая операция" else "Редактировать операцию",close,busy,spacing=6,compact=true,validationError=error,onSave={
         runCatching {
             val a=requireNotNull(account){"Сначала создайте счёт"}
             val minor=Money.parse(amount,a.currency);require(minor>0){"Сумма должна быть положительной"}
@@ -284,7 +284,7 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             if(k!=kind){kind=k;splitDrafts=listOf(SplitDraft("",""));splitMode=false;error=""}
         }
         if(guidedHint)Surface(color=MaterialTheme.colorScheme.primaryContainer,shape=MaterialTheme.shapes.medium) {
-            Text("Для примера введите сумму и выберите категорию. Без категории операцию сохранить нельзя.",
+            Text("Введите сумму реальной операции и выберите категорию. Если хотите только посмотреть форму, нажмите «Отмена».",
                 Modifier.padding(horizontal=12.dp,vertical=10.dp),style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onPrimaryContainer)
         }
         Choice("Счёт",accountId,active.map{it.id},{id->active.find{it.id==id}?.let{"${it.name} · ${it.currency}"} ?: "Выбрать счёт"},compact=true){id->
@@ -312,7 +312,6 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
                 }
             } else Column { AmountInput();ConvertButton() }
         }
-        if(error.isNotEmpty())Warning(error)
         DateField("Дата",day,{day=it},supporting=null)
         if(!recurring)Chips(listOf(today(),today()-1),runCatching{parseDay(day)}.getOrDefault(Long.MIN_VALUE),{if(it==today())"Сегодня" else "Вчера"}){day=iso(it)}
         if(!recurring&&!planned&&runCatching{parseDay(day)>today()}.getOrDefault(false))

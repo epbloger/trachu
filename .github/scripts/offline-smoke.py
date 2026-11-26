@@ -13,7 +13,8 @@ import xml.etree.ElementTree as ET
 package = 'ru.epbloger.trachu'
 # Only the separately pinned historical APK may use the old setup flow.
 legacy_apk = hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == '926e2d7f8aa558475c08d186c772c5b6a49ce3eed8c8998ed6c006ffb2cdeb8f'
-assert sys.argv[2:] in ([], ['--legacy']), 'Only --legacy is supported after the APK path'
+assert sys.argv[2:] in ([], ['--legacy'], ['--previous-v11']), 'Unsupported baseline mode'
+previous_v11 = sys.argv[2:] == ['--previous-v11']
 out = pathlib.Path(os.environ.get('TRACHU_OFFLINE_QA_DIR', 'offline-qa'))
 out.mkdir(exist_ok=True)
 
@@ -46,6 +47,25 @@ def tap(node):
 
 def text(value):
     return wait_node(lambda n: n.get('text') == value or n.get('content-desc') == value, value)
+
+def scroll_to_text(value):
+    # The enlarged category selector may be below the initial viewport.
+    # Use the real scrollable form bounds rather than tapping guessed controls.
+    for _ in range(10):
+        root = tree()
+        match = next((n for n in root.iter('node') if n.get('text') == value or n.get('content-desc') == value), None)
+        if match is not None:
+            return match
+        areas = [tuple(map(int, re.findall(r'\d+', n.get('bounds', ''))))
+                 for n in root.iter('node') if n.get('scrollable') == 'true']
+        areas = [b for b in areas if len(b) == 4 and b[3] - b[1] > 50]
+        if not areas:
+            break
+        x1, y1, x2, y2 = max(areas, key=lambda b: (b[2]-b[0])*(b[3]-b[1]))
+        x = (x1+x2)//2
+        adb('shell', 'input', 'swipe', str(x), str(y1+(y2-y1)*4//5), str(x), str(y1+(y2-y1)//5), '400')
+        time.sleep(.4)
+    return text(value)
 
 def enter(value):
     tap(wait_node(lambda n: n.get('class') == 'android.widget.EditText', 'first editable field'))
@@ -87,6 +107,9 @@ try:
         installed = adb('shell', 'dumpsys', 'package', package)
         assert re.search(r'^\s*versionName=1\.0\.0\s*$', installed, re.M), 'Legacy flow is only allowed for installed version 1.0.0'
         legacy_apk = True
+    if previous_v11:
+        installed = adb('shell', 'dumpsys', 'package', package)
+        assert re.search(r'^\s*versionName=1\.1\.0\s*$', installed, re.M), 'Previous baseline must be 1.1.0'
     assert 'Success' in adb('shell', 'pm', 'clear', package)
     adb('shell', 'cmd', 'connectivity', 'airplane-mode', 'enable')
     adb('shell', 'svc', 'wifi', 'disable')
@@ -116,8 +139,11 @@ try:
     text('Новая операция')
     enter('42.50')
     if not legacy_apk:
+        if not previous_v11:
+            tap(text('Сохранить'))
+            text('Выберите категорию операции')
         # A new operation deliberately has no preselected category.
-        tap(text('Продукты'))
+        tap(scroll_to_text('Продукты'))
     tap(text('Сохранить'))
     wait_closed('Новая операция')
     adb('shell', 'am', 'force-stop', package)
