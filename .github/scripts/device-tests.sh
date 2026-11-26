@@ -19,6 +19,8 @@ status=0
 # The unfiltered API 36 runs below execute the complete instrumentation suite,
 # including PlannerUxTest and DeviceSecurityTest.
 trap 'adb shell cmd connectivity airplane-mode disable || true; adb shell svc wifi enable || true; adb shell svc data enable || true' EXIT
+# Keep connectivity available for the production CBR HTTPS integration test.
+# The independent offline smoke test disables all networks later.
 gradle --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || status=1
 adb pull /sdcard/Android/data/ru.epbloger.trachu/files/qa/. qa/phone/ || true
 cp -a app/build/outputs/androidTest-results qa/phone/ || true
@@ -40,6 +42,32 @@ adb shell settings put system font_scale 1.3
 gradle --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || status=1
 adb pull /sdcard/Android/data/ru.epbloger.trachu/files/qa/. qa/tablet/ || true
 cp -a app/build/outputs/androidTest-results qa/tablet/ || true
+if [[ "$status" == 0 ]]; then
+  # Keep the small-phone and tablet coverage; collect a separate set of
+  # genuine full-resolution phone screenshots using the same debug APK.
+  mkdir -p qa/store-phone
+  adb shell pm clear ru.epbloger.trachu
+  adb shell wm size 1080x2400
+  adb shell wm density 420
+  adb shell settings put system font_scale 1.0
+  adb shell cmd connectivity airplane-mode enable
+  adb shell svc wifi disable
+  adb shell svc data disable
+  gradle --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.epbloger.trachu.ui.NavigationTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || status=1
+  cp -a app/build/outputs/androidTest-results qa/store-phone/ || true
+  adb pull /sdcard/Android/data/ru.epbloger.trachu/files/qa/. qa/store-phone/ || status=1
+  # Keep first-launch navigation isolated from planner fixtures. The second
+  # run retains the first run's PNGs, but has its own instrumentation XML.
+  if [[ "$status" == 0 ]]; then
+    mkdir -p qa/store-phone-planner
+    gradle --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.epbloger.trachu.ui.PlannerUxTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || status=1
+    cp -a app/build/outputs/androidTest-results qa/store-phone-planner/ || true
+    # Copy the planner captures after its own run; do not depend on the
+    # preceding instrumentation invocation retaining app-external files.
+    adb pull /sdcard/Android/data/ru.epbloger.trachu/files/qa/. qa/store-phone/ || status=1
+  fi
+  python3 store/rustore/verify-evidence.py screens qa/store-phone --require-ux-v12 || status=1
+fi
 adb shell wm size reset
 adb shell wm density reset
 adb shell settings put system font_scale 1.0

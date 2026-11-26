@@ -12,9 +12,10 @@ on:
       - '.github/scripts/offline-smoke.py'
       - '.github/scripts/upgrade-smoke.py'
       - '.github/scripts/notification-smoke.py'
+      - 'store/rustore/verify-evidence.py'
+      - 'store/rustore/test-verify-evidence.py'
       - 'store/rustore/sign-release.ps1'
   pull_request:
-    branches: [main]
     paths:
       - 'app/**'
       - '*.gradle.kts'
@@ -24,12 +25,15 @@ on:
       - '.github/scripts/offline-smoke.py'
       - '.github/scripts/upgrade-smoke.py'
       - '.github/scripts/notification-smoke.py'
+      - 'store/rustore/verify-evidence.py'
+      - 'store/rustore/test-verify-evidence.py'
       - 'store/rustore/sign-release.ps1'
 
 permissions:
   contents: read
 concurrency:
-  # Keep each source revision isolated; never cancel a build for another revision.
+  # Keep the evidence for each distinct source revision. A correction must
+  # not interrupt an already running device suite for an earlier revision.
   group: android-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
@@ -52,7 +56,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Prepare Android SDK
+      - name: Verify SDK 36
         shell: bash
         run: |
           set -euo pipefail
@@ -66,10 +70,12 @@ jobs:
             "$manager" --sdk_root="$SDK" 'platforms;android-36' 'build-tools;35.0.0'
           fi
           test -f "$SDK/platforms/android-36/android.jar"
-      - name: Build application variants
+      - name: Test release evidence validator
+        run: python3 store/rustore/test-verify-evidence.py
+      - name: Build debug and unsigned release APK/AAB and device tests
         id: build
         run: gradle --no-daemon --continue --stacktrace assembleDebug assembleRelease bundleRelease assembleDebugAndroidTest
-      - name: Check package metadata
+      - name: Record artifact provenance and inspect merged permissions
         id: provenance
         shell: bash
         run: |
@@ -113,10 +119,10 @@ jobs:
             grep -Eq 'YANDEX_BANNER_ID = "";' "$release_config"
             printf 'Debug: official demo only\nRelease: disabled, empty placement\n' > qa/ads-config.txt
           fi
-      - name: Code checks
+      - name: Run unit tests and lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: gradle --no-daemon --continue --stacktrace testDebugUnitTest lintDebug lintRelease
-      - name: Upgrade compatibility
+      - name: Build verified 1.0.0 and previous 1.1.0 baselines for real in-place upgrades
         id: baseline
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' }}
         shell: bash
@@ -143,14 +149,14 @@ jobs:
           echo "TRACHU_UPGRADE_V11_APK=$old11" >> "$GITHUB_ENV"
           git -C "$baseline11" rev-parse HEAD > qa/upgrade-v11-baseline-commit.txt
           sha256sum "$old11" > qa/upgrade-v11-baseline-sha256.txt
-      - name: Prepare emulator
+      - name: Enable KVM
         id: kvm
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' && steps.baseline.outcome == 'success' }}
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Device compatibility
+      - name: Instrumented phone, tablet and planner UX tests
         if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -159,7 +165,7 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh
-      - name: Legacy Android compatibility
+      - name: Android 8 compatibility and planner UX tests
         if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -168,7 +174,7 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh api26
-      - name: Android 13 compatibility
+      - name: Android 13 compatibility, editor and planner UX tests
         if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -177,66 +183,32 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh api33
-      - name: Validate release packages
+      - name: Verify complete current release evidence and 16 KiB compatibility
         shell: bash
         run: |
           set -euo pipefail
-          APK="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
-          AAB="$(find app/build/outputs/bundle/release -maxdepth 1 -type f -name '*.aab' -print -quit)"
-          test -n "$APK" && test -n "$AAB"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" > qa/release-apk-badging.txt
-          grep -F "package: name='ru.epbloger.trachu' versionCode='3' versionName='1.2.0'" qa/release-apk-badging.txt
-          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 "$APK" | tee qa/zipalign.txt
-          sha256sum "$APK" "$AAB" > qa/SHA256SUMS
+          # connectedDebugAndroidTest may regenerate the instrumentation APK;
+          # fingerprint the exact binaries that will be validated and uploaded.
+          sha256sum app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk app/build/outputs/bundle/release/*.aab app/build/outputs/apk/androidTest/debug/*.apk > qa/SHA256SUMS
           sha256sum -c qa/SHA256SUMS
-          python3 - "$APK" "$AAB" <<'PY'
-          import struct
-          import sys
-          import zipfile
-
-          PAGE = 16 * 1024
-
-          def verify(path):
-              with zipfile.ZipFile(path) as archive:
-                  assert archive.testzip() is None, f"{path}: ZIP CRC mismatch"
-                  libraries = [entry for entry in archive.infolist() if entry.filename.endswith(".so")]
-                  assert libraries, f"{path}: no native libraries"
-                  for entry in libraries:
-                      data = archive.read(entry)
-                      assert data[:4] == b"\x7fELF", f"{entry.filename}: invalid ELF"
-                      elf_class, encoding = data[4], data[5]
-                      assert elf_class in (1, 2) and encoding in (1, 2), f"{entry.filename}: invalid ELF header"
-                      endian = "<" if encoding == 1 else ">"
-                      if elf_class == 2:
-                          phoff = struct.unpack_from(endian + "Q", data, 32)[0]
-                          entsize, count = struct.unpack_from(endian + "HH", data, 54)
-                          minimum, off_pos, align_pos, word = 56, 8, 48, "Q"
-                      else:
-                          phoff = struct.unpack_from(endian + "I", data, 28)[0]
-                          entsize, count = struct.unpack_from(endian + "HH", data, 42)
-                          minimum, off_pos, align_pos, word = 32, 4, 28, "I"
-                      assert entsize >= minimum and phoff + entsize * count <= len(data), f"{entry.filename}: invalid program headers"
-                      loads = 0
-                      for index in range(count):
-                          pos = phoff + index * entsize
-                          if struct.unpack_from(endian + "I", data, pos)[0] != 1:
-                              continue
-                          loads += 1
-                          off, address = struct.unpack_from(endian + ("QQ" if elf_class == 2 else "II"), data, pos + off_pos)
-                          alignment = struct.unpack_from(endian + word, data, pos + align_pos)[0]
-                          assert alignment >= PAGE and alignment & (alignment - 1) == 0 and off % PAGE == address % PAGE, f"{entry.filename}: incompatible LOAD alignment {alignment}"
-                      assert loads > 0, f"{entry.filename}: no LOAD segments"
-              print(f"PASS {path}: native ELF LOAD segments use 16-KiB alignment")
-
-          for candidate in sys.argv[1:]:
-              verify(candidate)
-          PY
-      - name: Validate release provenance
+          python3 store/rustore/verify-evidence.py release --qa . --apk . --aab . --commit "$(git rev-parse HEAD)" --require-ux-v12 | tee qa/current-evidence.txt
+          grep -F 'PASS: 1.0.0 -> 1.2.0, no clear or onboarding' qa/upgrade/result.txt
+          grep -F 'PASS: 1.1.0 -> 1.2.0, no clear or onboarding' qa/upgrade-v11/result.txt
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/release/*.apk | tee qa/zipalign.txt
+      - name: VerifyOnly unsigned APK and AAB against exact commit
         shell: pwsh
         run: |
           $sha=(git rev-parse HEAD).Trim()
           & ./store/rustore/sign-release.ps1 -ArtifactDir . -ExpectedCommit $sha -VerifyOnly 6>&1 | Tee-Object -FilePath qa/signing-verify-only.txt
-      - name: Upload unsigned Release files
+      - name: Prepare release-only checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum app/build/outputs/apk/release/*.apk app/build/outputs/bundle/release/*.aab > qa/SHA256SUMS
+          sha256sum -c qa/SHA256SUMS
+      # Keep internal test results on the runner. Only owner-signable binaries and
+      # their minimal provenance/checksums are retained as a workflow artifact.
+      - name: Upload unsigned Release APK and AAB
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -249,4 +221,4 @@ jobs:
             qa/signing-verify-only.txt
             qa/zipalign.txt
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
