@@ -25,7 +25,11 @@ object CategoryColors {
                 (((g+m)*255).toLong() shl 8) or ((b+m)*255).toLong()
         }.first{it !in used}
 
-    fun next(categories: List<Category>): Long = unused(categories.map{it.color}.toSet())
+    // Reserve chart-only fallback colors too, so a new automatically colored
+    // category cannot recolor existing legacy duplicates in either report.
+    fun next(categories: List<Category>): Long = unused(
+        categories.map{it.color}.toSet()+categories.groupBy{it.income}.values.flatMap{chart(it).values}
+    )
 
     /** Give duplicate stored colors distinct chart colors without altering old
      * categories or overriding their explicit saved settings. */

@@ -142,7 +142,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
     fun title(c:Category)=c.parentId?.let{ledger.categoryName(it)+" / "+c.name} ?: c.name
     val current=options.find{it.id==value}
     val currentColor=current?.let{Color(it.color)}
-    val currentTextColor=currentColor?.let{if(it.luminance()>0.18f)Color(0xFF111111) else Color.White}
+    val currentTextColor=currentColor?.let{if(it.luminance()>0.179f)Color.Black else Color.White}
     val commonIds=listOf("food","transport","home","health","leisure","other","salary","other-income")
     val quickCategories=if(quick)options.filter{!it.archived}
         .sortedWith(compareBy<Category>{it.parentId!=null}.thenBy{commonIds.indexOf(it.id).let{index->if(index<0)Int.MAX_VALUE else index}})
@@ -181,7 +181,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
                 quickCategories.forEach { category->
                     val selected=category.id==value
                     val categoryColor=Color(category.color)
-                    val selectedTextColor=if(categoryColor.luminance()>0.18f)Color(0xFF111111) else Color.White
+                    val selectedTextColor=if(categoryColor.luminance()>0.179f)Color.Black else Color.White
                     FilterChip(
                         selected=selected,onClick={onChoose(category.id)},
                         label={Text(title(category),style=MaterialTheme.typography.bodyMedium,maxLines=2,overflow=TextOverflow.Ellipsis)},

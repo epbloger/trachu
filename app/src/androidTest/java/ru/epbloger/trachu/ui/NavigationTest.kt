@@ -3,6 +3,7 @@ package ru.epbloger.trachu.ui
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.net.ConnectivityManager
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import kotlinx.coroutines.runBlocking
@@ -14,6 +15,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import ru.epbloger.trachu.MainActivity
 import ru.epbloger.trachu.core.Money
+import ru.epbloger.trachu.core.today
+import ru.epbloger.trachu.data.ExchangeRates
 import ru.epbloger.trachu.data.LedgerStore
 import ru.epbloger.trachu.security.Preferences
 
@@ -28,6 +31,26 @@ class NavigationTest {
         try {
             File(directory,"$name.png").outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG,100,it)) }
         } finally { bitmap.recycle() }
+    }
+    // Network availability is external to the app. Preserve the deterministic
+    // converter assertions and report a separate, real Android HTTPS result.
+    private fun recordLiveRateProbe() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val directory=requireNotNull(context.getExternalFilesDir("qa"))
+        directory.mkdirs()
+        val result=runCatching {
+            val connectivity=requireNotNull(context.getSystemService(ConnectivityManager::class.java))
+            if(connectivity.activeNetwork==null) "NOT_RUN: no default network"
+            else {
+                val day=today()
+                val rates=ExchangeRates.fetch("RUB",day)
+                require(rates.all{it.source=="CBR"&&it.day<=day&&it.unitsOfBasePerUnit.toBigDecimal().signum()>0})
+                require(rates.any{it.currency=="USD"}&&rates.any{it.currency=="EUR"})
+                "PASS: Android HTTPS CBR feed, ${rates.size} positive rates, publication day ${rates.maxOf{it.day}}, requested day $day"
+            }
+        }.getOrElse{"UNCONFIRMED: ${it.javaClass.simpleName}: ${it.message.orEmpty().replace('\n',' ').take(240)}"}
+        File(directory,"live-cbr.txt").writeText(result+"\n")
+        android.util.Log.i("TrachuQA",result)
     }
     @Test fun recordExpenseAndNavigateAfterRotation() {
         val initialOrientation=rule.activity.resources.configuration.orientation
@@ -191,5 +214,6 @@ class NavigationTest {
         } finally {
             runBlocking{prefs.theme(previousTheme)}
         }
+        recordLiveRateProbe()
     }
 }

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.ViewModelProvider
@@ -51,6 +52,16 @@ class EditorRecreationTest {
     private fun enter(tag:String,value:String,imeDone:Boolean=true){
         rule.onNodeWithTag(tag).performScrollTo().performTextReplacement(value)
         if(imeDone)rule.onNodeWithTag(tag).performImeAction()
+    }
+    private fun chooseEntryKind(label:String){
+        val body=rule.onNodeWithTag("form_content")
+        fun offset()=body.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+        val current=offset()
+        if(current>0f)body.performSemanticsAction(SemanticsActions.ScrollBy){scroll->scroll(0f,-current)}
+        rule.waitUntil(10_000){offset()<=1f}
+        // The kind chips have their own horizontal scroll; reveal the entire row vertically first.
+        rule.onNodeWithTag("entry-kind:$label").performScrollTo().assertIsDisplayed()
+            .performTouchInput{click()}.assertIsSelected()
     }
 
     @Test fun accountDraftSurvivesRecreationAndCancelDiscardsIt(){
@@ -201,13 +212,11 @@ class EditorRecreationTest {
             // Save lives in the fixed dialog footer, outside the scrollable form body.
             rule.onNodeWithTag("form_save").performClick()
             rule.onNodeWithText("Выберите категорию операции").assertExists()
-            rule.onNodeWithTag("form_content").performScrollToNode(hasTestTag("entry-kind:Доход"))
-            rule.onNodeWithTag("entry-kind:Доход").assertIsDisplayed().performClick().assertIsSelected()
+            chooseEntryKind("Доход")
             rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsNotSelected()
             rule.onNodeWithTag("form_save").performClick()
             rule.onNodeWithText("Выберите категорию операции").assertExists()
-            rule.onNodeWithTag("form_content").performScrollToNode(hasTestTag("entry-kind:Расход"))
-            rule.onNodeWithTag("entry-kind:Расход").assertIsDisplayed().performClick().assertIsSelected()
+            chooseEntryKind("Расход")
             rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsNotSelected()
             rule.onNodeWithTag("category-quick:food").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithTag("category-selected:Категория").assertIsSelected().assertTextContains("Продукты")

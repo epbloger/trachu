@@ -21,4 +21,19 @@ class CategoryColorsTest {
         assertTrue(categories.all{it.color==0xFF6143CC})
         assertEquals(0xFF6143CCL,colors["category-0"])
     }
+
+    @Test fun addingDefaultCategoryPreservesExistingReportColors() {
+        val categories=listOf(false,true).flatMap{income->
+            (0..2).map{Category(id="$income-$it",name="Category $it",income=income,color=0xFF6143CC)}
+        }
+        val next=CategoryColors.next(categories)
+        for(income in listOf(false,true)){
+            val group=categories.filter{it.income==income}
+            val before=CategoryColors.chart(group)
+            val after=CategoryColors.chart(group+Category(id="new-$income",name="New",income=income,color=next))
+            assertFalse(next in before.values)
+            assertEquals(before,after.filterKeys{it in before})
+            assertEquals(next,after["new-$income"])
+        }
+    }
 }
