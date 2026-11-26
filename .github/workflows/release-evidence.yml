@@ -1,0 +1,75 @@
+name: Release evidence replay
+on:
+  workflow_call:
+    inputs:
+      run_id:
+        type: string
+        default: '45801256985'
+      source_commit:
+        type: string
+        default: '55a0d207e709d6319426772c1bd46d70943b1062'
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Android integration run with retained artifacts
+        required: true
+        default: '45801256985'
+      source_commit:
+        description: Full SHA of the tested Android source
+        required: true
+        default: '55a0d207e709d6319426772c1bd46d70943b1062'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SOURCE_COMMIT: ${{ inputs.source_commit || '55a0d207e709d6319426772c1bd46d70943b1062' }}
+      RUN_ID: ${{ inputs.run_id || '45801256985' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Confirm Android source has not changed since tested commit
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          git diff --exit-code "$SOURCE_COMMIT" HEAD -- app/ build.gradle.kts settings.gradle.kts gradle.properties
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ env.RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: trachu-unsigned-release-*
+          path: evidence
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ env.RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: trachu-verification-reports
+          path: evidence/trachu-verification-reports
+      - name: Revalidate exact release files, test reports and screenshots
+        run: |
+          set -euo pipefail
+          python3 store/rustore/test-verify-evidence.py
+          python3 store/rustore/verify-evidence.py release \
+            --qa evidence/trachu-verification-reports \
+            --apk evidence/trachu-unsigned-release-apk \
+            --aab evidence/trachu-unsigned-release-aab \
+            --commit "$SOURCE_COMMIT" | tee replay.txt
+          align=$(find "$ANDROID_HOME/build-tools" -name zipalign -type f | sort -V | tail -1)
+          test -x "$align"
+          "$align" -c -P 16 4 evidence/trachu-unsigned-release-apk/app/build/outputs/apk/release/app-release-unsigned.apk | tee -a replay.txt
+      - name: Check signing script against original CI artifact structure
+        shell: pwsh
+        run: |
+          & ./store/rustore/sign-release.ps1 -ArtifactDir evidence/trachu-unsigned-release-apk -ExpectedCommit $env:SOURCE_COMMIT -VerifyOnly
+          & ./store/rustore/sign-release.ps1 -ArtifactDir evidence/trachu-unsigned-release-aab -ExpectedCommit $env:SOURCE_COMMIT -VerifyOnly
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trachu-release-evidence-replay
+          path: replay.txt
+          retention-days: 14

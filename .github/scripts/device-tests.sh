@@ -49,13 +49,7 @@ if [[ "$status" == 0 ]]; then
   adb shell svc data disable
   gradle --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.epbloger.trachu.ui.NavigationTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || status=1
   adb pull /sdcard/Android/data/ru.epbloger.trachu/files/qa/. qa/store-phone/ || status=1
-  python3 - <<'PY' || status=1
-import pathlib, struct
-for screen in ('dashboard', 'operations', 'split_entry'):
-    data = pathlib.Path(f'qa/store-phone/{screen}.png').read_bytes()
-    assert data[:8] == b'\x89PNG\r\n\x1a\n', screen
-    assert struct.unpack('>II', data[16:24]) == (1080, 2400), screen
-PY
+  python3 store/rustore/verify-evidence.py screens qa/store-phone || status=1
   cp -a app/build/outputs/androidTest-results qa/store-phone/ || true
 fi
 adb shell wm size reset

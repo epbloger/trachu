@@ -10,6 +10,10 @@ on:
       - '.github/workflows/android.yml'
       - '.github/scripts/device-tests.sh'
       - '.github/scripts/offline-smoke.py'
+      - '.github/workflows/release-evidence.yml'
+      - 'store/rustore/verify-evidence.py'
+      - 'store/rustore/test-verify-evidence.py'
+      - 'store/rustore/sign-release.ps1'
   pull_request:
     paths:
       - 'app/**'
@@ -18,6 +22,10 @@ on:
       - '.github/workflows/android.yml'
       - '.github/scripts/device-tests.sh'
       - '.github/scripts/offline-smoke.py'
+      - '.github/workflows/release-evidence.yml'
+      - 'store/rustore/verify-evidence.py'
+      - 'store/rustore/test-verify-evidence.py'
+      - 'store/rustore/sign-release.ps1'
 
 permissions:
   contents: read
@@ -26,7 +34,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      replay: ${{ steps.mode.outputs.replay }}
+    steps:
+      # Reuse retained evidence only on an explicitly marked, narrowly scoped
+      # push. Any application/build/test change still receives the full suite.
+      - uses: actions/checkout@v4
+        if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[replay-evidence]') }}
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: mode
+        env:
+          REPLAY_REQUESTED: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[replay-evidence]') }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          replay=false
+          if [[ "$REPLAY_REQUESTED" == true ]] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            changes=$(git diff --name-only "$BEFORE" HEAD)
+            if [[ -n "$changes" ]] && ! grep -Ev '^([.]github/(workflows/(android|release-evidence)[.]yml|scripts/device-tests[.]sh)|store/rustore/((test-)?verify-evidence[.]py|sign-release[.]ps1)|docs/(QA_REPORT|SIGNING|STORE_PUBLICATION|RELEASE_CHECKLIST|PRODUCT_AUDIT)[.]md|README[.]md)$' <<< "$changes"; then
+              replay=true
+            fi
+          fi
+          echo "replay=$replay" >> "$GITHUB_OUTPUT"
+  evidence:
+    needs: plan
+    if: ${{ needs.plan.outputs.replay == 'true' }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/release-evidence.yml
   verify:
+    needs: plan
+    if: ${{ needs.plan.outputs.replay != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     env:
@@ -57,6 +100,8 @@ jobs:
             "$manager" --sdk_root="$SDK" 'platforms;android-36' 'build-tools;35.0.0'
           fi
           test -f "$SDK/platforms/android-36/android.jar"
+      - name: Test release evidence validator
+        run: python3 store/rustore/test-verify-evidence.py
       - name: Build debug and unsigned release APK/AAB and device tests
         id: build
         run: gradle --no-daemon --continue --stacktrace assembleDebug assembleRelease bundleRelease assembleDebugAndroidTest
