@@ -1,6 +1,8 @@
 package ru.epbloger.trachu.ui
 
+import android.content.res.Configuration
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -34,6 +36,14 @@ class EditorRecreationTest {
     @Before fun completeInitialSetup() { runBlocking{Preferences(context).completeOnboarding()} }
     private fun withVm(block:(AppViewModel)->Unit){
         rule.activityRule.scenario.onActivity{block(ViewModelProvider(it)[AppViewModel::class.java])}
+    }
+    private fun shell(command:String):String =
+        InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command).use { descriptor ->
+            ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText().trim() }
+        }
+    private fun restoreSystemSetting(name:String,value:String){
+        if(value=="null"||value.isBlank())shell("settings delete system $name")
+        else shell("settings put system $name $value")
     }
     private fun awaitTag(tag:String){
         rule.waitUntil(20_000){rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()}
@@ -70,6 +80,8 @@ class EditorRecreationTest {
 
     @Test fun entryDraftAndPendingReceiptSurviveRecreation(){
         val store=LedgerStore.get(context)
+        val preferences=Preferences(context)
+        val previous=runBlocking{preferences.current()}
         val account=Account(name="Черновик ${newId()}",currency=runBlocking{store.current().baseCurrency})
         runBlocking{store.change{it.copy(accounts=it.accounts+account)}}
         try {
@@ -82,6 +94,10 @@ class EditorRecreationTest {
             val amountTag="field:Сумма (${account.currency})"
             awaitTag(amountTag)
             enter(amountTag,"1234")
+            val draftDate=iso(today()-1)
+            rule.onNodeWithText("Вчера").performScrollTo().performClick().assertIsSelected()
+            rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(draftDate)
+            rule.onNodeWithTag("category-quick:transport").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithTag("toggle:Разделить по категориям").performScrollTo().performClick().assertIsOn()
             enter("field:Часть суммы 1","1234")
             rule.onNodeWithText("Комментарий, теги и чек").performScrollTo().performClick()
@@ -89,12 +105,66 @@ class EditorRecreationTest {
             enter("field:Теги","черновик")
             rule.onNodeWithTag("toggle:Запланировать").performScrollTo().performClick().assertIsOn()
             withVm{it.receiptRequest=editor.draft}
-            rule.activityRule.scenario.recreate()
+            runBlocking{preferences.setCredential(PinVault.create("1942"));preferences.timeout(0)}
+            withVm{it.lock()}
+            rule.waitUntil(20_000){rule.onAllNodesWithText("Ваши финансы защищены").fetchSemanticsNodes().isNotEmpty()}
+            withVm{it.unlockPin("1942")}
             awaitTag(amountTag)
-            withVm{assertSame(editor,it.editor);assertSame(editor.draft,it.receiptRequest);it.receiptRequest=null}
+            withVm{assertSame(editor,it.editor);assertSame(editor.draft,it.receiptRequest)}
+            rule.onNodeWithTag("choice:Счёт").performScrollTo().assertTextContains(account.name,substring=true)
+            rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(draftDate)
             rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains("1234")
             rule.onNodeWithTag("field:Часть суммы 1").performScrollTo().assertTextContains("1234")
-            rule.onNodeWithTag("category-selected:Категория 1").performScrollTo().assertIsNotSelected()
+            rule.onNodeWithTag("category-selected:Категория 1").performScrollTo().assertIsSelected().assertTextContains("Транспорт")
+            rule.onNodeWithTag("field:Комментарий").performScrollTo().assertTextContains("Несохранённая покупка")
+            rule.onNodeWithTag("field:Теги").performScrollTo().assertTextContains("черновик")
+            rule.onNodeWithTag("toggle:Запланировать").performScrollTo().assertIsOn()
+            val scenario=rule.activityRule.scenario
+            var originalOrientation=Configuration.ORIENTATION_UNDEFINED
+            var originalDisplayRotation=0
+            scenario.onActivity{
+                originalOrientation=it.resources.configuration.orientation
+                originalDisplayRotation=it.windowManager.defaultDisplay.rotation
+            }
+            val rotatedOrientation=if(originalOrientation==Configuration.ORIENTATION_LANDSCAPE)
+                Configuration.ORIENTATION_PORTRAIT else Configuration.ORIENTATION_LANDSCAPE
+            val originalAccelerometerRotation=shell("settings get system accelerometer_rotation")
+            val originalUserRotation=shell("settings get system user_rotation")
+            fun currentOrientation():Int {
+                var value=Configuration.ORIENTATION_UNDEFINED
+                scenario.onActivity{value=it.resources.configuration.orientation}
+                return value
+            }
+            try {
+                // Force a real 90-degree display rotation. requestedOrientation is
+                // ignored by Android 16 on some large-screen devices.
+                shell("settings put system accelerometer_rotation 0")
+                shell("settings put system user_rotation ${(originalDisplayRotation+1)%4}")
+                rule.waitUntil(20_000){currentOrientation()==rotatedOrientation}
+                awaitTag(amountTag)
+                withVm{assertSame(editor,it.editor);assertSame(editor.draft,it.receiptRequest)}
+                rule.onNodeWithTag("choice:Счёт").performScrollTo().assertTextContains(account.name,substring=true)
+                rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(draftDate)
+                rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains("1234")
+                rule.onNodeWithTag("field:Часть суммы 1").performScrollTo().assertTextContains("1234")
+                rule.onNodeWithTag("category-selected:Категория 1").performScrollTo().assertIsSelected().assertTextContains("Транспорт")
+                rule.onNodeWithTag("field:Комментарий").performScrollTo().assertTextContains("Несохранённая покупка")
+                rule.onNodeWithTag("field:Теги").performScrollTo().assertTextContains("черновик")
+                rule.onNodeWithTag("toggle:Запланировать").performScrollTo().assertIsOn()
+            } finally {
+                restoreSystemSetting("user_rotation",originalUserRotation)
+                restoreSystemSetting("accelerometer_rotation",originalAccelerometerRotation)
+                rule.waitUntil(20_000){currentOrientation()==originalOrientation}
+            }
+            awaitTag(amountTag)
+            scenario.recreate()
+            awaitTag(amountTag)
+            withVm{assertSame(editor,it.editor);assertSame(editor.draft,it.receiptRequest);it.receiptRequest=null}
+            rule.onNodeWithTag("choice:Счёт").performScrollTo().assertTextContains(account.name,substring=true)
+            rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(draftDate)
+            rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains("1234")
+            rule.onNodeWithTag("field:Часть суммы 1").performScrollTo().assertTextContains("1234")
+            rule.onNodeWithTag("category-selected:Категория 1").performScrollTo().assertIsSelected().assertTextContains("Транспорт")
             rule.onNodeWithTag("field:Комментарий").performScrollTo().assertTextContains("Несохранённая покупка")
             rule.onNodeWithTag("field:Теги").performScrollTo().assertTextContains("черновик")
             rule.onNodeWithTag("toggle:Запланировать").performScrollTo().assertIsOn()
@@ -102,7 +172,12 @@ class EditorRecreationTest {
             assertFalse(runBlocking{store.current().entries.any{it.accountId==account.id}})
         } finally {
             withVm{it.editor=null;it.receiptRequest=null}
-            runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id})}}
+            runBlocking{
+                preferences.setCredential(previous.credential)
+                preferences.timeout(previous.lockSeconds)
+                if(previous.biometric)preferences.biometric(true)
+                store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id})}
+            }
         }
     }
 
@@ -126,11 +201,13 @@ class EditorRecreationTest {
             // Save lives in the fixed dialog footer, outside the scrollable form body.
             rule.onNodeWithTag("form_save").performClick()
             rule.onNodeWithText("Выберите категорию операции").assertExists()
-            rule.onNodeWithTag("entry-kind:Доход").performScrollTo().performClick().assertIsSelected()
+            rule.onNodeWithTag("form_content").performScrollToNode(hasTestTag("entry-kind:Доход"))
+            rule.onNodeWithTag("entry-kind:Доход").assertIsDisplayed().performClick().assertIsSelected()
             rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsNotSelected()
             rule.onNodeWithTag("form_save").performClick()
             rule.onNodeWithText("Выберите категорию операции").assertExists()
-            rule.onNodeWithTag("entry-kind:Расход").performScrollTo().performClick()
+            rule.onNodeWithTag("form_content").performScrollToNode(hasTestTag("entry-kind:Расход"))
+            rule.onNodeWithTag("entry-kind:Расход").assertIsDisplayed().performClick().assertIsSelected()
             rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsNotSelected()
             rule.onNodeWithTag("category-quick:food").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithTag("category-selected:Категория").assertIsSelected().assertTextContains("Продукты")

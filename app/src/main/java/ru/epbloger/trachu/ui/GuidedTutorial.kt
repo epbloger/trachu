@@ -29,6 +29,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /** Only the genuine editor opened by an active walkthrough opts into hints. */
 internal val LocalGuidedEditorHint = compositionLocalOf { false }
@@ -48,17 +50,40 @@ internal enum class TutorialStep(val label: String, val instruction: String) {
     val next: TutorialStep? get() = entries.getOrNull(ordinal + 1)
 }
 
+internal data class TutorialBoundsSample(val bounds: Rect, val revision: Long)
+
+/** Test-only geometry channel. It does not add semantics to the protected controls. */
+internal object TutorialBoundsProbe {
+    private val revision = AtomicLong()
+    private val samples = ConcurrentHashMap<String, TutorialBoundsSample>()
+
+    fun sample(key: String): TutorialBoundsSample? = samples[key]
+    fun record(key: String, bounds: Rect) {
+        samples[key] = TutorialBoundsSample(bounds, revision.incrementAndGet())
+    }
+    fun clear(key: String) {
+        samples.remove(key)
+    }
+}
+
 /** Measured from the actual control, not from a hard-coded screen coordinate. */
 @OptIn(ExperimentalFoundationApi::class)
-internal fun Modifier.tutorialAnchor(active: Boolean, onBounds: (Rect) -> Unit): Modifier =
+internal fun Modifier.tutorialAnchor(active: Boolean, probeKey: String, onBounds: (Rect) -> Unit): Modifier =
     if (!active) this else composed {
         val requester = remember { BringIntoViewRequester() }
         val report by rememberUpdatedState(onBounds)
+        DisposableEffect(probeKey) {
+            onDispose { TutorialBoundsProbe.clear(probeKey) }
+        }
         LaunchedEffect(requester) {
             withFrameNanos { }
             requester.bringIntoView()
         }
-        this.bringIntoViewRequester(requester).onGloballyPositioned { report(it.boundsInRoot()) }
+        this.bringIntoViewRequester(requester).onGloballyPositioned {
+            val bounds = it.boundsInRoot()
+            TutorialBoundsProbe.record(probeKey, bounds)
+            report(bounds)
+        }
     }
 
 /** A guide lives in the same window as the real controls, so it follows density,

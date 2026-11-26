@@ -269,7 +269,9 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
     val focus=LocalFocusManager.current
     var anchor by remember(tutorialStep){mutableStateOf<Rect?>(null)}
     var advanced by remember(tutorialStep){mutableStateOf(false)}
-    fun target(step:TutorialStep)=Modifier.tutorialAnchor(tutorialStep==step&&!waitingForTutorialEditor){anchor=it}
+    fun target(step:TutorialStep)=Modifier.tutorialAnchor(
+        tutorialStep==step&&!waitingForTutorialEditor,probeKey=step.name.lowercase()
+    ){anchor=it}
     fun stopTutorial(){onTutorialStep(null);waitingForTutorialEditor=false;scope.launch{drawerState.close()}}
     LaunchedEffect(tab,more){if(tab==Tab.MORE&&more==MorePage.TUTORIAL)startTutorial()}
     LaunchedEffect(tutorialStep){if(tutorialStep!=null)focus.clearFocus()}

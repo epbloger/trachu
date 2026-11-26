@@ -1,7 +1,7 @@
 package ru.epbloger.trachu.ui
 
-import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.os.ParcelFileDescriptor
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.geometry.Rect
@@ -61,20 +61,30 @@ class GuidedTutorialTest {
     private fun awaitOrientation(scenario: ActivityScenario<MainActivity>, expected: Int) {
         rule.waitUntil(20_000) { orientation(scenario) == expected }
     }
-    private fun assertExpenseTargetAligned() {
-        lateinit var actual: Rect
+    private fun shell(command: String): String =
+        InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command).use { descriptor ->
+            ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText().trim() }
+        }
+    private fun restoreSystemSetting(name: String, value: String) {
+        if (value == "null" || value.isBlank()) shell("settings delete system $name")
+        else shell("settings put system $name $value")
+    }
+    private fun assertExpenseTargetAligned(afterRevision: Long? = null): TutorialBoundsSample {
+        lateinit var actual: TutorialBoundsSample
         lateinit var highlight: Rect
         fun aligned() = listOf(
-            abs(actual.left - highlight.left), abs(actual.top - highlight.top),
-            abs(actual.right - highlight.right), abs(actual.bottom - highlight.bottom)
+            abs(actual.bounds.left - highlight.left), abs(actual.bounds.top - highlight.top),
+            abs(actual.bounds.right - highlight.right), abs(actual.bounds.bottom - highlight.bottom)
         ).all { it <= 2f }
 
         rule.waitUntil(10_000) {
-            actual = rule.onNodeWithTag("add-expense").fetchSemanticsNode().boundsInRoot
-            highlight = rule.onNodeWithTag("tutorial-target-expense").fetchSemanticsNode().boundsInRoot
-            aligned()
+            actual = TutorialBoundsProbe.sample("expense") ?: return@waitUntil false
+            highlight = rule.onAllNodesWithTag("tutorial-target-expense").fetchSemanticsNodes().singleOrNull()?.boundsInRoot
+                ?: return@waitUntil false
+            (afterRevision == null || actual.revision > afterRevision) && aligned()
         }
-        assertTrue("Tutorial highlight $highlight must match real add-expense bounds $actual within 2px", aligned())
+        assertTrue("Tutorial highlight $highlight must match actual control bounds ${actual.bounds} within 2px", aligned())
+        return actual
     }
     private fun tapTarget(step: String) {
         val tag = "tutorial-target-$step"
@@ -117,36 +127,43 @@ class GuidedTutorialTest {
             assertTrue(before.entries.isEmpty())
 
             // Force a real orientation change while EXPENSE is the active step.
-            var originalRequestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            scenario.onActivity { originalRequestedOrientation = it.requestedOrientation }
+            val beforeRotationRevision = assertExpenseTargetAligned().revision
+            val originalAccelerometerRotation = shell("settings get system accelerometer_rotation")
+            val originalUserRotation = shell("settings get system user_rotation")
+            var originalDisplayRotation = 0
+            scenario.onActivity { originalDisplayRotation = it.windowManager.defaultDisplay.rotation }
             val originalOrientation = orientation(scenario)
             val rotatedOrientation = if (originalOrientation == Configuration.ORIENTATION_LANDSCAPE)
                 Configuration.ORIENTATION_PORTRAIT else Configuration.ORIENTATION_LANDSCAPE
-            val rotatedRequest = if (rotatedOrientation == Configuration.ORIENTATION_LANDSCAPE)
-                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            var rotatedRevision = beforeRotationRevision
             try {
-                scenario.onActivity { it.requestedOrientation = rotatedRequest }
+                // Lock auto-rotation and turn the display by 90 degrees. This also
+                // works on large-screen/API 36 devices that ignore requestedOrientation.
+                shell("settings put system accelerometer_rotation 0")
+                shell("settings put system user_rotation ${(originalDisplayRotation + 1) % 4}")
                 awaitOrientation(scenario, rotatedOrientation)
                 awaitTag("tutorial-target-expense")
                 rule.onNodeWithTag("tutorial-overlay").assertIsDisplayed()
                 rule.onNodeWithTag("tutorial-target-expense").assertIsDisplayed()
-                rule.onNodeWithTag("add-expense").assertIsDisplayed()
-                assertExpenseTargetAligned()
+                val rotatedSample = assertExpenseTargetAligned(afterRevision = beforeRotationRevision)
+                rotatedRevision = rotatedSample.revision
             } finally {
-                scenario.onActivity { it.requestedOrientation = originalRequestedOrientation }
+                restoreSystemSetting("user_rotation", originalUserRotation)
+                restoreSystemSetting("accelerometer_rotation", originalAccelerometerRotation)
                 awaitOrientation(scenario, originalOrientation)
             }
             awaitTag("tutorial-target-expense")
             rule.onNodeWithTag("tutorial-overlay").assertIsDisplayed()
             rule.onNodeWithTag("tutorial-target-expense").assertIsDisplayed()
-            assertExpenseTargetAligned()
+            val restoredSample = assertExpenseTargetAligned(afterRevision = rotatedRevision)
 
             // Explicit ActivityScenario recreation remains a separate lifecycle check.
+            val beforeRecreateRevision = restoredSample.revision
             scenario.recreate()
             awaitTag("tutorial-target-expense")
             rule.onNodeWithTag("tutorial-overlay").assertIsDisplayed()
             rule.onNodeWithTag("tutorial-target-expense").assertIsDisplayed()
-            assertExpenseTargetAligned()
+            assertExpenseTargetAligned(afterRevision = beforeRecreateRevision)
             tapTarget("expense")
             assertEditor(scenario, Kind.EXPENSE)
             rule.onNodeWithText("Отмена").performClick()
