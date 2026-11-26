@@ -117,6 +117,25 @@ class AdvancedFinanceTest {
         assertEquals(0L,Finance.totals(excluded,Period.month(day)).expense)
         assertEquals(999000L,Finance.balance(excluded,"a",day))
     }
+    @Test fun finishedScheduleCanBeRetainedAndEditedWithoutGeneratingMoreEntries() {
+        val template=Finance.makeEntry(l,Kind.EXPENSE,"a",125,day,listOf("food" to 125L),status=EntryStatus.PLANNED)
+        val schedule=Schedule("finished",template,day,Frequency.DAILY,endDay=day,autoPost=true)
+        val completed=Finance.generate(l.copy(schedules=listOf(schedule)).validated(),day).validated()
+        val finished=completed.schedules.single()
+        assertFalse(finished.enabled)
+        assertEquals(day+1,finished.nextDay)
+        assertEquals(1,completed.entries.size)
+        assertEquals(EntryStatus.POSTED,completed.entries.single().status)
+        val edited=completed.copy(schedules=listOf(finished.copy(template=finished.template.copy(note="История")))).validated()
+        assertEquals(edited,Finance.generate(edited,day+30).validated())
+        assertTrue(runCatching{edited.copy(schedules=listOf(finished.copy(enabled=true))).validated()}.isFailure)
+        val renewed=edited.copy(schedules=listOf(finished.copy(enabled=true,endDay=day+1))).validated()
+        val again=Finance.generate(renewed,day+1).validated()
+        assertEquals(2,again.entries.size)
+        assertEquals(2,again.entries.map{it.id}.distinct().size)
+        assertFalse(again.schedules.single().enabled)
+        assertEquals(again,Finance.generate(again,day+10).validated())
+    }
     @Test fun singleFuturePaymentPostsOnlyWhenDueAndOnlyOnce() {
         val e=Finance.makeEntry(l,Kind.EXPENSE,"a",1000,day,listOf("food" to 1000),
             status=EntryStatus.PLANNED,timeMinutes=720,autoPostPlanned=true)

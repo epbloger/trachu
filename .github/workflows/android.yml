@@ -9,6 +9,7 @@ on:
       - 'gradle.properties'
       - '.github/workflows/android.yml'
       - '.github/scripts/device-tests.sh'
+      - '.github/scripts/offline-smoke.py'
   pull_request:
     paths:
       - 'app/**'
@@ -16,6 +17,7 @@ on:
       - 'gradle.properties'
       - '.github/workflows/android.yml'
       - '.github/scripts/device-tests.sh'
+      - '.github/scripts/offline-smoke.py'
 
 permissions:
   contents: read

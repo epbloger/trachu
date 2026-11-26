@@ -77,4 +77,29 @@ class LedgerStoreTest {
             assertEquals(before,store.current())
         }finally{db.close()}
     }
+    @Test fun pagedReceiptsKeepPrefixIdsSeparateAndRemoveObsoleteChunks()=runBlocking {
+        val db=Room.inMemoryDatabaseBuilder(context,TrachuDatabase::class.java).build()
+        try {
+            val store=LedgerStore(db)
+            val initial=Ledger.initial().copy(accounts=listOf(Account("a","Карта")))
+            val first=Receipt("r","image/png","AAAA".repeat(220_000))
+            val second=Receipt("r:000000","image/png","BBBB".repeat(7_000))
+            val entry=Finance.makeEntry(initial,Kind.EXPENSE,"a",500,today(),listOf("food" to 500L),
+                receiptIds=listOf(first.id,second.id))
+            val ledger=initial.copy(entries=listOf(entry),receipts=listOf(first,second))
+            store.restore(ledger)
+            assertEquals(ledger.receipts.associateBy { it.id },store.current().receipts.associateBy { it.id })
+            val shorter=first.copy(base64="CCCC")
+            store.change { it.copy(receipts=listOf(shorter,second)) }
+            assertEquals(listOf(shorter,second),store.current().receipts)
+            store.change { it.copy(entries=it.entries.map { e -> e.copy(receiptIds=listOf(second.id)) }) }
+            assertEquals(listOf(second),store.current().receipts)
+            val before=store.current()
+            db.ledgerDao().put(listOf(LedgerRecord("receipt_chunk","orphan:000000","AAAA")))
+            assertTrue(runCatching { store.current() }.isFailure)
+            // A valid replacement can recover a corrupt previous snapshot atomically.
+            store.restore(before)
+            assertEquals(before,store.current())
+        } finally { db.close() }
+    }
 }

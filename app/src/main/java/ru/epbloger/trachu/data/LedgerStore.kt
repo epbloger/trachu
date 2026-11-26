@@ -14,12 +14,25 @@ import ru.epbloger.trachu.core.*
 data class LedgerRecord(val kind: String, val id: String, val payload: String,
     @ColumnInfo(defaultValue = "1") val formatVersion: Int = 1)
 
+data class RecordStats(val bytes: Long, val rows: Long) {
+    // Includes decoded strings, receipt builders and per-object/list overhead.
+    fun estimatedMemory(): Long = bytes * 4 + rows * 1024
+}
+
 @Dao
 interface LedgerDao {
     @Query("SELECT * FROM ledger_records ORDER BY kind, id")
     suspend fun read(): List<LedgerRecord>
-    @Query("SELECT * FROM ledger_records ORDER BY kind, id")
-    fun observe(): Flow<List<LedgerRecord>>
+    @Query("SELECT COALESCE(SUM(length(CAST(payload AS BLOB)) + length(CAST(id AS BLOB)) + length(CAST(kind AS BLOB))), 0) AS bytes, COUNT(*) AS rows FROM ledger_records")
+    suspend fun stats(): RecordStats
+    @Query("SELECT * FROM ledger_records WHERE kind = :kind AND id > :after ORDER BY id LIMIT :limit")
+    suspend fun page(kind: String, after: String, limit: Int): List<LedgerRecord>
+    @Query("SELECT * FROM ledger_records WHERE kind = 'receipt_chunk' AND id >= :prefix AND id < :end AND length(CAST(id AS BLOB)) = length(CAST(:prefix AS BLOB)) + 6 AND id > :after ORDER BY id LIMIT :limit")
+    suspend fun receiptPage(prefix: String, end: String, after: String, limit: Int): List<LedgerRecord>
+    @Query("DELETE FROM ledger_records WHERE kind = 'receipt_chunk' AND id >= :prefix AND id < :end AND length(CAST(id AS BLOB)) = length(CAST(:prefix AS BLOB)) + 6")
+    suspend fun deleteReceiptChunks(prefix: String, end: String)
+    @Query("DELETE FROM ledger_records")
+    suspend fun clear()
     @Upsert suspend fun put(records: List<LedgerRecord>)
     @Delete suspend fun delete(records: List<LedgerRecord>)
 }
@@ -48,76 +61,219 @@ abstract class TrachuDatabase : RoomDatabase() {
  */
 object LedgerRecords {
     val json = Json { encodeDefaults = true; ignoreUnknownKeys = false }
-    fun encode(ledger: Ledger): List<LedgerRecord> = buildList {
-        add(LedgerRecord("meta", "base", ledger.baseCurrency))
-        fun <T> addAll(kind: String, values: List<T>, id: (T) -> String, encode: (T) -> String) {
-            values.forEach { add(LedgerRecord(kind, id(it), encode(it))) }
-        }
-        addAll("account", ledger.accounts, { it.id }, { json.encodeToString(it) })
-        addAll("category", ledger.categories, { it.id }, { json.encodeToString(it) })
-        addAll("entry", ledger.entries, { it.id }, { json.encodeToString(it) })
-        addAll("budget", ledger.budgets, { it.id }, { json.encodeToString(it) })
-        addAll("debt", ledger.debts, { it.id }, { json.encodeToString(it) })
-        addAll("goal", ledger.goals, { it.id }, { json.encodeToString(it) })
-        addAll("schedule", ledger.schedules, { it.id }, { json.encodeToString(it) })
-        addAll("rate", ledger.rates, { "${it.currency}:${it.day}" }, { json.encodeToString(it) })
-        ledger.receipts.forEach { receipt ->
-            add(LedgerRecord("receipt", receipt.id, receipt.mime))
-            receipt.base64.chunked(24_000).forEachIndexed { index, chunk ->
-                add(LedgerRecord("receipt_chunk", "${receipt.id}:${index.toString().padStart(6,'0')}", chunk))
-            }
+    private const val chunkSize = 24_000
+    internal fun receiptRows(receipt: Receipt): Sequence<LedgerRecord> = sequence {
+        yield(LedgerRecord("receipt", receipt.id, receipt.mime))
+        for (start in receipt.base64.indices step chunkSize) {
+            val index = start / chunkSize
+            yield(LedgerRecord("receipt_chunk", "${receipt.id}:${index.toString().padStart(6,'0')}",
+                receipt.base64.substring(start, minOf(start + chunkSize, receipt.base64.length))))
         }
     }
-    fun decode(rows: List<LedgerRecord>): Ledger {
-        if (rows.isEmpty()) return Ledger.initial()
-        require(rows.map { it.kind to it.id }.distinct().size == rows.size)
-        require(rows.all { it.formatVersion == 1 }) { "Неподдерживаемая версия записи" }
-        require(rows.all { it.kind in setOf("meta","account","category","entry","budget","debt","goal","schedule","rate","receipt","receipt_chunk") })
-        val grouped = rows.groupBy { it.kind }
-        val base = grouped["meta"]?.single()?.also { require(it.id == "base") }?.payload
-            ?: error("Отсутствует основная валюта")
-        fun group(kind: String) = grouped[kind].orEmpty()
-        val chunks = group("receipt_chunk").groupBy { it.id.substringBeforeLast(':') }
-        val receipts = group("receipt").map { r ->
-            val parts = chunks[r.id].orEmpty().sortedBy { it.id }
-            require(parts.isNotEmpty() && parts.indices.all { i -> parts[i].id == "${r.id}:${i.toString().padStart(6,'0')}" })
-            Receipt(r.id, r.payload, parts.joinToString("") { it.payload })
+    fun records(ledger: Ledger): Sequence<LedgerRecord> = sequence {
+        yield(LedgerRecord("meta", "base", ledger.baseCurrency))
+        ledger.accounts.forEach { yield(LedgerRecord("account", it.id, json.encodeToString(it))) }
+        ledger.categories.forEach { yield(LedgerRecord("category", it.id, json.encodeToString(it))) }
+        ledger.entries.forEach { yield(LedgerRecord("entry", it.id, json.encodeToString(it))) }
+        ledger.budgets.forEach { yield(LedgerRecord("budget", it.id, json.encodeToString(it))) }
+        ledger.debts.forEach { yield(LedgerRecord("debt", it.id, json.encodeToString(it))) }
+        ledger.goals.forEach { yield(LedgerRecord("goal", it.id, json.encodeToString(it))) }
+        ledger.schedules.forEach { yield(LedgerRecord("schedule", it.id, json.encodeToString(it))) }
+        ledger.rates.forEach { yield(LedgerRecord("rate", "${it.currency}:${it.day}", json.encodeToString(it))) }
+        ledger.receipts.forEach { yieldAll(receiptRows(it)) }
+    }
+    fun encode(ledger: Ledger): List<LedgerRecord> = records(ledger).toList()
+
+    internal fun stats(ledger: Ledger): RecordStats {
+        var bytes = 0L
+        var rows = 0L
+        records(ledger).forEach {
+            bytes += it.kind.toByteArray(Charsets.UTF_8).size.toLong() +
+                it.id.toByteArray(Charsets.UTF_8).size + it.payload.toByteArray(Charsets.UTF_8).size
+            rows++
         }
-        require(chunks.keys == receipts.map { it.id }.toSet())
-        return Ledger(
-            base,
-            group("account").map { json.decodeFromString<Account>(it.payload).also { a -> require(a.id == it.id) } },
-            group("category").map { json.decodeFromString<Category>(it.payload).also { a -> require(a.id == it.id) } },
-            group("entry").map { json.decodeFromString<Entry>(it.payload).also { a -> require(a.id == it.id) } },
-            group("budget").map { json.decodeFromString<Budget>(it.payload).also { a -> require(a.id == it.id) } },
-            group("debt").map { json.decodeFromString<Debt>(it.payload).also { a -> require(a.id == it.id) } },
-            group("goal").map { json.decodeFromString<Goal>(it.payload).also { a -> require(a.id == it.id) } },
-            group("schedule").map { json.decodeFromString<Schedule>(it.payload).also { a -> require(a.id == it.id) } },
-            group("rate").map { json.decodeFromString<FxRate>(it.payload).also { a -> require("${a.currency}:${a.day}" == it.id) } },
-            receipts
+        return RecordStats(bytes, rows)
+    }
+
+    internal class ReceiptBuilder(private val row: LedgerRecord) {
+        private val data = StringBuilder()
+        private var count = 0
+        fun append(part: LedgerRecord) {
+            require(part.formatVersion == 1) { "Неподдерживаемая версия записи" }
+            require(part.kind == "receipt_chunk" &&
+                part.id == "${row.id}:${count.toString().padStart(6,'0')}" &&
+                part.payload.length <= 8_000_000 - data.length) { "Повреждённые данные чека" }
+            data.append(part.payload)
+            count++
+        }
+        fun build(): Receipt {
+            require(count > 0) { "Отсутствуют данные чека" }
+            return Receipt(row.id, row.payload, data.toString())
+        }
+    }
+
+    internal class Decoder {
+        private var base: String? = null
+        private val accounts = mutableListOf<Account>()
+        private val categories = mutableListOf<Category>()
+        private val entries = mutableListOf<Entry>()
+        private val budgets = mutableListOf<Budget>()
+        private val debts = mutableListOf<Debt>()
+        private val goals = mutableListOf<Goal>()
+        private val schedules = mutableListOf<Schedule>()
+        private val rates = mutableListOf<FxRate>()
+        val receiptMetadata = mutableListOf<LedgerRecord>()
+        fun add(row: LedgerRecord) {
+            require(row.formatVersion == 1) { "Неподдерживаемая версия записи" }
+            fun <T> checked(value: T, id: (T) -> String): T = value.also { require(id(it) == row.id) }
+            when (row.kind) {
+                "meta" -> { require(base == null && row.id == "base"); base = row.payload }
+                "account" -> accounts.add(checked(json.decodeFromString<Account>(row.payload)) { it.id })
+                "category" -> categories.add(checked(json.decodeFromString<Category>(row.payload)) { it.id })
+                "entry" -> entries.add(checked(json.decodeFromString<Entry>(row.payload)) { it.id })
+                "budget" -> budgets.add(checked(json.decodeFromString<Budget>(row.payload)) { it.id })
+                "debt" -> debts.add(checked(json.decodeFromString<Debt>(row.payload)) { it.id })
+                "goal" -> goals.add(checked(json.decodeFromString<Goal>(row.payload)) { it.id })
+                "schedule" -> schedules.add(checked(json.decodeFromString<Schedule>(row.payload)) { it.id })
+                "rate" -> rates.add(checked(json.decodeFromString<FxRate>(row.payload)) { "${it.currency}:${it.day}" })
+                "receipt" -> receiptMetadata.add(row)
+                else -> error("Неподдерживаемый тип записи")
+            }
+        }
+        fun build(receipts: List<Receipt>): Ledger = Ledger(
+            base ?: error("Отсутствует основная валюта"), accounts, categories, entries,
+            budgets, debts, goals, schedules, rates, receipts
         ).validated()
+    }
+
+    fun decode(rows: List<LedgerRecord>): Ledger = decode(rows.asSequence())
+    internal fun decode(rows: Sequence<LedgerRecord>): Ledger {
+        val seen = mutableSetOf<Pair<String, String>>()
+        val decoder = Decoder()
+        val chunks = mutableMapOf<String, MutableList<LedgerRecord>>()
+        rows.forEach {
+            require(seen.add(it.kind to it.id))
+            if (it.kind == "receipt_chunk") chunks.getOrPut(it.id.substringBeforeLast(':')) { mutableListOf() }.add(it)
+            else decoder.add(it)
+        }
+        if (seen.isEmpty()) return Ledger.initial()
+        val receipts = decoder.receiptMetadata.map { row ->
+            val builder = ReceiptBuilder(row)
+            chunks.remove(row.id).orEmpty().sortedBy { it.id }.forEach(builder::append)
+            builder.build()
+        }
+        require(chunks.isEmpty())
+        return decoder.build(receipts)
     }
 }
 
 class LedgerStore(private val db: TrachuDatabase) {
     private val dao get() = db.ledgerDao()
-    val ledger: Flow<Ledger> = dao.observe().map { LedgerRecords.decode(it) }.flowOn(Dispatchers.Default)
-    suspend fun current(): Ledger = db.withTransaction { LedgerRecords.decode(dao.read()) }
-    suspend fun change(transform: (Ledger) -> Ledger): Ledger = db.withTransaction {
-        val before = dao.read()
-        val transformed = transform(LedgerRecords.decode(before))
+    private val pageSize = 32
+    val ledger: Flow<Ledger> = db.invalidationTracker.createFlow("ledger_records")
+        .map { current() }.flowOn(Dispatchers.Default)
+    suspend fun current(): Ledger = db.withTransaction { readSnapshot(dao.stats()) }
+
+    private suspend fun readSnapshot(stats: RecordStats): Ledger {
+        if (stats.rows == 0L) return Ledger.initial()
+        require(stats.estimatedMemory() <= MemoryBudget.available()) {
+            "Недостаточно памяти для открытия финансовых данных"
+        }
+        val decoder = LedgerRecords.Decoder()
+        var count = 0L
+        for (kind in listOf("account","budget","category","debt","entry","goal","meta","rate","receipt","schedule")) {
+            var after = ""
+            while (true) {
+                val rows = dao.page(kind, after, pageSize)
+                if (rows.isEmpty()) break
+                rows.forEach(decoder::add)
+                count += rows.size
+                after = rows.last().id
+            }
+        }
+        val receipts = decoder.receiptMetadata.map { row ->
+            val builder = LedgerRecords.ReceiptBuilder(row)
+            val prefix = "${row.id}:"
+            val end = "${row.id};"
+            var after = prefix
+            while (true) {
+                val parts = dao.receiptPage(prefix, end, after, pageSize)
+                if (parts.isEmpty()) break
+                parts.forEach(builder::append)
+                count += parts.size
+                after = parts.last().id
+            }
+            builder.build()
+        }
+        require(count == stats.rows) { "Повреждённые финансовые данные" }
+        return decoder.build(receipts)
+    }
+
+    private fun prune(transformed: Ledger): Ledger {
         val usedReceipts = (transformed.entries.flatMap { it.receiptIds } + transformed.schedules.flatMap { it.template.receiptIds }).toSet()
-        val next = transformed.copy(receipts = transformed.receipts.filter { it.id in usedReceipts }).validated()
-        val after = LedgerRecords.encode(next)
-        val old = before.associateBy { it.kind to it.id }
-        val updated = after.associateBy { it.kind to it.id }
-        val removed = before.filter { (it.kind to it.id) !in updated }
-        val changed = after.filter { old[it.kind to it.id] != it }
-        if (removed.isNotEmpty()) dao.delete(removed)
-        if (changed.isNotEmpty()) dao.put(changed)
+        return transformed.copy(receipts = transformed.receipts.filter { it.id in usedReceipts }).validated()
+    }
+
+    // Avoid committing a growing database that cannot be loaded alongside the
+    // current UI snapshot on this heap. Smaller replacements remain possible.
+    private suspend fun checkGrowth(before: RecordStats) {
+        val after = dao.stats().estimatedMemory()
+        require(after <= before.estimatedMemory() || after <= MemoryBudget.storageLimit()) {
+            "Недостаточно памяти устройства для хранения дополнительных данных"
+        }
+    }
+
+    private suspend fun <T> sync(kind: String, before: List<T>, after: List<T>, id: (T) -> String, encode: (T) -> String) {
+        val old = before.associateBy(id)
+        val nextIds = after.mapTo(HashSet(), id)
+        before.asSequence().filter { id(it) !in nextIds }
+            .map { LedgerRecord(kind, id(it), "") }.chunked(pageSize).forEach { dao.delete(it) }
+        after.asSequence().filter { old[id(it)] != it }
+            .map { LedgerRecord(kind, id(it), encode(it)) }.chunked(pageSize).forEach { dao.put(it) }
+    }
+
+    private suspend fun syncReceipts(before: List<Receipt>, after: List<Receipt>) {
+        val old = before.associateBy { it.id }
+        val next = after.associateBy { it.id }
+        before.filter { next[it.id] != it }.forEach {
+            dao.deleteReceiptChunks("${it.id}:", "${it.id};")
+            if (it.id !in next) dao.delete(listOf(LedgerRecord("receipt", it.id, "")))
+        }
+        after.filter { old[it.id] != it }.forEach {
+            LedgerRecords.receiptRows(it).chunked(pageSize).forEach { rows -> dao.put(rows) }
+        }
+    }
+
+    suspend fun change(transform: (Ledger) -> Ledger): Ledger = db.withTransaction {
+        val stats = dao.stats()
+        val before = readSnapshot(stats)
+        val next = prune(transform(before))
+        if (stats.rows == 0L) {
+            LedgerRecords.records(next).chunked(pageSize).forEach { dao.put(it) }
+        } else {
+            val json = LedgerRecords.json
+            if (before.baseCurrency != next.baseCurrency) dao.put(listOf(LedgerRecord("meta", "base", next.baseCurrency)))
+            sync("account", before.accounts, next.accounts, { it.id }, { json.encodeToString(it) })
+            sync("category", before.categories, next.categories, { it.id }, { json.encodeToString(it) })
+            sync("entry", before.entries, next.entries, { it.id }, { json.encodeToString(it) })
+            sync("budget", before.budgets, next.budgets, { it.id }, { json.encodeToString(it) })
+            sync("debt", before.debts, next.debts, { it.id }, { json.encodeToString(it) })
+            sync("goal", before.goals, next.goals, { it.id }, { json.encodeToString(it) })
+            sync("schedule", before.schedules, next.schedules, { it.id }, { json.encodeToString(it) })
+            sync("rate", before.rates, next.rates, { "${it.currency}:${it.day}" }, { json.encodeToString(it) })
+            syncReceipts(before.receipts, next.receipts)
+        }
+        checkGrowth(stats)
         next
     }
-    suspend fun restore(ledger: Ledger) = change { ledger.validated() }
+    suspend fun restore(ledger: Ledger): Ledger = db.withTransaction {
+        val next = prune(ledger.validated())
+        val stats = dao.stats()
+        dao.clear()
+        LedgerRecords.records(next).chunked(pageSize).forEach { dao.put(it) }
+        checkGrowth(stats)
+        next
+    }
     suspend fun processDue(through: Long = today()): Ledger {
         val now = java.time.LocalTime.now()
         return change { Finance.generate(it, through, throughMinutes = if(through==today()) now.hour*60+now.minute else null) }

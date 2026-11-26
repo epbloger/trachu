@@ -7,7 +7,6 @@ import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.viewModels
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -32,6 +31,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import ru.epbloger.trachu.core.*
 import ru.epbloger.trachu.ads.OverviewAdBanner
 import ru.epbloger.trachu.ads.updateAdsConsent
@@ -40,13 +45,80 @@ import ru.epbloger.trachu.ui.*
 
 class MainActivity : FragmentActivity() {
     private val vm:AppViewModel by viewModels()
-    private var stoppedAt:Long?=null
     private var biometricInProgress=false
+    // Register unconditionally in the same order, before STARTED, even when
+    // the ledger is loading or the app is locked.
+    private val receiptPicker=registerForActivityResult(ActivityResultContracts.GetContent()){uri->
+        val request=vm.receiptRequest
+        vm.receiptRequest=null
+        if(uri!=null){
+            if(request==null)vm.notice("Выбор фотографии отменён после перезапуска приложения. Прикрепите чек снова.")
+            else if(vm.editor?.draft===request)vm.queuePickedResult(PickedResult.Photo(uri,request))
+        }
+    }
+    private val savePicker=registerForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
+        val request=vm.fileRequest?.takeIf{it.save}
+        if(request!=null)vm.fileRequest=null
+        val uri=result.data?.data
+        if(result.resultCode==android.app.Activity.RESULT_OK && uri!=null){
+            when{
+                request==null->vm.notice("Выбор места сохранения отменён после перезапуска приложения. Сохраните файл снова.")
+                else->vm.queuePickedResult(PickedResult.File(uri,request))
+            }
+        }
+    }
+    private val loadPicker=registerForActivityResult(ActivityResultContracts.OpenDocument()){uri->
+        val request=vm.fileRequest?.takeIf{!it.save}
+        if(request!=null)vm.fileRequest=null
+        if(uri!=null){
+            when{
+                request==null->vm.notice("Выбор файла отменён после перезапуска приложения. Выберите файл снова.")
+                else->vm.queuePickedResult(PickedResult.File(uri,request))
+            }
+        }
+    }
+    private fun chooseReceipt(){
+        if(vm.busy.value||vm.pickerPending())return
+        vm.receiptRequest=vm.editor?.draft ?: return
+        runCatching{receiptPicker.launch("image/*")}.onFailure{
+            vm.receiptRequest=null
+            vm.notice("Не удалось открыть выбор фотографии.")
+        }
+    }
+    private fun launchFile(request:FileRequest){
+        if(vm.busy.value||vm.pickerPending())return
+        vm.fileRequest=request
+        runCatching{
+            if(request.save){
+                val mime=when(request.mode){"backup"->"application/octet-stream";"pdf"->"application/pdf";else->"text/csv"}
+                val suffix=when(request.mode){"backup"->"trachu";"pdf"->"pdf";else->"csv"}
+                savePicker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime)
+                    .putExtra(Intent.EXTRA_TITLE,"trachu-${java.time.LocalDate.now()}.$suffix"))
+            }else loadPicker.launch(if(request.mode=="backup")arrayOf("*/*") else arrayOf("text/*","application/csv","application/vnd.ms-excel","application/octet-stream"))
+        }.onFailure{
+            vm.fileRequest=null
+            vm.notice("Не удалось открыть выбор файла.")
+        }
+    }
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         enableEdgeToEdge()
-         handleIntent(intent)
+        if(savedInstanceState==null)handleIntent(intent)
+        else if(!vm.activityCreated && (savedInstanceState.getBoolean("editor_open") ||
+            savedInstanceState.getBoolean("picker_pending"))){
+            vm.notice("Android перезапустил приложение. Несохранённый черновик или выбор файла отменён. Повторите действие.")
+        }
+        vm.activityCreated=true
+        // A picker may return while the app is locked. Wait until the ledger
+        // and protection settings have loaded and the user has unlocked.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED){
+                combine(vm.settings,vm.ledger,vm.unlocked,vm.busy,vm.pickedResult){s,l,u,b,p->
+                    p!=null && s!=null && l!=null && (!s.protected||u) && !b
+                }.collect{ready->if(ready)vm.deliverPickedResult()}
+            }
+        }
         setContent {
             val settings by vm.settings.collectAsStateWithLifecycle()
             val ledger by vm.ledger.collectAsStateWithLifecycle()
@@ -70,12 +142,18 @@ class MainActivity : FragmentActivity() {
                             Button(onClick=vm::retryLoad){Text("Повторить")}
                         }
                     }
-                    else AppShell(l,s,vm,busy,biometricAvailable(),s.protected&&!unlocked,{done->authenticate(done)})
+                    else AppShell(l,s,vm,busy,biometricAvailable(),s.protected&&!unlocked,{done->authenticate(done)},::launchFile,::chooseReceipt)
                     if(message!=null && (settings?.protected!=true || unlocked || message=="Неверный PIN" || message?.startsWith("Слишком много попыток")==true))AlertDialog(onDismissRequest=vm::clearMessage,title={Text("ТРАЧУ.")},text={Text(message.orEmpty())},
                         confirmButton={TextButton(onClick=vm::clearMessage){Text("OK")}})
                 }
             }
         }
+    }
+    override fun onSaveInstanceState(outState:Bundle){
+        super.onSaveInstanceState(outState)
+        // Store only presence flags, never financial fields, receipt images or passwords.
+        outState.putBoolean("editor_open",vm.editor!=null)
+        outState.putBoolean("picker_pending",vm.pickerPending())
     }
     override fun onNewIntent(intent:Intent) { super.onNewIntent(intent);setIntent(intent);handleIntent(intent) }
     private fun handleIntent(intent:Intent?) {
@@ -85,16 +163,16 @@ class MainActivity : FragmentActivity() {
     override fun onStop() {
         super.onStop()
         if(!isChangingConfigurations&&!biometricInProgress) {
-            stoppedAt=SystemClock.elapsedRealtime()
+            vm.stoppedAt=SystemClock.elapsedRealtime()
             if(vm.settings.value?.lockSeconds==0)vm.lock()
         }
     }
     override fun onStart() {
-        super.onStart()
         val s=vm.settings.value
-        val last=stoppedAt
-        if(last!=null && s?.protected==true && SystemClock.elapsedRealtime()-last>=s.lockSeconds*1000L)vm.lock()
-        stoppedAt=null
+        val last=vm.stoppedAt
+        if(last!=null && (s==null || (s.protected && SystemClock.elapsedRealtime()-last>=s.lockSeconds*1000L)))vm.lock()
+        vm.stoppedAt=null
+        super.onStart()
     }
     private fun biometricAvailable()=BiometricManager.from(this).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)==BiometricManager.BIOMETRIC_SUCCESS
     private fun authenticate(done:()->Unit) {
@@ -117,43 +195,15 @@ private enum class Tab(val label:String,val icon:ImageVector) {
     HOME("Обзор",Icons.Outlined.Home), OPERATIONS("Операции",Icons.Outlined.AccountBalanceWallet),
     PLAN("План",Icons.Outlined.CalendarMonth), REPORTS("Отчёты",Icons.Outlined.BarChart), MORE("Ещё",Icons.Outlined.MoreHoriz)
 }
-private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXPENSE,val initialDay:Long?=null)
+internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXPENSE,val initialDay:Long?=null,val draft:EntryDraft=EntryDraft())
 
-@Composable private fun AppShell(ledger:Ledger,settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,locked:Boolean,authenticate:((()->Unit)->Unit)){
+@Composable private fun AppShell(ledger:Ledger,settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,locked:Boolean,authenticate:((()->Unit)->Unit),file:(FileRequest)->Unit,chooseReceipt:()->Unit){
     var tab by rememberSaveable{mutableStateOf(Tab.HOME)}
     var more by rememberSaveable{mutableStateOf(MorePage.INDEX)}
     var plan by rememberSaveable{mutableStateOf(PlannerTab.BUDGET)}
-    var editor by remember{mutableStateOf<Editor?>(null)}
-    var fileRequest by remember{mutableStateOf<FileRequest?>(null)}
-    val entryDraft=remember(editor){EntryDraft()}
-    var receiptRequest by remember{mutableStateOf<EntryDraft?>(null)}
-    val receiptPicker=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()){uri->
-        val request=receiptRequest
-        receiptRequest=null
-        if(uri!=null && request===entryDraft)vm.readReceipt(uri){request?.attach(it)}
-    }
-    fun chooseReceipt(){receiptRequest=entryDraft;receiptPicker.launch("image/*")}
+    var editor by vm.editorState
     val quick by vm.quick.collectAsStateWithLifecycle()
     LaunchedEffect(settings.adsConsent){updateAdsConsent(settings.adsConsent==true)}
-    val save=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
-        val request=fileRequest;fileRequest=null
-        val uri=result.data?.data
-        if(result.resultCode==android.app.Activity.RESULT_OK && request!=null && uri!=null)vm.export(uri,request.mode,request.password,request.period,request.account)
-    }
-    val load=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){uri->
-        val request=fileRequest;fileRequest=null
-        if(uri!=null&&request!=null)vm.import(uri,request.mode,request.password,request.account)
-    }
-    fun file(request:FileRequest){
-        if(busy)return
-        fileRequest=request
-        if(request.save) {
-            val mime=when(request.mode){"backup"->"application/octet-stream";"pdf"->"application/pdf";else->"text/csv"}
-            val suffix=when(request.mode){"backup"->"trachu";"pdf"->"pdf";else->"csv"}
-            save.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime)
-                .putExtra(Intent.EXTRA_TITLE,"trachu-${java.time.LocalDate.now()}.$suffix"))
-        }else load.launch(if(request.mode=="backup")arrayOf("*/*") else arrayOf("text/*","application/csv","application/vnd.ms-excel","application/octet-stream"))
-    }
     fun openMore(page:MorePage){tab=Tab.MORE;more=page}
     fun add(kind:Kind,planned:Boolean=false,initialDay:Long?=null){
         if(ledger.accounts.none{!it.archived}){openMore(MorePage.ACCOUNTS);editor=Editor("account")}
@@ -210,7 +260,7 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
                                 MorePage.CATEGORIES->Categories(ledger,{editor=Editor("category",it?.id)},{more=MorePage.INDEX})
                                 MorePage.RATES->Rates(ledger,settings,vm,busy){more=MorePage.INDEX}
                                 MorePage.SETTINGS->SettingsPage(settings,vm,busy,biometricAvailable,authenticate){more=MorePage.INDEX}
-                                MorePage.DATA->DataPage(ledger,::file,busy){more=MorePage.INDEX}
+                                MorePage.DATA->DataPage(ledger,file,busy){more=MorePage.INDEX}
                                 MorePage.ABOUT->AboutPage{more=MorePage.INDEX}
                             }
                         }
@@ -229,13 +279,14 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
     }
     val current=editor
     if(current!=null){
-        val close={editor=null}
+        val close:()->Unit={if(vm.editor===current)vm.editor=null}
+        val entryDraft=current.draft
         key(current){
             when(current.type){
-                "account"->AccountEditor(ledger,ledger.accounts.find{it.id==current.id},busy,vm,close)
-                "category"->CategoryEditor(ledger,ledger.categories.find{it.id==current.id},busy,vm,close)
-                "entry","planned"->EntryEditor(ledger,settings,vm,busy,current.kind,current=ledger.entries.find{it.id==current.id},close=close,forcePlanned=current.type=="planned",draft=entryDraft,chooseReceipt=::chooseReceipt,initialDay=current.initialDay)
-                "schedule"->EntryEditor(ledger,settings,vm,busy,Kind.EXPENSE,schedule=ledger.schedules.find{it.id==current.id},recurring=true,close=close,draft=entryDraft,chooseReceipt=::chooseReceipt)
+                "account"->AccountEditor(ledger,ledger.accounts.find{it.id==current.id},busy,vm,close,entryDraft)
+                "category"->CategoryEditor(ledger,ledger.categories.find{it.id==current.id},busy,vm,close,entryDraft)
+                "entry","planned"->EntryEditor(ledger,settings,vm,busy,current.kind,current=ledger.entries.find{it.id==current.id},close=close,forcePlanned=current.type=="planned",draft=entryDraft,chooseReceipt=chooseReceipt,initialDay=current.initialDay)
+                "schedule"->EntryEditor(ledger,settings,vm,busy,Kind.EXPENSE,schedule=ledger.schedules.find{it.id==current.id},recurring=true,close=close,draft=entryDraft,chooseReceipt=chooseReceipt)
                 "detail"->ledger.entries.find{it.id==current.id}?.let{e->EntryDetails(ledger,e,vm,busy,close,{
                     editor=when(e.kind){
                         Kind.REFUND->Editor("editRefund",e.id)
@@ -243,13 +294,13 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
                         else->Editor("entry",e.id,e.kind)
                     }
                 },{editor=Editor("refund",e.id)})}
-                "refund"->ledger.entries.find{it.id==current.id}?.let{RefundEditor(ledger,it,vm,busy,close)}
-                "editRefund"->ledger.entries.find{it.id==current.id}?.let{r->ledger.entries.find{it.id==r.originalId}?.let{o->RefundEditor(ledger,o,vm,busy,close,r)}}
-                "editPayment"->ledger.entries.find{it.id==current.id}?.let{p->ledger.debts.find{it.id==p.debtId}?.let{d->DebtPaymentEditor(ledger,d,vm,busy,close,p)}}
-                "budget"->BudgetEditor(ledger,ledger.budgets.find{it.id==current.id},vm,busy,close)
-                "goal"->GoalEditor(ledger,ledger.goals.find{it.id==current.id},vm,busy,close)
-                "debt"->DebtEditor(ledger,ledger.debts.find{it.id==current.id},vm,busy,close)
-                "payment"->ledger.debts.find{it.id==current.id}?.let{DebtPaymentEditor(ledger,it,vm,busy,close)}
+                "refund"->ledger.entries.find{it.id==current.id}?.let{RefundEditor(ledger,it,vm,busy,close,draft=entryDraft)}
+                "editRefund"->ledger.entries.find{it.id==current.id}?.let{r->ledger.entries.find{it.id==r.originalId}?.let{o->RefundEditor(ledger,o,vm,busy,close,r,entryDraft)}}
+                "editPayment"->ledger.entries.find{it.id==current.id}?.let{p->ledger.debts.find{it.id==p.debtId}?.let{d->DebtPaymentEditor(ledger,d,vm,busy,close,p,entryDraft)}}
+                "budget"->BudgetEditor(ledger,ledger.budgets.find{it.id==current.id},vm,busy,close,entryDraft)
+                "goal"->GoalEditor(ledger,ledger.goals.find{it.id==current.id},vm,busy,close,entryDraft)
+                "debt"->DebtEditor(ledger,ledger.debts.find{it.id==current.id},vm,busy,close,entryDraft)
+                "payment"->ledger.debts.find{it.id==current.id}?.let{DebtPaymentEditor(ledger,it,vm,busy,close,draft=entryDraft)}
             }
         }
     }

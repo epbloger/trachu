@@ -97,7 +97,12 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
                 items(ledger.schedules,key={it.id}){s->
                     val a=ledger.accounts.first{it.id==s.template.accountId}
                     Panel {
-                        SectionTitle(ledger.entryName(s.template),if(s.enabled)"Следующая: "+dayLabel(s.nextDay) else "Приостановлено",action="Изменить"){editSchedule(s)}
+                        val state=when {
+                            s.enabled -> "Следующая: "+dayLabel(s.nextDay)
+                            s.endDay!=null && s.nextDay>s.endDay -> "Завершено · "+dayLabel(s.endDay)
+                            else -> "Приостановлено"
+                        }
+                        SectionTitle(ledger.entryName(s.template),state,action="Изменить"){editSchedule(s)}
                         MoneyText(s.template.minor,a.currency,large=true)
                         Text("${s.frequency.label()} · интервал ${s.interval}")
                         Text(if(s.autoPost)"Автоматическое проведение" else "Подтверждение вручную")
@@ -160,14 +165,14 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
     }
 }
 
-@Composable fun BudgetEditor(ledger:Ledger,current:Budget?,vm:AppViewModel,busy:Boolean,close:()->Unit){
-    var name by remember{mutableStateOf(current?.name ?: "Бюджет месяца")}
-    var category by remember{mutableStateOf(current?.categoryId.orEmpty())}
-    var amount by remember{mutableStateOf(current?.let{Money.input(it.monthlyMinor,ledger.baseCurrency)}.orEmpty())}
-    var start by remember{mutableStateOf(iso(current?.startMonth ?: Period.month().from))}
-    var carry by remember{mutableStateOf(current?.rollover ?: false)}
-    var error by remember{mutableStateOf("")}
-    var delete by remember{mutableStateOf(false)}
+@Composable fun BudgetEditor(ledger:Ledger,current:Budget?,vm:AppViewModel,busy:Boolean,close:()->Unit, draft:EntryDraft){
+    var name by draft.state("name"){current?.name ?: "Бюджет месяца"}
+    var category by draft.state("category"){current?.categoryId.orEmpty()}
+    var amount by draft.state("amount"){current?.let{Money.input(it.monthlyMinor,ledger.baseCurrency)}.orEmpty()}
+    var start by draft.state("start"){iso(current?.startMonth ?: Period.month().from)}
+    var carry by draft.state("carry"){current?.rollover ?: false}
+    var error by draft.state("error"){""}
+    var delete by draft.state("delete"){false}
     Form(if(current==null)"Новый бюджет" else "Редактировать бюджет",close,busy,onSave={
         runCatching{
             val b=Budget(current?.id ?: newId(),name.trim(),category.ifBlank{null},Money.parse(amount,ledger.baseCurrency),parseDay(start),carry)
@@ -188,17 +193,17 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
     if(delete && current!=null)Confirm("Удалить бюджет?","Операции не будут удалены.",{delete=false},{vm.change({l->l.copy(budgets=l.budgets.filterNot{it.id==current.id})},close)},busy)
 }
 
-@Composable fun GoalEditor(ledger:Ledger,current:Goal?,vm:AppViewModel,busy:Boolean,close:()->Unit){
-    var name by remember{mutableStateOf(current?.name.orEmpty())}
-    var currency by remember{mutableStateOf(current?.currency ?: ledger.baseCurrency)}
-    var target by remember{mutableStateOf(current?.let{Money.input(it.targetMinor,it.currency)}.orEmpty())}
-    var saved by remember{mutableStateOf(current?.let{Money.input(it.savedMinor,it.currency)} ?: "0")}
-    var due by remember{mutableStateOf(current?.dueDay?.let(::iso).orEmpty())}
-    var error by remember{mutableStateOf("")}
-    var delete by remember{mutableStateOf(false)}
-    var adjustment by remember{mutableStateOf("")}
-    var adjustmentNote by remember{mutableStateOf("")}
-    var withdraw by remember{mutableStateOf(false)}
+@Composable fun GoalEditor(ledger:Ledger,current:Goal?,vm:AppViewModel,busy:Boolean,close:()->Unit, draft:EntryDraft){
+    var name by draft.state("name"){current?.name.orEmpty()}
+    var currency by draft.state("currency"){current?.currency ?: ledger.baseCurrency}
+    var target by draft.state("target"){current?.let{Money.input(it.targetMinor,it.currency)}.orEmpty()}
+    var saved by draft.state("saved"){current?.let{Money.input(it.savedMinor,it.currency)} ?: "0"}
+    var due by draft.state("due"){current?.dueDay?.let(::iso).orEmpty()}
+    var error by draft.state("error"){""}
+    var delete by draft.state("delete"){false}
+    var adjustment by draft.state("adjustment"){""}
+    var adjustmentNote by draft.state("adjustmentNote"){""}
+    var withdraw by draft.state("withdraw"){false}
     Form(if(current==null)"Новая цель" else "Редактировать цель",close,busy,onSave={
         runCatching{
             val g=Goal(current?.id ?: newId(),name.trim(),currency,Money.parse(target,currency),Money.parse(saved,currency),due.trim().takeIf{it.isNotEmpty()}?.let(::parseDay),current?.adjustments.orEmpty())
@@ -238,21 +243,21 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
     if(delete&&current!=null)Confirm("Удалить цель?","Счета и операции не изменятся.",{delete=false},{vm.change({l->l.copy(goals=l.goals.filterNot{it.id==current.id})},close)},busy)
 }
 
-@Composable fun DebtEditor(ledger:Ledger,current:Debt?,vm:AppViewModel,busy:Boolean,close:()->Unit){
-    var person by remember{mutableStateOf(current?.person.orEmpty())}
-    var owed by remember{mutableStateOf(current?.owedByMe ?: true)}
-    var accountId by remember{mutableStateOf(current?.accountId ?: ledger.accounts.firstOrNull{!it.archived}?.id.orEmpty())}
+@Composable fun DebtEditor(ledger:Ledger,current:Debt?,vm:AppViewModel,busy:Boolean,close:()->Unit, draft:EntryDraft){
+    var person by draft.state("person"){current?.person.orEmpty()}
+    var owed by draft.state("owed"){current?.owedByMe ?: true}
+    var accountId by draft.state("accountId"){current?.accountId ?: ledger.accounts.firstOrNull{!it.archived}?.id.orEmpty()}
     val account=ledger.accounts.find{it.id==accountId}
-    var amount by remember{mutableStateOf(current?.let{Money.input(it.principalMinor,ledger.accounts.first{a->a.id==it.accountId}.currency)}.orEmpty())}
-    var interest by remember{mutableStateOf(current?.annualPercent ?: "0")}
-    var due by remember{mutableStateOf(current?.dueDay?.let(::iso).orEmpty())}
-    var note by remember{mutableStateOf(current?.note.orEmpty())}
-    var error by remember{mutableStateOf("")}
-    var delete by remember{mutableStateOf(false)}
+    var amount by draft.state("amount"){current?.let{Money.input(it.principalMinor,ledger.accounts.first{a->a.id==it.accountId}.currency)}.orEmpty()}
+    var interest by draft.state("interest"){current?.annualPercent ?: "0"}
+    var due by draft.state("due"){current?.dueDay?.let(::iso).orEmpty()}
+    var note by draft.state("note"){current?.note.orEmpty()}
+    var error by draft.state("error"){""}
+    var delete by draft.state("delete"){false}
     val paid=current!=null && ledger.entries.any{it.debtId==current.id && it.kind in setOf(Kind.DEBT_IN,Kind.DEBT_OUT)}
-    var recordOpening by remember{mutableStateOf(false)}
-    var opened by remember{mutableStateOf(iso(today()))}
-    var openingRate by remember{mutableStateOf("")}
+    var recordOpening by draft.state("recordOpening"){false}
+    var opened by draft.state("opened"){iso(today())}
+    var openingRate by draft.state("openingRate"){""}
     Form(if(current==null)"Новый долг" else "Редактировать долг",close,busy,onSave={
         runCatching{
             val a=requireNotNull(account){"Выберите счёт"}
@@ -297,15 +302,15 @@ enum class PlannerTab(val label:String){BUDGET("Бюджеты"),GOAL("Цели"
     if(delete&&current!=null)Confirm("Удалить долг?","Запись задолженности будет удалена.",{delete=false},{vm.change({l->l.copy(debts=l.debts.filterNot{it.id==current.id},entries=l.entries.filterNot{it.debtId==current.id})},close)},busy)
 }
 
-@Composable fun DebtPaymentEditor(ledger:Ledger,debt:Debt,vm:AppViewModel,busy:Boolean,close:()->Unit,current:Entry?=null){
+@Composable fun DebtPaymentEditor(ledger:Ledger,debt:Debt,vm:AppViewModel,busy:Boolean,close:()->Unit,current:Entry?=null, draft:EntryDraft){
     val a=ledger.accounts.first{it.id==debt.accountId}
     val remaining=Money.add(Finance.debtRemaining(ledger,debt),current?.principalMinor ?: 0)
-    var principal by remember{mutableStateOf(Money.input(current?.principalMinor ?: remaining,a.currency))}
-    var interest by remember{mutableStateOf(current?.let{Money.input(it.minor-it.principalMinor,a.currency)} ?: "0")}
-    var day by remember{mutableStateOf(iso(current?.day ?: today()))}
-    var note by remember{mutableStateOf(current?.note.orEmpty())}
-    var rate by remember{mutableStateOf(current?.rate.orEmpty())}
-    var error by remember{mutableStateOf("")}
+    var principal by draft.state("principal"){Money.input(current?.principalMinor ?: remaining,a.currency)}
+    var interest by draft.state("interest"){current?.let{Money.input(it.minor-it.principalMinor,a.currency)} ?: "0"}
+    var day by draft.state("day"){iso(current?.day ?: today())}
+    var note by draft.state("note"){current?.note.orEmpty()}
+    var rate by draft.state("rate"){current?.rate.orEmpty()}
+    var error by draft.state("error"){""}
     Form("Погашение долга",close,busy,onSave={
         runCatching{
             val p=Money.parse(principal,a.currency);val i=Money.parse(interest,a.currency);val date=parseDay(day)

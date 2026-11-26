@@ -4,6 +4,13 @@ import org.junit.Assert.*
 import org.junit.Test
 import ru.epbloger.trachu.core.*
 import java.io.ByteArrayOutputStream
+import java.io.ByteArrayInputStream
+import javax.crypto.Cipher
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
+import kotlinx.serialization.json.jsonObject
 
 class PortabilityTest {
     private val a = Account("a","Карта")
@@ -19,6 +26,54 @@ class PortabilityTest {
         assertTrue(runCatching { Backup.read("incorrect".toCharArray(),bytes.inputStream()) }.isFailure)
         bytes[bytes.lastIndex] = (bytes.last().toInt() xor 1).toByte()
         assertTrue(runCatching { Backup.read("password123".toCharArray(),bytes.inputStream()) }.isFailure)
+    }
+    @Test fun backupRetainsLegacyEnvelopeAndAuthenticatesEntireFragmentedInput() {
+        val password = "password123"
+        fun cipher(mode: Int, header: ByteArray): Cipher {
+            val spec = PBEKeySpec(password.toCharArray(),header.copyOfRange(8,24),310_000,256)
+            val key = try { SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded }
+                finally { spec.clearPassword() }
+            return Cipher.getInstance("AES/GCM/NoPadding").apply {
+                init(mode,SecretKeySpec(key,"AES"),GCMParameterSpec(128,header.copyOfRange(24,36)))
+                updateAAD(header)
+            }.also { key.fill(0) }
+        }
+        val receipt = Receipt("receipt","image/png","AAAA".repeat(200_000))
+        val ledger = original.copy(receipts=listOf(receipt),entries=original.entries.map { it.copy(receiptIds=listOf(receipt.id)) })
+        val header = "TRACHU01".toByteArray(Charsets.US_ASCII) + ByteArray(28) { it.toByte() }
+        val json = "{\"version\":1,\"ledger\":" + LedgerRecords.json.encodeToString(Ledger.serializer(),ledger) + "}"
+        val legacy = header + cipher(Cipher.ENCRYPT_MODE,header).doFinal(json.toByteArray(Charsets.UTF_8))
+        fun fragmented(bytes: ByteArray) = object : ByteArrayInputStream(bytes) {
+            override fun read(b: ByteArray, off: Int, len: Int): Int = super.read(b,off,minOf(len,113))
+        }
+        val readPassword = password.toCharArray()
+        assertEquals(ledger,Backup.read(readPassword,fragmented(legacy)))
+        assertTrue(readPassword.all { it == '\u0000' })
+        val output = ByteArrayOutputStream()
+        val writePassword = password.toCharArray()
+        Backup.write(ledger,writePassword,output)
+        assertTrue(writePassword.all { it == '\u0000' })
+        val bytes = output.toByteArray()
+        assertArrayEquals("TRACHU01".toByteArray(Charsets.US_ASCII),bytes.copyOfRange(0,8))
+        val clear = cipher(Cipher.DECRYPT_MODE,bytes.copyOfRange(0,36))
+            .doFinal(bytes,36,bytes.size-36).toString(Charsets.UTF_8)
+        val oldEnvelope = LedgerRecords.json.parseToJsonElement(clear).jsonObject
+        assertEquals(ledger,LedgerRecords.json.decodeFromString(Ledger.serializer(),oldEnvelope.getValue("ledger").toString()))
+        for (broken in listOf(bytes.copyOf(bytes.size-1),bytes+byteArrayOf(0),bytes.copyOf(36))) {
+            val failedPassword = password.toCharArray()
+            assertTrue(runCatching { Backup.read(failedPassword,fragmented(broken)) }.isFailure)
+            assertTrue(failedPassword.all { it == '\u0000' })
+        }
+    }
+    @Test fun admissionLimitsRejectBeforeReturningOversizedBlocks() {
+        val limited = LimitedInput(ByteArray(17).inputStream(),32,16)
+        val buffer = ByteArray(16)
+        assertEquals(16,limited.read(buffer))
+        val error = runCatching { limited.read(buffer) }.exceptionOrNull()
+        assertTrue(error is IllegalArgumentException && error.message.orEmpty().contains("памяти"))
+        val absolute = LimitedInput(ByteArray(17).inputStream(),16,32)
+        assertEquals(16,absolute.read(buffer))
+        assertTrue(runCatching { absolute.read() }.isFailure)
     }
     @Test fun csvRoundTripAndIdempotence() {
         val out = ByteArrayOutputStream()
@@ -49,6 +104,17 @@ class PortabilityTest {
     }
     @Test fun spreadsheetSeparatorsInsideQuotedHeadersDoNotChangeDialect() {
         assertEquals(listOf(listOf("a;b;c","d"),listOf("x","y")),Csv.parse("\"a;b;c\",d\nx,y\n"))
+    }
+    @Test fun csvReadsFragmentedMultilineRowsAndRejectsTrailingMalformedData() {
+        val receipt = Receipt("r","image/png","AAAA".repeat(30_000))
+        val ledger = original.copy(receipts=listOf(receipt),entries=original.entries.map { it.copy(receiptIds=listOf("r")) })
+        val bytes = ByteArrayOutputStream().also { Csv.write(ledger,it) }.toByteArray()
+        fun fragmented(data: ByteArray) = object : ByteArrayInputStream(data) {
+            override fun read(b: ByteArray, off: Int, len: Int): Int = super.read(b,off,minOf(len,7))
+        }
+        assertEquals(ledger,Csv.read(fragmented(bytes)))
+        assertTrue(runCatching { Csv.read(fragmented(bytes+byteArrayOf(0xc3.toByte()))) }.isFailure)
+        assertEquals(listOf(listOf("a","b"),listOf("x\ny","\"z\"")),Csv.parse("\uFEFFa;b\r\n\"x\ny\";\"\"\"z\"\"\""))
     }
     @Test fun invalidBackupWriteWipesPasswordBeforeReturning() {
         val password="short".toCharArray()

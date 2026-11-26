@@ -1,0 +1,43 @@
+name: Offline installed APK smoke test
+on:
+  # Optional independent replay of the already verified November 26 candidate.
+  # Every new Android integration build runs its own offline smoke test.
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: trachu-debug-apk
+          run-id: 45792371294
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: candidate
+      - name: Verify the previously built APK
+        run: |
+          test "$(cat candidate/qa/source-commit.txt)" = bb6058700175cb9f565b4d58e1c49518eddefe30
+          test "$(sha256sum candidate/app/build/outputs/apk/debug/app-debug.apk | cut -d' ' -f1)" = 926e2d7f8aa558475c08d186c772c5b6a49ce3eed8c8998ed6c006ffb2cdeb8f
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: python3 .github/scripts/offline-smoke.py candidate/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trachu-offline-evidence
+          path: offline-qa/
+          if-no-files-found: warn
+          retention-days: 14

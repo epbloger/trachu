@@ -3,6 +3,7 @@ package ru.epbloger.trachu
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.compose.runtime.mutableStateOf
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -15,8 +16,48 @@ import ru.epbloger.trachu.security.*
 import ru.epbloger.trachu.worker.FinanceWorker
 import ru.epbloger.trachu.worker.RatesWorker
 import ru.epbloger.trachu.widget.refreshWidgets
+import ru.epbloger.trachu.ui.EntryDraft
+import ru.epbloger.trachu.ui.FileRequest
+
+internal sealed interface PickedResult {
+    data class File(val uri:Uri,val request:FileRequest):PickedResult
+    data class Photo(val uri:Uri,val draft:EntryDraft):PickedResult
+}
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
+    // Activity recreation retains this state without serializing financial drafts,
+    // backup passwords or receipt bytes into Android's saved-instance state.
+    internal val editorState=mutableStateOf<Editor?>(null)
+    internal var editor:Editor?
+        get()=editorState.value
+        set(value){editorState.value=value}
+    internal var fileRequest:FileRequest?=null
+    internal var receiptRequest:EntryDraft?=null
+    private val _pickedResult=MutableStateFlow<PickedResult?>(null)
+    internal val pickedResult=_pickedResult.asStateFlow()
+    internal fun pickerPending()=fileRequest!=null||receiptRequest!=null||_pickedResult.value!=null
+    internal fun queuePickedResult(result:PickedResult){
+        if(_pickedResult.value!=null)return
+        _pickedResult.value=result
+    }
+    internal fun deliverPickedResult(){
+        val s=_settings.value ?: return
+        if(_ledger.value==null || _busy.value || (s.protected&&!_unlocked.value))return
+        val result=_pickedResult.value ?: return
+        // Consume before starting I/O so activity recreation cannot repeat it.
+        _pickedResult.value=null
+        when(result){
+            is PickedResult.File->with(result.request){
+                if(save)export(result.uri,mode,password,period,account)
+                else import(result.uri,mode,password,account)
+            }
+            is PickedResult.Photo->if(editor?.draft===result.draft){
+                readReceipt(result.uri){if(editor?.draft===result.draft)result.draft.attach(it)}
+            }
+        }
+    }
+    internal var stoppedAt:Long?=null
+    internal var activityCreated=false
     private val store=LedgerStore.get(app)
     val preferences=Preferences(app)
     private val _ledger=MutableStateFlow<Ledger?>(null)
@@ -64,6 +105,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun clearMessage() { _message.value=null }
+    internal fun notice(text:String){_message.value=text}
     fun rememberAccount(id: String) { viewModelScope.launch { preferences.lastAccount(id) } }
     fun quick(kind: Kind?) { _quick.value=kind }
     fun lock() { _unlocked.value=false; _message.value=null }

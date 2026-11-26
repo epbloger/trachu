@@ -2,14 +2,24 @@ package ru.epbloger.trachu.data
 
 import ru.epbloger.trachu.core.*
 import java.io.InputStream
+import java.io.InputStreamReader
 import java.io.OutputStream
+import java.io.Reader
+import java.io.StringReader
 import java.time.LocalDate
 
 object Csv {
-    private fun decodeUtf8(bytes:ByteArray):String = Charsets.UTF_8.newDecoder()
-        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-        .decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+    private fun inputRows(input: InputStream, maxBytes: Int): Sequence<List<String>> {
+        val decoder = Charsets.UTF_8.newDecoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+        val maxRows = MemoryBudget.available() / 2048
+        val reader = InputStreamReader(LimitedInput(input, maxBytes, MemoryBudget.fileLimit(maxBytes)), decoder)
+        return rows(reader).mapIndexed { index, row ->
+            require(index.toLong() < maxRows) { "Недостаточно памяти для обработки такого количества строк" }
+            row
+        }
+    }
     private val legacyHeader = listOf("type", "id", "date", "account", "operation", "amount", "currency", "note", "data")
     private val header = legacyHeader.dropLast(1) + "data_v2"
     private fun needsEscaping(s: String) =
@@ -23,7 +33,7 @@ object Csv {
         val entries = ledger.entries.associateBy { it.id }
         output.bufferedWriter(Charsets.UTF_8).let { w ->
             w.write("\uFEFF"); w.write(line(header))
-            LedgerRecords.encode(ledger).forEach { record ->
+            LedgerRecords.records(ledger).forEach { record ->
                 val e = entries[record.id].takeIf { record.kind == "entry" }
                 val a = e?.let { account[it.accountId] }
                 w.write(line(listOf(record.kind, safe(record.id), e?.let { LocalDate.ofEpochDay(it.day).toString() }.orEmpty(),
@@ -34,73 +44,109 @@ object Csv {
             w.flush()
         }
     }
-    fun parse(text: String): List<List<String>> {
-        val result = mutableListOf<List<String>>()
-        var row = mutableListOf<String>()
-        val field = StringBuilder()
-        var quoted = false
-        var closed = false
-        var i = 0
-        val s = text.removePrefix("\uFEFF")
-        // Count delimiters in the header outside quotes, not in quoted fields.
+    fun parse(text: String): List<List<String>> = rows(StringReader(text)).toList()
+
+    // Buffer only the header to detect its separator, then emit one complete
+    // logical row at a time (quoted fields may contain line breaks).
+    private fun rows(reader: Reader): Sequence<List<String>> = sequence {
+        val source = reader.buffered()
+        val prefix = StringBuilder()
         var headerQuoted = false
         var commas = 0
         var semicolons = 0
-        for (c in s) {
+        var ch = source.read()
+        if (ch == 0xFEFF) ch = source.read()
+        while (ch >= 0) {
+            val c = ch.toChar()
+            require(prefix.length < 65_536) { "Слишком длинный заголовок CSV" }
+            prefix.append(c)
             if (c == '"') headerQuoted = !headerQuoted
             else if (!headerQuoted) when (c) {
                 '\r', '\n' -> break
                 ',' -> commas++
                 ';' -> semicolons++
             }
+            ch = source.read()
         }
         val separator = if (semicolons > commas) ';' else ','
-        fun finishField() { row.add(field.toString()); field.setLength(0); closed = false }
-        fun finishRow() { finishField(); if (row.any { it.isNotEmpty() }) result.add(row); row = mutableListOf() }
-        while (i < s.length) {
-            val c = s[i++]
+        val maxFields = maxOf(128, maxOf(commas, semicolons) + 1)
+        var offset = 0
+        fun nextChar(): Int = if (offset < prefix.length) prefix[offset++].code else source.read()
+        var row = mutableListOf<String>()
+        val field = StringBuilder()
+        var quoted = false
+        var closed = false
+        fun finishField() {
+            require(row.size < maxFields) { "Слишком много столбцов CSV" }
+            row.add(field.toString()); field.setLength(0); closed = false
+        }
+        ch = nextChar()
+        while (ch >= 0) {
+            val c = ch.toChar()
+            ch = nextChar()
             if (quoted) {
                 if (c == '"') {
-                    if (i < s.length && s[i] == '"') { field.append('"'); i++ }
+                    if (ch == '"'.code) { field.append('"'); ch = nextChar() }
                     else { quoted = false; closed = true }
                 } else field.append(c)
             } else when (c) {
                 '"' -> { require(field.isEmpty() && !closed) { "Некорректные кавычки CSV" }; quoted = true }
                 separator -> finishField()
-                '\r', '\n' -> { if (c == '\r' && i < s.length && s[i] == '\n') i++; finishRow() }
+                '\r', '\n' -> {
+                    if (c == '\r' && ch == '\n'.code) ch = nextChar()
+                    finishField()
+                    if (row.any { it.isNotEmpty() }) yield(row)
+                    row = mutableListOf()
+                }
                 else -> { require(!closed) { "Некорректное поле CSV" }; field.append(c) }
             }
         }
         require(!quoted) { "Незакрытые кавычки CSV" }
-        if (field.isNotEmpty() || row.isNotEmpty() || closed) finishRow()
-        return result
+        if (field.isNotEmpty() || row.isNotEmpty() || closed) {
+            finishField()
+            if (row.any { it.isNotEmpty() }) yield(row)
+        }
     }
     /** Import the complete lossless Trachu CSV. Identical IDs are idempotent; conflicts are rejected. */
     fun read(input: InputStream): Ledger {
-        val rows = parse(decodeUtf8(input.readBounded(100*1024*1024)))
-        val legacy = rows.firstOrNull() == legacyHeader
-        require(legacy || rows.firstOrNull() == header) { "Нужна таблица ТРАЧУ. или формат выписки" }
+        val rows = inputRows(input, 100*1024*1024).iterator()
+        val actualHeader = if (rows.hasNext()) rows.next() else emptyList()
+        val legacy = actualHeader == legacyHeader
+        require(legacy || actualHeader == header) { "Нужна таблица ТРАЧУ. или формат выписки" }
         fun unescape(value: String): String = if (!legacy) unsafe(value) else
             if (value.startsWith("'") && value.getOrNull(1) in listOf('=', '+', '-', '@', '\t', '\r')) value.substring(1) else value
-        val records = rows.drop(1).map {
+        require(rows.hasNext())
+        val records = rows.asSequence().map {
             require(it.size == header.size)
             // Undo Excel formula protection on raw payloads.
             val payload = unescape(it[8])
             val id = unescape(it[1])
             LedgerRecord(it[0], id, payload)
         }
-        require(records.isNotEmpty())
         return LedgerRecords.decode(records)
     }
     fun merge(existing: Ledger, incoming: Ledger): Ledger {
         require(existing.baseCurrency == incoming.baseCurrency) { "Основные валюты различаются" }
-        val merged = LedgerRecords.encode(existing).associateBy { it.kind to it.id }.toMutableMap()
-        LedgerRecords.encode(incoming).forEach {
-            val key = it.kind to it.id
-            require(merged[key] == null || merged[key] == it) { "Конфликт записи: ${it.kind} / ${it.id}" }
-            merged[key] = it
+        fun <T> mergeList(kind: String, old: List<T>, new: List<T>, id: (T) -> String): List<T> {
+            val merged = old.associateBy(id).toMutableMap()
+            new.forEach {
+                val key = id(it)
+                require(merged[key] == null || merged[key] == it) { "Конфликт записи: $kind / $key" }
+                merged[key] = it
+            }
+            return merged.values.toList()
         }
-        return LedgerRecords.decode(merged.values.toList())
+        return Ledger(existing.baseCurrency,
+            mergeList("account",existing.accounts,incoming.accounts) { it.id },
+            mergeList("category",existing.categories,incoming.categories) { it.id },
+            mergeList("entry",existing.entries,incoming.entries) { it.id },
+            mergeList("budget",existing.budgets,incoming.budgets) { it.id },
+            mergeList("debt",existing.debts,incoming.debts) { it.id },
+            mergeList("goal",existing.goals,incoming.goals) { it.id },
+            mergeList("schedule",existing.schedules,incoming.schedules) { it.id },
+            mergeList("rate",existing.rates,incoming.rates) { "${it.currency}:${it.day}" },
+            mergeList("receipt",existing.receipts,incoming.receipts) { it.id }
+        ).validated()
     }
     /**
      * Generic statement CSV: date,amount,category,note; optional id.
@@ -108,15 +154,15 @@ object Csv {
      * content+occurrence ID unless the source provides its own ID.
      */
     fun importStatement(input: InputStream, ledger: Ledger, accountId: String): Ledger {
-        val rows = parse(decodeUtf8(input.readBounded(20*1024*1024)))
-        val h = rows.firstOrNull()?.map { it.trim().lowercase() } ?: error("Таблица пуста")
+        val rows = inputRows(input, 20*1024*1024).iterator()
+        val h = if (rows.hasNext()) rows.next().map { it.trim().lowercase() } else error("Таблица пуста")
         require(h.distinct().size == h.size && listOf("date","amount","category").all { it in h }) { "Столбцы: date,amount,category,note,id" }
         val account = ledger.accounts.first { it.id == accountId && !it.archived }
         val categories = ledger.categories.toMutableList()
         val entries = ledger.entries.associateBy { it.id }.toMutableMap()
         val categoryIndex = categories.associateBy { it.name.lowercase() to it.income }.toMutableMap()
         val seen = mutableMapOf<String,Int>()
-        rows.drop(1).forEachIndexed { index, row ->
+        rows.asSequence().forEachIndexed { index, row ->
             try {
                 require(row.size == h.size)
                 fun col(name: String) = h.indexOf(name).let { if (it < 0) "" else row[it].trim() }

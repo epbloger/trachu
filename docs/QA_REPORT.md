@@ -1,28 +1,29 @@
 # Отчёт о проверке кандидата 1.0.0
 
-Дата: 26 ноября 2026 года. Проверенная Android-версия: commit [`79dadd7`](https://github.com/epbloger/trachu/commit/79dadd7244dcdaaf8f79d06b4846343ea241613e). Источник доказательств: [Android integration #45784489791](https://github.com/epbloger/trachu/actions/runs/45784489791).
+Дата: 26 ноября 2026 года. Последняя полностью проверенная Android-версия: commit [`bb60587`](https://github.com/epbloger/trachu/commit/bb6058700175cb9f565b4d58e1c49518eddefe30). Источник доказательств: [Android integration #45792371294](https://github.com/epbloger/trachu/actions/runs/45792371294), все шаги проверки завершены успешно. Более поздние изменения требуют отдельного подтверждения CI.
 
 | Проверка | Результат |
 |---|---|
 | Kotlin, Room, сборка APK, release AAB и тестового APK | Успешно |
-| JVM-тесты | 26/26, без пропусков и ошибок |
-| Android Lint | Успешно |
-| Android 15, смартфон | 5/5, включая запись и разделение расхода, поиск, фильтр, поворот экрана |
-| Android 15, планшет 1280×800, font scale 1.3 | 5/5, тот же сценарий и двухколоночный интерфейс |
-| Android 8, API 26 | 4/4: транзакции Room, миграция/повторное открытие, PIN/Keystore, зашифрованная копия |
+| JVM-тесты | 30/30 |
+| Android Lint | Успешно, 0 ошибок; 23 предупреждения в предыдущем аудите |
+| Android 16, API 36, смартфон | 8/8 |
+| Android 16, API 36, планшет 1280×800, font scale 1.3 | 8/8 |
+| Android 8, API 26 | 7/7 |
 | Манифест debug и release | Проверка чувствительных разрешений пройдена |
 | Подпись APK | Проверена, APK Signature Scheme v2, debug key |
 | Сайт | GitHub Pages; проверены desktop/mobile 1440/390/320 px, переключение экранов/темы, локальные ссылки, юридические страницы |
 
-Все PNG в `site/assets/screens/` — реальные снимки этого CI с синтетическими данными, не изображения концепции. Отчёт содержит 10 PNG, XML тестов, Lint, манифесты, SHA и результаты проверки подписи.
+Все PNG в `site/assets/screens/` — реальные снимки предыдущего [CI #45784489791](https://github.com/epbloger/trachu/actions/runs/45784489791), с синтетическими данными, не изображения концепции. Они относятся к `79dadd7`, а не к текущему коду. Отчёт новой сборки содержит XML тестов, Lint, манифесты, SHA и результаты проверки подписи.
 
 ## Артефакты
 
-- [APK](https://github.com/epbloger/trachu/actions/runs/45784489791/artifacts/15100072520) — SHA-256 `f76f5122992ba4a261d5a1f00e84338b6486154889178695c771e2c5d92002d3`.
-- [Unsigned AAB](https://github.com/epbloger/trachu/actions/runs/45784489791/artifacts/15100476254) — SHA-256 `8f4c81a9576e4d7a9d60f218a6ecc96bed8c33e001f8594406c741d054a9038f`.
-- [Полный отчёт](https://github.com/epbloger/trachu/actions/runs/45784489791/artifacts/15099873100).
+- [Debug APK](https://github.com/epbloger/trachu/actions/runs/45792371294/artifacts/15103103135).
+- [Unsigned release APK](https://github.com/epbloger/trachu/actions/runs/45792371294/artifacts/15103172991).
+- [Unsigned AAB](https://github.com/epbloger/trachu/actions/runs/45792371294/artifacts/15103837299).
+- [Полный отчёт](https://github.com/epbloger/trachu/actions/runs/45792371294/artifacts/15103557651).
 
-Содержимое скачанных ZIP сверено с дайджестами GitHub и SHA-256 файлов из CI. Артефакты Actions хранятся 14 дней; для скачивания может потребоваться вход в GitHub.
+Для проверки скачанного файла используйте `qa/SHA256SUMS` и `qa/source-commit.txt` внутри артефакта. Артефакты Actions хранятся 14 дней; для скачивания может потребоваться вход в GitHub.
 
 ## Что ещё не подтверждено
 

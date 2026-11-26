@@ -34,4 +34,10 @@ adb shell settings put system font_scale 1.3
 gradle --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || status=1
 adb pull /sdcard/Android/data/ru.epbloger.trachu/files/qa/. qa/tablet/ || true
 cp -a app/build/outputs/androidTest-results qa/tablet/ || true
+if [[ "$status" == 0 ]]; then
+  adb shell wm size reset
+  adb shell wm density reset
+  adb shell settings put system font_scale 1.0
+  TRACHU_OFFLINE_QA_DIR=qa/offline python3 .github/scripts/offline-smoke.py app/build/outputs/apk/debug/app-debug.apk || status=1
+fi
 exit "$status"

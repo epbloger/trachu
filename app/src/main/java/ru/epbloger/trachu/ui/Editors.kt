@@ -26,16 +26,16 @@ private val currencies = Currency.getAvailableCurrencies().map { it.currencyCode
 private val commonCurrencies = listOf("RUB","USD","EUR","CNY","KZT","BYN","TRY","JPY","GBP","AED")
 val allCurrencies = (commonCurrencies+currencies).distinct()
 
-@Composable fun AccountEditor(ledger: Ledger, current: Account?, busy: Boolean, vm: AppViewModel, close: ()->Unit) {
-    var name by remember { mutableStateOf(current?.name.orEmpty()) }
-    var type by remember { mutableStateOf(current?.type ?: AccountType.CASH) }
-    var currency by remember { mutableStateOf(current?.currency ?: ledger.baseCurrency) }
-    var opening by remember { mutableStateOf(current?.let { Money.input(it.openingMinor,it.currency) } ?: "0") }
-    var included by remember { mutableStateOf(current?.includeInTotal ?: true) }
-    var statistics by remember { mutableStateOf(current?.includeInStats ?: true) }
-    var archived by remember { mutableStateOf(current?.archived ?: false) }
-    var error by remember { mutableStateOf("") }
-    var delete by remember { mutableStateOf(false) }
+@Composable fun AccountEditor(ledger: Ledger, current: Account?, busy: Boolean, vm: AppViewModel, close: ()->Unit, draft:EntryDraft) {
+    var name by draft.state("name"){current?.name.orEmpty()}
+    var type by draft.state("type"){current?.type ?: AccountType.CASH}
+    var currency by draft.state("currency"){current?.currency ?: ledger.baseCurrency}
+    var opening by draft.state("opening"){current?.let { Money.input(it.openingMinor,it.currency) } ?: "0"}
+    var included by draft.state("included"){current?.includeInTotal ?: true}
+    var statistics by draft.state("statistics"){current?.includeInStats ?: true}
+    var archived by draft.state("archived"){current?.archived ?: false}
+    var error by draft.state("error"){""}
+    var delete by draft.state("delete"){false}
     val used=current!=null && (ledger.entries.any{it.accountId==current.id || it.targetAccountId==current.id} || ledger.debts.any{it.accountId==current.id} || ledger.schedules.any{it.template.accountId==current.id || it.template.targetAccountId==current.id})
     Form(if(current==null)"Новый счёт" else "Настройки счёта",close,busy,onSave={
         runCatching {
@@ -69,15 +69,15 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
 
 private val categoryColors=listOf(0xFF218C75L,0xFF4677BDL,0xFF9469B6L,0xFFBF646CL,0xFFB98B40L,0xFF657984L,0xFF54864DL,0xFFB25C32L)
 private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","☕","🎁","✈","📚","🎮","👕","🐾","💼","💳","🚗","💡","🍽","🏋")
-@Composable fun CategoryEditor(ledger: Ledger, current: Category?, busy: Boolean, vm: AppViewModel, close: ()->Unit) {
-    var name by remember { mutableStateOf(current?.name.orEmpty()) }
-    var income by remember { mutableStateOf(current?.income ?: false) }
-    var parent by remember { mutableStateOf(current?.parentId.orEmpty()) }
-    var icon by remember { mutableStateOf(current?.icon ?: "•") }
-    var color by remember { mutableStateOf(current?.color ?: categoryColors.first()) }
-    var archived by remember { mutableStateOf(current?.archived ?: false) }
-    var error by remember { mutableStateOf("") }
-    var delete by remember { mutableStateOf(false) }
+@Composable fun CategoryEditor(ledger: Ledger, current: Category?, busy: Boolean, vm: AppViewModel, close: ()->Unit, draft:EntryDraft) {
+    var name by draft.state("name"){current?.name.orEmpty()}
+    var income by draft.state("income"){current?.income ?: false}
+    var parent by draft.state("parent"){current?.parentId.orEmpty()}
+    var icon by draft.state("icon"){current?.icon ?: "•"}
+    var color by draft.state("color"){current?.color ?: categoryColors.first()}
+    var archived by draft.state("archived"){current?.archived ?: false}
+    var error by draft.state("error"){""}
+    var delete by draft.state("delete"){false}
     val used=current!=null && (ledger.entries.any{e->e.splits.any{it.categoryId==current.id}} || ledger.categories.any{it.parentId==current.id} || ledger.budgets.any{it.categoryId==current.id} || ledger.schedules.any{it.template.splits.any{sp->sp.categoryId==current.id}})
     val parents=listOf("")+ledger.categories.filter{it.id!=current?.id && it.income==income && it.parentId==null && !it.archived}.map{it.id}
     Form(if(current==null)"Новая категория" else "Изменить категорию",close,busy,onSave={
@@ -110,7 +110,8 @@ private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","�
 
 private data class SplitDraft(val category: String,val amount: String)
 
-/** In-memory form state retained across a temporary lock, never written to saved-state bundles. */
+/** In-memory form state retained across Activity recreation and a temporary lock,
+ * never written to saved-state bundles. */
 class EntryDraft {
     private val states=mutableMapOf<String,MutableState<*>>()
     @Suppress("UNCHECKED_CAST")
@@ -133,7 +134,7 @@ class EntryDraft {
     var accountId by draft.state("accountId") { defaultAccount?.id.orEmpty() }
     var kind by draft.state("kind") { original?.kind ?: initialKind }
     var amount by draft.state("amount") { original?.let{Money.input(it.minor,ledger.accounts.first{a->a.id==it.accountId}.currency)}.orEmpty() }
-    var day by draft.state("day") { iso(schedule?.nextDay ?: original?.day ?: initialDay ?: today()) }
+    var day by draft.state("day") { iso(originalSchedule?.nextDay ?: original?.day ?: initialDay ?: today()) }
     var time by draft.state("time") { original?.timeMinutes?.let{"%02d:%02d".format(it/60,it%60)} ?: LocalTime.now().withSecond(0).withNano(0).toString() }
     var note by draft.state("note") { original?.note.orEmpty() }
     var tags by draft.state("tags") { original?.tags?.joinToString(", ").orEmpty() }
@@ -147,15 +148,15 @@ class EntryDraft {
     val initialCategory=ledger.categories.firstOrNull{it.income==(kind==Kind.INCOME) && !it.archived}?.id.orEmpty()
     var splitDrafts by draft.state("splitDrafts") { original?.splits?.map{SplitDraft(it.categoryId,Money.input(it.minor,defaultAccount?.currency ?: ledger.baseCurrency))}
         ?.takeIf{it.isNotEmpty()} ?: listOf(SplitDraft(initialCategory,"")) }
-    var frequency by draft.state("frequency") { schedule?.frequency ?: Frequency.MONTHLY }
-    var interval by draft.state("interval") { schedule?.interval?.toString() ?: "1" }
-    var weekdays by draft.state("weekdays") { schedule?.weekdays.orEmpty().toSet() }
-    var alternate by draft.state("alternate") { schedule?.alternateWeekdays.orEmpty().toSet() }
-    var useAlternate by draft.state("useAlternate") { schedule?.alternateWeekdays?.isNotEmpty()==true }
-    var monthDays by draft.state("monthDays") { schedule?.monthDays?.joinToString(",").orEmpty() }
-    var endDay by draft.state("endDay") { schedule?.endDay?.let(::iso).orEmpty() }
-    var autoPost by draft.state("autoPost") { schedule?.autoPost ?: false }
-    var enabled by draft.state("enabled") { schedule?.enabled ?: true }
+    var frequency by draft.state("frequency") { originalSchedule?.frequency ?: Frequency.MONTHLY }
+    var interval by draft.state("interval") { originalSchedule?.interval?.toString() ?: "1" }
+    var weekdays by draft.state("weekdays") { originalSchedule?.weekdays.orEmpty().toSet() }
+    var alternate by draft.state("alternate") { originalSchedule?.alternateWeekdays.orEmpty().toSet() }
+    var useAlternate by draft.state("useAlternate") { originalSchedule?.alternateWeekdays?.isNotEmpty()==true }
+    var monthDays by draft.state("monthDays") { originalSchedule?.monthDays?.joinToString(",").orEmpty() }
+    var endDay by draft.state("endDay") { originalSchedule?.endDay?.let(::iso).orEmpty() }
+    var autoPost by draft.state("autoPost") { originalSchedule?.autoPost ?: false }
+    var enabled by draft.state("enabled") { originalSchedule?.enabled ?: true }
     var pendingReceipts by draft.state("pendingReceipts") { emptyList<Receipt>() }
     var receiptIds by draft.state("receiptIds") { original?.receiptIds ?: emptyList() }
     var error by draft.state("error") { "" }
@@ -193,14 +194,15 @@ class EntryDraft {
                     timeMinutes=t.hour*60+t.minute,id=id,receiptIds=receiptIds,allowArchived=original!=null,autoPostPlanned=plan&&!recurring&&autoPostPlanned)
                 if(recurring) {
                     if(originalSchedule!=null)require(old.schedules.find{it.id==originalSchedule?.id}==originalSchedule){"Расписание изменилось. Откройте его снова."}
-                    val s=Schedule(schedule?.id ?: newId(),e,date,frequency,interval.toInt(),
+                    val previous=originalSchedule
+                    val s=Schedule(previous?.id ?: newId(),e,date,frequency,interval.toInt(),
                         endDay.trim().takeIf{it.isNotEmpty()}?.let(::parseDay),autoPost,enabled,
-                        if(schedule!=null && schedule.nextDay==date)schedule.anchorDay else LocalDate.ofEpochDay(date).dayOfMonth,
+                        if(previous!=null && previous.nextDay==date)previous.anchorDay else LocalDate.ofEpochDay(date).dayOfMonth,
                         if(frequency==Frequency.WEEKLY)weekdays.sorted() else emptyList(),
                         if(frequency==Frequency.WEEKLY&&useAlternate&&interval.toInt()==2)alternate.sorted() else emptyList(),
                         if(frequency==Frequency.MONTHLY)monthDays.split(',').map{it.trim()}.filter{it.isNotEmpty()}.map{it.toInt()}.distinct().sorted() else emptyList(),
-                        if(schedule!=null&&schedule.nextDay==date)schedule.anchorEpochDay else date)
-                    require(s.endDay==null || s.endDay>=s.nextDay){"Дата окончания раньше начала"}
+                        if(previous!=null&&previous.nextDay==date)previous.anchorEpochDay else date)
+                    require(!s.enabled || s.endDay==null || s.endDay>=s.nextDay){"Дата окончания раньше следующего повтора. Измените дату или отключите расписание."}
                     prepared.copy(schedules=prepared.schedules.filterNot{it.id==s.id}+s)
                 } else Finance.putEntry(prepared,e)
             }) { vm.rememberAccount(a.id); close() }
@@ -270,7 +272,7 @@ class EntryDraft {
             DateField("Окончание (необязательно)",endDay,{endDay=it})
             Toggle("Проводить автоматически",autoPost,{autoPost=it},"Иначе появится запланированная операция для подтверждения.")
             Toggle("Активно",enabled,{enabled=it})
-            if(schedule!=null)TextButton(onClick={deleteSchedule=true}){Text("Удалить расписание",color=MaterialTheme.colorScheme.error)}
+            if(originalSchedule!=null)TextButton(onClick={deleteSchedule=true}){Text("Удалить расписание",color=MaterialTheme.colorScheme.error)}
         } else if(advanced) {
             receiptIds.forEach { id->
                 val r=(pendingReceipts+ledger.receipts).find{it.id==id}
@@ -280,7 +282,11 @@ class EntryDraft {
             OutlinedButton(onClick=chooseReceipt,enabled=!busy && receiptIds.size<4){Text("Прикрепить фото чека")}
         }
     }
-    if(deleteSchedule&&schedule!=null)Confirm("Удалить расписание?","Уже созданные операции останутся.",{deleteSchedule=false},{vm.change({l->l.copy(schedules=l.schedules.filterNot{it.id==schedule.id})},close)},busy)
+    val previous=originalSchedule
+    if(deleteSchedule&&previous!=null)Confirm("Удалить расписание?","Уже созданные операции останутся.",{deleteSchedule=false},{vm.change({l->
+        require(l.schedules.find{it.id==previous.id}==previous){"Расписание изменилось. Откройте его снова."}
+        l.copy(schedules=l.schedules.filterNot{it.id==previous.id})
+    },close)},busy)
 }
 
 @Composable private fun WeekdayChoices(selected:Set<Int>,onChange:(Set<Int>)->Unit) {
@@ -350,16 +356,16 @@ class EntryDraft {
     if(confirmDelete)Confirm("Удалить операцию?","Баланс и отчёты будут пересчитаны.",{confirmDelete=false},{vm.change({l->Finance.deleteEntry(l,entry.id)},close)},busy)
 }
 
-@Composable fun RefundEditor(ledger: Ledger, entry: Entry, vm: AppViewModel,busy:Boolean,close:()->Unit,current:Entry?=null) {
+@Composable fun RefundEditor(ledger: Ledger, entry: Entry, vm: AppViewModel,busy:Boolean,close:()->Unit,current:Entry?=null, draft:EntryDraft) {
     val account=ledger.accounts.first{it.id==entry.accountId}
     val left=Money.sub(entry.minor,Money.sum(ledger.entries.filter{it.originalId==entry.id&&it.id!=current?.id}.map{it.minor}))
-    var amount by remember { mutableStateOf(Money.input(current?.minor ?: left,account.currency)) }
-    var day by remember { mutableStateOf(iso(current?.day ?: today())) }
-    var note by remember { mutableStateOf(current?.note.orEmpty()) }
-    var error by remember { mutableStateOf("") }
+    var amount by draft.state("amount"){Money.input(current?.minor ?: left,account.currency)}
+    var day by draft.state("day"){iso(current?.day ?: today())}
+    var note by draft.state("note"){current?.note.orEmpty()}
+    var error by draft.state("error"){""}
     val refundable=remember(ledger,entry.id,current?.id){Finance.refundableSplits(ledger,entry.id,current?.id)}
-    var byCategory by remember { mutableStateOf(current!=null && entry.splits.size>1) }
-    var parts by remember { mutableStateOf(refundable.associate{split->split.categoryId to (current?.splits?.find{it.categoryId==split.categoryId}?.let{Money.input(it.minor,account.currency)} ?: "")}) }
+    var byCategory by draft.state("byCategory"){current!=null && entry.splits.size>1}
+    var parts by draft.state("parts"){refundable.associate{split->split.categoryId to (current?.splits?.find{it.categoryId==split.categoryId}?.let{Money.input(it.minor,account.currency)} ?: "")}}
     val categoryAmounts=runCatching{parts.mapNotNull{(id,text)->if(text.isBlank())null else (id to Money.parse(text,account.currency)).takeIf{it.second!=0L}}}
     val categoryTotal=categoryAmounts.mapCatching{Money.sum(it.map{part->part.second})}.getOrNull()
     Form("Возврат покупки",close,busy,onSave={
