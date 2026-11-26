@@ -1,7 +1,10 @@
 package ru.epbloger.trachu.ui
 
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.geometry.Rect
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
@@ -20,6 +23,7 @@ import ru.epbloger.trachu.data.LedgerStore
 import ru.epbloger.trachu.security.PinVault
 import ru.epbloger.trachu.security.Preferences
 import ru.epbloger.trachu.security.settingsStore
+import kotlin.math.abs
 
 @RunWith(AndroidJUnit4::class)
 class GuidedTutorialTest {
@@ -48,6 +52,29 @@ class GuidedTutorialTest {
     }
     private fun awaitText(text: String) = rule.waitUntil(20_000) {
         rule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+    }
+    private fun orientation(scenario: ActivityScenario<MainActivity>): Int {
+        var value = Configuration.ORIENTATION_UNDEFINED
+        scenario.onActivity { value = it.resources.configuration.orientation }
+        return value
+    }
+    private fun awaitOrientation(scenario: ActivityScenario<MainActivity>, expected: Int) {
+        rule.waitUntil(20_000) { orientation(scenario) == expected }
+    }
+    private fun assertExpenseTargetAligned() {
+        lateinit var actual: Rect
+        lateinit var highlight: Rect
+        fun aligned() = listOf(
+            abs(actual.left - highlight.left), abs(actual.top - highlight.top),
+            abs(actual.right - highlight.right), abs(actual.bottom - highlight.bottom)
+        ).all { it <= 2f }
+
+        rule.waitUntil(10_000) {
+            actual = rule.onNodeWithTag("add-expense").fetchSemanticsNode().boundsInRoot
+            highlight = rule.onNodeWithTag("tutorial-target-expense").fetchSemanticsNode().boundsInRoot
+            aligned()
+        }
+        assertTrue("Tutorial highlight $highlight must match real add-expense bounds $actual within 2px", aligned())
     }
     private fun tapTarget(step: String) {
         val tag = "tutorial-target-$step"
@@ -89,8 +116,37 @@ class GuidedTutorialTest {
             assertEquals(1, before.accounts.size)
             assertTrue(before.entries.isEmpty())
 
-            // Configuration recreation keeps the step and remeasures the actual button.
+            // Force a real orientation change while EXPENSE is the active step.
+            var originalRequestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            scenario.onActivity { originalRequestedOrientation = it.requestedOrientation }
+            val originalOrientation = orientation(scenario)
+            val rotatedOrientation = if (originalOrientation == Configuration.ORIENTATION_LANDSCAPE)
+                Configuration.ORIENTATION_PORTRAIT else Configuration.ORIENTATION_LANDSCAPE
+            val rotatedRequest = if (rotatedOrientation == Configuration.ORIENTATION_LANDSCAPE)
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            try {
+                scenario.onActivity { it.requestedOrientation = rotatedRequest }
+                awaitOrientation(scenario, rotatedOrientation)
+                awaitTag("tutorial-target-expense")
+                rule.onNodeWithTag("tutorial-overlay").assertIsDisplayed()
+                rule.onNodeWithTag("tutorial-target-expense").assertIsDisplayed()
+                rule.onNodeWithTag("add-expense").assertIsDisplayed()
+                assertExpenseTargetAligned()
+            } finally {
+                scenario.onActivity { it.requestedOrientation = originalRequestedOrientation }
+                awaitOrientation(scenario, originalOrientation)
+            }
+            awaitTag("tutorial-target-expense")
+            rule.onNodeWithTag("tutorial-overlay").assertIsDisplayed()
+            rule.onNodeWithTag("tutorial-target-expense").assertIsDisplayed()
+            assertExpenseTargetAligned()
+
+            // Explicit ActivityScenario recreation remains a separate lifecycle check.
             scenario.recreate()
+            awaitTag("tutorial-target-expense")
+            rule.onNodeWithTag("tutorial-overlay").assertIsDisplayed()
+            rule.onNodeWithTag("tutorial-target-expense").assertIsDisplayed()
+            assertExpenseTargetAligned()
             tapTarget("expense")
             assertEditor(scenario, Kind.EXPENSE)
             rule.onNodeWithText("Отмена").performClick()

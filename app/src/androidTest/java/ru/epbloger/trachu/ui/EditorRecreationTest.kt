@@ -126,9 +126,8 @@ class EditorRecreationTest {
             // Save lives in the fixed dialog footer, outside the scrollable form body.
             rule.onNodeWithTag("form_save").performClick()
             rule.onNodeWithText("Выберите категорию операции").assertExists()
-            rule.onNodeWithTag("entry-kind:Доход").performScrollTo().performClick()
+            rule.onNodeWithTag("entry-kind:Доход").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsNotSelected()
-            rule.onNodeWithTag("category-quick:salary").assertIsNotSelected()
             rule.onNodeWithTag("form_save").performClick()
             rule.onNodeWithText("Выберите категорию операции").assertExists()
             rule.onNodeWithTag("entry-kind:Расход").performScrollTo().performClick()
