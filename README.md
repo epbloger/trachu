@@ -31,12 +31,14 @@ Android 8.0+ · Без регистрации · Основные функции
 
 ## Реальный интерфейс
 
-Архивные снимки интерфейса 1.0.0 из автоматической проверки Android. Оформление 1.1.0 переработано; новые снимки публикуются только после проверки новой сборки.
+Реальные снимки 1.1.0 из [успешной автоматической проверки Android #45809724539](https://github.com/epbloger/trachu/actions/runs/45809724539), коммит `227cf9e`. Суммы и записи тестовые.
 
 <p align="center">
   <img src="site/assets/screens/phone-dashboard.png" alt="Обзор на смартфоне" width="220">
   <img src="site/assets/screens/phone-operations.png" alt="Операции и фильтры на смартфоне" width="220">
 </p>
+
+<p align="center"><img src="site/assets/screens/phone-onboarding.png" alt="Первоначальная настройка" width="220"> <img src="site/assets/screens/phone-split-entry.png" alt="Категории в операции" width="220"></p>
 
 <p align="center"><img src="site/assets/screens/tablet-analytics.png" alt="Аналитика на планшете" width="760"></p>
 
