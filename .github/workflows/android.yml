@@ -38,8 +38,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     env:
-      ORG_GRADLE_PROJECT_trachuAdsEnabled: ${{ vars.TRACHU_ADS_ENABLED || 'true' }}
-      ORG_GRADLE_PROJECT_trachuBannerId: ${{ vars.TRACHU_BANNER_ID || 'R-M-20514950-1' }}
+      ORG_GRADLE_PROJECT_trachuAdsEnabled: 'true'
+      ORG_GRADLE_PROJECT_trachuBannerId: 'R-M-20514950-1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,7 +107,7 @@ jobs:
           test -n "$debug_config" && test -n "$release_config"
           grep -Eq 'YANDEX_BANNER_ID = "demo-banner-yandex";' "$debug_config"
           if [[ "$ORG_GRADLE_PROJECT_trachuAdsEnabled" == true ]]; then
-            grep -Eq 'YANDEX_BANNER_ID = "R-M-[0-9]+-[0-9]+";' "$release_config"
+            grep -F 'YANDEX_BANNER_ID = "R-M-20514950-1";' "$release_config"
             printf 'Debug: official demo only\nRelease: explicitly enabled production placement; ownership requires publisher verification\n' > qa/ads-config.txt
           else
             grep -Eq 'YANDEX_BANNER_ID = "";' "$release_config"
