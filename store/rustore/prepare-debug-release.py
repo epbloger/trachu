@@ -159,7 +159,7 @@ def main():
     cbr = (qa / 'qa/tablet/live-cbr.txt').read_text().strip()
     cbr_match = re.fullmatch(r'PASS: Android HTTPS CBR feed, ([1-9][0-9]*) positive rates, publication day ([0-9]+), requested day ([0-9]+)', cbr)
     require(cbr_match, 'Missing real Android HTTPS CBR proof')
-    require((qa / 'qa/ads-config.txt').read_text().strip() == 'Debug: official demo only\nRelease: disabled, empty placement',
+    require((qa / 'qa/ads-config.txt').read_text().strip() == 'Debug: official demo only\nRelease: R-M-20514950-1; consent required',
             'Unexpected advertising configuration')
     offline = (qa / 'qa/offline/result.txt').read_text().strip()
     require(offline == 'PASS: offline account and expense, cold restart, persisted exact 4250 minor units, no default network before/after.',

@@ -114,7 +114,7 @@ jobs:
           grep -Eq 'YANDEX_BANNER_ID = "demo-banner-yandex";' "$debug_config"
           if [[ "$ORG_GRADLE_PROJECT_trachuAdsEnabled" == true ]]; then
             grep -F 'YANDEX_BANNER_ID = "R-M-20514950-1";' "$release_config"
-            printf 'Debug: official demo only\nRelease: explicitly enabled production placement; ownership requires publisher verification\n' > qa/ads-config.txt
+            printf 'Debug: official demo only\nRelease: R-M-20514950-1; consent required\n' > qa/ads-config.txt
           else
             grep -Eq 'YANDEX_BANNER_ID = "";' "$release_config"
             printf 'Debug: official demo only\nRelease: disabled, empty placement\n' > qa/ads-config.txt

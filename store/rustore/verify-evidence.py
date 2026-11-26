@@ -262,7 +262,7 @@ def verify_release(qa, apk, aab, commit, require_ux_v11=False, require_guided_v1
                     f'Missing successful in-place upgrade from {baseline}')
         require(re.fullmatch(r'PASS: Android HTTPS CBR feed, [1-9][0-9]* positive rates, publication day \d+, requested day \d+',
                              (qa/'qa/tablet/live-cbr.txt').read_text().strip()), 'No successful Android HTTPS CBR probe')
-        require((qa/'qa/ads-config.txt').read_text().strip() == 'Debug: official demo only\nRelease: disabled, empty placement',
+        require((qa/'qa/ads-config.txt').read_text().strip() == 'Debug: official demo only\nRelease: R-M-20514950-1; consent required',
                 'Unexpected advertising configuration for test delivery')
         require('CN=Android Debug' in (qa/'qa/apk-signature.txt').read_text() and
                 'DOES NOT VERIFY' in (qa/'qa/release-apk-unsigned.txt').read_text() and
