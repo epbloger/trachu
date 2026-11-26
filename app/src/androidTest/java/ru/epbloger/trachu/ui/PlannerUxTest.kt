@@ -316,7 +316,12 @@ class PlannerUxTest {
             assertEquals(40L,interestPayment.minor)
             assertEquals(0L,Finance.debtRemaining(after,debt))
             assertEquals(50L,Finance.paidInterest(after,debt))
-            assertEquals(50L,Finance.totals(after,Period(paymentDay,today())).expense)
+            // Other navigation tests keep their own operations in the shared ledger.
+            // Check both this debt's interest and the change in the complete report.
+            val period=Period(paymentDay,today())
+            val debtEntries=after.entries.filter{it.debtId==debt.id}
+            assertEquals(50L,Finance.totals(after.copy(entries=debtEntries),period).expense)
+            assertEquals(Money.add(Finance.totals(before,period).expense,40L),Finance.totals(after,period).expense)
             assertEquals(49950L,Finance.balance(after,account.id))
             plannerReveal("debt-pay:${debt.id}").assertIsNotEnabled()
         }finally{

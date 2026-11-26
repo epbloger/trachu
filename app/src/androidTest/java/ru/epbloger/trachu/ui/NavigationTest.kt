@@ -278,6 +278,7 @@ class NavigationTest {
         rule.activityRule.scenario.onActivity{it.onBackPressedDispatcher.onBackPressed()}
         rule.onNodeWithTag("converter-list").performScrollToNode(hasTestTag("field:Сумма (USD)"))
         rule.onNodeWithTag("field:Сумма (USD)").assertTextContains("2.00")
+        rule.onNodeWithTag("converter-list").performScrollToNode(hasTestTag("field:RUB за 1 USD"))
         rule.onNodeWithTag("field:RUB за 1 USD").assertTextContains("100")
         rule.activityRule.scenario.onActivity{it.onBackPressedDispatcher.onBackPressed()}
         rule.onNodeWithTag("nav-home").assertIsSelected()
