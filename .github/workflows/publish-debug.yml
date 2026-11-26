@@ -40,7 +40,7 @@ jobs:
           jq -e --arg sha "$sha" --arg repo "$GITHUB_REPOSITORY" '.head_sha==$sha and .head_branch=="main" and .head_repository.full_name==$repo and .path==".github/workflows/android.yml" and .status=="completed" and .conclusion=="success"' "$RUNNER_TEMP/run.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/jobs.json"
           jq -e '[.jobs[] | select(.name=="verify" and .conclusion=="success")] | length==1' "$RUNNER_TEMP/jobs.json"
-          for step in 'Build debug and unsigned release APK/AAB and device tests' 'Run unit tests and lint' 'Instrumented phone, tablet and planner UX tests' 'Android 8 compatibility and planner UX tests' 'Android 13 compatibility, editor and planner UX tests' 'Verify complete current release evidence and 16 KiB compatibility' 'VerifyOnly unsigned APK and AAB against exact commit'; do
+          for step in 'Build debug and unsigned release APK/AAB and device tests' 'Run unit tests and lint' 'Instrumented phone, tablet and planner UX tests' 'Android 8 compatibility and planner UX tests' 'Android 13 compatibility, editor and planner UX tests' 'Verify complete current release evidence and 16 KiB compatibility' 'VerifyOnly unsigned APK and AAB against exact commit' 'Dry-run minimized debug release package'; do
             jq -e --arg step "$step" 'any(.jobs[] | select(.name=="verify") | .steps[]; .name==$step and .conclusion=="success")' "$RUNNER_TEMP/jobs.json"
           done
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" > "$RUNNER_TEMP/artifacts.json"

@@ -241,6 +241,35 @@ jobs:
         run: |
           $sha=(git rev-parse HEAD).Trim()
           & ./store/rustore/sign-release.ps1 -ArtifactDir . -ExpectedCommit $sha -VerifyOnly 6>&1 | Tee-Object -FilePath qa/signing-verify-only.txt
+      - name: Dry-run minimized debug release package
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/trachu-release-evidence-dry-run"
+          delivery="$RUNNER_TEMP/trachu-release-delivery-dry-run"
+          mkdir -p "$evidence"
+          test ! -e "$delivery"
+          for artifact in trachu-verification-reports trachu-debug-apk trachu-androidTest-apk trachu-unsigned-release-apk trachu-unsigned-release-aab; do
+            mkdir -p "$evidence/$artifact"
+            ln -s "$GITHUB_WORKSPACE/qa" "$evidence/$artifact/qa"
+            ln -s "$GITHUB_WORKSPACE/app" "$evidence/$artifact/app"
+          done
+          python3 store/rustore/prepare-debug-release.py "$evidence" "$(git rev-parse HEAD)" "$GITHUB_RUN_ID" qa/apk-signature.txt qa/signing-verify-only.txt qa/signing-verify-only.txt "$delivery"
+          (cd "$delivery" && sha256sum -c trachu-1.2.0-debug.apk.sha256)
+          python3 - "$delivery/trachu-1.2.0-qa.zip" "$(git rev-parse HEAD)" "$GITHUB_RUN_ID" <<'PY'
+          import json, sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              assert archive.testzip() is None
+              names = set(archive.namelist())
+              assert all(name.startswith(('tests/', 'screens/')) or name in {'summary.json', 'README.txt'} for name in names)
+              assert len([name for name in names if name.startswith('screens/')]) >= 18
+              summary = json.loads(archive.read('summary.json'))
+              assert summary['sourceCommit'] == sys.argv[2] and summary['androidCiRun'] == sys.argv[3]
+              assert summary['totalTests'] == sum(summary['testCounts'].values()) > 0
+              assert all(count > 0 for count in summary['testCounts'].values())
+              assert summary['physicalDeviceTests'] is False
+              print('PASS: minimized QA ZIP ({} allowlisted members, {} tests)'.format(len(names), summary['totalTests']))
+          PY
       - name: Upload APK
         if: always()
         uses: actions/upload-artifact@v4
