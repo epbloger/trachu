@@ -55,9 +55,11 @@ jobs:
             "$manager" --sdk_root="$SDK" 'platforms;android-36' 'build-tools;35.0.0'
           fi
           test -f "$SDK/platforms/android-36/android.jar"
-      - name: Build APK and unsigned release AAB, unit tests and lint
-        run: gradle --no-daemon --continue --stacktrace assembleDebug bundleRelease testDebugUnitTest lintDebug assembleDebugAndroidTest
+      - name: Build APK, unsigned release AAB and device tests
+        id: build
+        run: gradle --no-daemon --continue --stacktrace assembleDebug bundleRelease assembleDebugAndroidTest
       - name: Record artifact provenance and inspect merged permissions
+        id: provenance
         shell: bash
         run: |
           set -euo pipefail
@@ -79,12 +81,18 @@ jobs:
             echo "::error::Unexpected sensitive permission in release manifest"
             exit 1
           fi
+      - name: Run unit tests and lint
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: gradle --no-daemon --continue --stacktrace testDebugUnitTest lintDebug
       - name: Enable KVM
+        id: kvm
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' }}
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Instrumented phone and tablet tests
+        if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -93,6 +101,7 @@ jobs:
           disable-animations: true
           script: bash .github/scripts/device-tests.sh
       - name: Android 8 compatibility smoke tests
+        if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 26

@@ -18,7 +18,7 @@ import ru.epbloger.trachu.core.*
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf("Все") }
     var account by rememberSaveable { mutableStateOf("") }
-    var categoryIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var categoryIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     val categories=categoryIds.toSet()
     var type by rememberSaveable { mutableStateOf(PeriodType.MONTH) }
     var period by rememberSaveable(monthStart,stateSaver=PeriodSaver) { mutableStateOf(Period.month(startDay=monthStart)) }
@@ -51,11 +51,11 @@ import ru.epbloger.trachu.core.*
         if(expanded)item {
             Panel {
                 Choice("Счёт",account,listOf("")+ledger.accounts.map{it.id},{if(it.isEmpty())"Все счета" else ledger.accountName(it)}){account=it}
-                MultiChoice("Категории",categories,ledger.categories.map{it.id},{ledger.categoryName(it)}){categoryIds=ArrayList(it)}
+                MultiChoice("Категории",categories,ledger.categories.map{it.id},{ledger.categoryName(it)}){categoryIds=it.toList()}
                 Choice("Сортировка",sort,listOf("Новые","Старые","Сумма"),{it}){sort=it}
                 Toggle("Все даты",allDates,{allDates=it})
                 if(!allDates)PeriodControls(type,{type=it},period,{period=it},monthStart)
-                TextButton(onClick={query="";filter="Все";account="";categoryIds=arrayListOf();type=PeriodType.MONTH;period=Period.month(startDay=monthStart);allDates=true;sort="Новые"}){Text("Сбросить все фильтры")}
+                TextButton(onClick={query="";filter="Все";account="";categoryIds=emptyList();type=PeriodType.MONTH;period=Period.month(startDay=monthStart);allDates=true;sort="Новые"}){Text("Сбросить все фильтры")}
             }
         }
         item { Text("Найдено: ${entries.size}",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant) }
