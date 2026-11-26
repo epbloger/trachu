@@ -31,7 +31,7 @@ Android 8.0+ · Без регистрации · Основные функции
 
 ## Реальный интерфейс
 
-Реальные снимки 1.1.0 из [успешной автоматической проверки Android #45809724539](https://github.com/epbloger/trachu/actions/runs/45809724539), коммит `227cf9e`. Суммы и записи тестовые.
+Реальные снимки 1.1.0 из [успешной автоматической проверки Android #45811125140](https://github.com/epbloger/trachu/actions/runs/45811125140), коммит `b58080e`, 127/127 тестов. Суммы и записи тестовые.
 
 <p align="center">
   <img src="site/assets/screens/phone-dashboard.png" alt="Обзор на смартфоне" width="220">
@@ -39,6 +39,10 @@ Android 8.0+ · Без регистрации · Основные функции
 </p>
 
 <p align="center"><img src="site/assets/screens/phone-onboarding.png" alt="Первоначальная настройка" width="220"> <img src="site/assets/screens/phone-split-entry.png" alt="Категории в операции" width="220"></p>
+
+<p align="center"><img src="site/assets/screens/phone-quick-entry.png" alt="Быстрый ввод" width="220"> <img src="site/assets/screens/phone-converter.png" alt="Конвертер валют" width="220"></p>
+
+<p align="center"><img src="site/assets/screens/phone-drawer.png" alt="Боковое меню" width="220"> <img src="site/assets/screens/phone-dashboard-dark.png" alt="Тёмная тема" width="220"></p>
 
 <p align="center"><img src="site/assets/screens/tablet-analytics.png" alt="Аналитика на планшете" width="760"></p>
 
@@ -63,7 +67,7 @@ Android 8.0+ · Без регистрации · Основные функции
 
 Публичный выпуск готовится. Официальная ссылка на магазин появится после публикации. За выходом новых версий можно следить на [странице релизов](https://github.com/epbloger/trachu/releases).
 
-Для предварительного тестирования версии 1.1.0 используйте debug APK из успешно завершённого [Android CI](https://github.com/epbloger/trachu/actions/workflows/android.yml). Не используйте unsigned release APK для установки. Архив доступен ограниченное время и может требовать входа в GitHub. Перед обновлением сделайте резервную копию. При несовместимости подписи не удаляйте приложение без сохранения данных. История проверок и ограничения — в [QA-отчёте](docs/QA_REPORT.md).
+Для предварительного тестирования скачайте [debug APK 1.1.0 из успешного CI #45811125140](https://github.com/epbloger/trachu/actions/runs/45811125140/artifacts/15113853191) (ZIP; извлеките app-debug.apk). SHA-256 APK: `2b9399ef66d50b8993378f33927ecf20cb44d2608a96b8e54b240e67b32c235a`. Не используйте unsigned release APK для установки. Архив доступен ограниченное время и может требовать входа в GitHub. Перед обновлением сделайте резервную копию. При несовместимости подписи не удаляйте приложение без сохранения данных. История проверок и ограничения — в [QA-отчёте](docs/QA_REPORT.md).
 
 ## Обратная связь
 
