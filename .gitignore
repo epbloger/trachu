@@ -13,3 +13,9 @@ local.properties
 *.db
 *.db-wal
 *.db-shm
+
+# Local tooling and build outputs
+__pycache__/
+*.pyc
+*.apk
+*.aab

@@ -7,9 +7,9 @@ plugins {
     id("androidx.room")
 }
 
-// Production placement is specific to this app; Gradle properties can disable it or override the placement.
-// The debug build always uses Yandex's public demo block.
-val trachuAdsEnabled = providers.gradleProperty("trachuAdsEnabled").orElse("false").get()
+// Production placement ID is an app identifier, not a signing key or API secret.
+// The debug build always uses Yandex's public demo block. Gradle properties can override release defaults.
+val trachuAdsEnabled = providers.gradleProperty("trachuAdsEnabled").orElse("true").get()
 require(trachuAdsEnabled == "true" || trachuAdsEnabled == "false") {
     "trachuAdsEnabled must be true or false"
 }

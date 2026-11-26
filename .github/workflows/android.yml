@@ -104,10 +104,17 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh api33
-      - name: Deliver tested APK
+      - name: Prepare verified application APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/delivery"
+          cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/delivery/trachu-1.2.0-debug.apk"
+          cp app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/delivery/trachu-1.2.0-release-unsigned.apk"
+      - name: Deliver APKs
         uses: actions/upload-artifact@v4
         with:
-          name: trachu-1.2.0-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: trachu-1.2.0-apk
+          path: ${{ runner.temp }}/delivery/*.apk
           if-no-files-found: error
           retention-days: 14
