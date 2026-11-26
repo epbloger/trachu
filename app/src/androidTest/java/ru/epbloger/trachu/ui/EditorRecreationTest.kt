@@ -123,12 +123,13 @@ class EditorRecreationTest {
             enter(amountTag,"12")
             rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsNotSelected()
                 .assertTextContains("Выберите категорию ниже")
-            rule.onNodeWithTag("form_save").performScrollTo().performClick()
+            // Save lives in the fixed dialog footer, outside the scrollable form body.
+            rule.onNodeWithTag("form_save").performClick()
             rule.onNodeWithText("Выберите категорию операции").assertExists()
             rule.onNodeWithTag("entry-kind:Доход").performScrollTo().performClick()
             rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsNotSelected()
             rule.onNodeWithTag("category-quick:salary").assertIsNotSelected()
-            rule.onNodeWithTag("form_save").performScrollTo().performClick()
+            rule.onNodeWithTag("form_save").performClick()
             rule.onNodeWithText("Выберите категорию операции").assertExists()
             rule.onNodeWithTag("entry-kind:Расход").performScrollTo().performClick()
             rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsNotSelected()
@@ -239,7 +240,9 @@ class EditorRecreationTest {
             rule.onNodeWithTag("form_save").performClick()
             rule.onNodeWithText("Выберите категорию операции").assertExists()
             rule.onNodeWithTag("category-choice:Категория 2").performScrollTo().performClick()
-            rule.onNodeWithTag("category-option:food").performScrollTo().performClick()
+            // Category options are lazy items; scroll their LazyColumn before resolving the node.
+            rule.onNodeWithTag("category-list").performScrollToNode(hasTestTag("category-option:food"))
+            rule.onNodeWithTag("category-option:food").performClick()
             rule.onNodeWithTag("category-selected:Категория 2").assertIsSelected().assertTextContains("Продукты")
             rule.onNodeWithTag("form_save").performClick()
             rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
@@ -313,6 +316,9 @@ class EditorRecreationTest {
             val amountTag="field:Сумма ($currency)"
             awaitTag(amountTag)
             enter(amountTag,"10")
+            // New operations deliberately have no preselected category. This test
+            // exercises conversion, so choose a valid expense category explicitly.
+            rule.onNodeWithTag("category-quick:food").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithTag("entry-convert").performScrollTo().performClick()
             rule.onNodeWithTag("currency:Исходная валюта").performScrollTo().performClick()
             rule.onNodeWithTag("field:Поиск валюты").performTextReplacement(source)
@@ -361,6 +367,8 @@ class EditorRecreationTest {
             rule.onNodeWithTag("choice:Счёт").performScrollTo().assertTextContains(second.name,substring=true)
             rule.onNodeWithTag("field:Сумма ($foreign)").performScrollTo().assertTextContains(Money.input(Money.parse("60",foreign),foreign))
             enter("field:Курс: $currency за 1 $foreign","0.5")
+            rule.onNodeWithTag("category-selected:Категория").performScrollTo()
+                .assertIsSelected().assertTextContains("Продукты")
             rule.onNodeWithTag("form_save").performClick()
             rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
             val saved=runBlocking{store.current().entries.single{it.accountId in ids}}
