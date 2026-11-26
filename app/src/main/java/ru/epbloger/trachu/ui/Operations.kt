@@ -69,7 +69,7 @@ import ru.epbloger.trachu.core.*
         }
         if(expanded)item {
             Panel {
-                 Choice("Счёт",account,listOf("")+ledger.accounts.map{it.id},{id->if(id.isEmpty())"Все счета" else ledger.accounts.find{it.id==id}?.let(::accountChoiceLabel) ?: "Счёт недоступен"}){account=it}
+                 AccountChoice("Счёт",account,ledger.accounts,allLabel="Все счета"){account=it}
                 MultiChoice("Категории",categories,ledger.categories.map{it.id},{ledger.categoryName(it)}){categoryIds=it.toList()}
                 if(availableTags.isNotEmpty()||tags.isNotEmpty())MultiChoice("Теги (любой выбранный)",tags,availableTags,{it}){tagIds=it.toList()}
                 Choice("Сортировка",sort,listOf("Новые","Старые","Сумма"),{it}){sort=it}

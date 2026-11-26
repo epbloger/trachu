@@ -70,6 +70,7 @@ def verify_overview():
             labels = {n.get(attr) for n in ET.fromstring(raw).iter("node")
                       for attr in ("text", "content-desc")}
             assert "Начнём с вашего счёта" not in labels, "Upgrade unexpectedly requires onboarding"
+            assert "Включить напоминания?" not in labels, "Upgrade unexpectedly requests first-launch permission choice"
             if "Обзор" in labels:
                 (OUT / "updated-dashboard.png").write_bytes(adb("exec-out", "screencap", "-p", binary=True))
                 return

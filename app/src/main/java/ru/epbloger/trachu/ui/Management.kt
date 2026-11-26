@@ -1,6 +1,7 @@
 package ru.epbloger.trachu.ui
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -11,10 +12,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import ru.epbloger.trachu.AppViewModel
 import ru.epbloger.trachu.BuildConfig
 import ru.epbloger.trachu.core.*
@@ -122,7 +129,23 @@ private fun canChangeBaseCurrency(ledger:Ledger)=ledger.accounts.isEmpty()&&ledg
     var pinDialog by remember{mutableStateOf(false)}
     var removeDialog by remember{mutableStateOf(false)}
     var base by remember(ledger.baseCurrency){mutableStateOf(ledger.baseCurrency)}
-    val notify=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission(),vm::notificationPermissionResult)
+    val context=LocalContext.current
+    val lifecycle=LocalLifecycleOwner.current.lifecycle
+    var systemNotifications by remember{mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled())}
+    DisposableEffect(lifecycle,context){
+        val observer=LifecycleEventObserver{_,event->
+            if(event==Lifecycle.Event.ON_RESUME)systemNotifications=NotificationManagerCompat.from(context).areNotificationsEnabled()
+        }
+        lifecycle.addObserver(observer)
+        onDispose{lifecycle.removeObserver(observer)}
+    }
+    val notify=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){granted->
+        systemNotifications=NotificationManagerCompat.from(context).areNotificationsEnabled()
+        vm.notificationPermissionResult(granted)
+    }
+    fun openNotificationSettings(){
+        context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,context.packageName))
+    }
     LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
         item{SectionTitle("Настройки",action="Назад",onAction=back)}
         item{Panel{
@@ -155,23 +178,21 @@ private fun canChangeBaseCurrency(ledger:Ledger)=ledger.accounts.isEmpty()&&ledg
         }}
         item{Panel{
             SectionTitle("Уведомления")
-            Toggle("Напоминания",settings.notificationsEnabled!=false,{enabled->
+            Toggle("Напоминания",settings.notificationsEnabled!=false&&systemNotifications,{enabled->
                 if(!busy){
                     vm.perform{
                         vm.preferences.notificationsEnabled(enabled)
                         if(enabled){
                             ru.epbloger.trachu.worker.FinanceWorker.refresh(vm.getApplication())
-                            if(Build.VERSION.SDK_INT>=33)notify.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            if(Build.VERSION.SDK_INT>=33&&ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
+                                notify.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            else if(!systemNotifications)openNotificationSettings()
                         }else ru.epbloger.trachu.worker.FinanceWorker.cancelReminders(vm.getApplication())
                     }
                 }
             },"Платежи, долги и лимиты бюджета")
-            run {
-                val context=androidx.compose.ui.platform.LocalContext.current
-                TextButton(onClick={
-                    context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,context.packageName))
-                }){Text("Разрешения Android")}
-            }
+            if(!systemNotifications)Text("Уведомления запрещены в Android.",style=MaterialTheme.typography.bodySmall)
+            TextButton(onClick=::openNotificationSettings){Text("Разрешения Android")}
         }}
         item{Panel{
             SectionTitle("Виджет")
@@ -219,6 +240,7 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
     var backup by remember{mutableStateOf<String?>(null)}
     var importStatement by remember{mutableStateOf(false)}
     var account by remember{mutableStateOf(ledger.accounts.firstOrNull{!it.archived}?.id.orEmpty())}
+    var importError by remember{mutableStateOf("")}
     var csvConfirm by remember{mutableStateOf(false)}
     LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
         item{SectionTitle("Данные и копии",action="Назад",onAction=back)}
@@ -238,8 +260,8 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
         }}
         item{Panel{
             SectionTitle("PDF-отчёт")
-            Text("Выберите период и счёт в аналитике.")
-            Button(onClick=openReports,enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Перейти к экспорту PDF")}
+            Button(onClick={launch(FileRequest("pdf",true,period=Period.month()))},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("PDF за календарный месяц")}
+            TextButton(onClick=openReports,enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Другой период или счёт")}
         }}
     }
     if(backup!=null){
@@ -259,10 +281,11 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
         }
     }
     if(csvConfirm)Confirm("Импортировать таблицу?","Совпадающие записи не дублируются. При несовместимых идентификаторах импорт будет отклонён.",{csvConfirm=false},{csvConfirm=false;launch(FileRequest("csv",false))},busy)
-    if(importStatement)Form("Импорт выписки",{importStatement=false},busy,"Выбрать файл",onSave={
-        if(account.isNotBlank()){launch(FileRequest("statement",false,account=account));importStatement=false}
+    if(importStatement)Form("Импорт выписки",{importStatement=false;importError=""},busy,"Выбрать файл",validationError=importError,onSave={
+        if(ledger.accounts.any{it.id==account&&!it.archived}){launch(FileRequest("statement",false,account=account));importStatement=false;importError=""}
+        else importError="Выберите счёт для импорта выписки"
     }){
-        AccountChoice("Счёт",account,ledger.accounts.filter{!it.archived}){account=it}
+        AccountChoice("Счёт",account,ledger.accounts.filter{!it.archived}){account=it;importError=""}
         Text("Суммы должны быть в валюте этого счёта. Импорт повторно не добавит те же строки. Для операций в иностранной валюте заранее сохраните исторические курсы.")
     }
 }

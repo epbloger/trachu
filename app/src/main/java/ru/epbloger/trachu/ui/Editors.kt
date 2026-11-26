@@ -188,6 +188,7 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         // New date/time, rate lookup, ID and no receipts or scheduled auto-posting.
     }
 }
+@OptIn(ExperimentalLayoutApi::class)
 @Composable fun EntryEditor(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, initialKind: Kind, current: Entry?=null, schedule: Schedule?=null, recurring: Boolean=false, close: ()->Unit, forcePlanned: Boolean=false, draft: EntryDraft, chooseReceipt: ()->Unit, initialDay:Long?=null) {
     val guidedHint=LocalGuidedEditorHint.current
     // Keep the snapshot from opening the draft, even if the ledger emits a newer entry.
@@ -341,8 +342,12 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         }.onFailure{error=editorMessage(it,"Проверьте сумму, дату и остальные данные операции.")}
     }) {
         if(active.isEmpty())Warning("Создайте хотя бы один счёт в разделе «Счета».")
-        Chips(listOf(Kind.EXPENSE,Kind.INCOME,Kind.TRANSFER),kind,{it.label()},tagPrefix="entry-kind"){ k->
-            if(k!=kind){kind=k;splitDrafts=listOf(SplitDraft("",""));splitMode=false;error=""}
+        FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
+            listOf(Kind.EXPENSE,Kind.INCOME,Kind.TRANSFER).forEach{k->
+                FilterChip(selected=k==kind,onClick={
+                    if(k!=kind){kind=k;splitDrafts=listOf(SplitDraft("",""));splitMode=false;error=""}
+                },label={Text(k.label())},modifier=Modifier.testTag("entry-kind:${k.label()}"))
+            }
         }
         if(guidedHint)Surface(color=MaterialTheme.colorScheme.primaryContainer,shape=MaterialTheme.shapes.medium) {
             Text("Введите сумму реальной операции и выберите категорию. Если хотите только посмотреть форму, нажмите «Отмена».",
@@ -358,20 +363,18 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             }
         }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            @Composable fun AmountInput(modifier:Modifier=Modifier) {
-                val emphasis=if(guidedHint)Modifier.border(2.dp,MaterialTheme.colorScheme.primary,MaterialTheme.shapes.medium).padding(2.dp) else Modifier
-                Field("Сумма (${account?.currency ?: ledger.baseCurrency})",amount,{amount=it;error=""},true,modifier=modifier.then(emphasis))
-            }
-            @Composable fun ConvertButton() {
-                if(account!=null)TextButton(onClick={
-                    openConversion(if(account.currency=="USD")"EUR" else "USD")
-                },enabled=!busy,modifier=Modifier.testTag("entry-convert")) {Text("Другая валюта")}
-            }
+            val amountLabel="Сумма (${account?.currency ?: ledger.baseCurrency})"
+            val onAmountChange:(String)->Unit={amount=it;error=""}
+            val onConvert:(()->Unit)?=account?.let{a->{openConversion(if(a.currency=="USD")"EUR" else "USD")}}
             if(maxWidth>=300.dp&&LocalDensity.current.fontScale<=1.2f) {
                 Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)){
-                    AmountInput(Modifier.weight(1f));ConvertButton()
+                    EntryAmountInput(amountLabel,amount,onAmountChange,guidedHint,Modifier.weight(1f))
+                    if(onConvert!=null)EntryConvertButton(busy,onConvert)
                 }
-            } else Column { AmountInput();ConvertButton() }
+            } else Column {
+                EntryAmountInput(amountLabel,amount,onAmountChange,guidedHint)
+                if(onConvert!=null)EntryConvertButton(busy,onConvert)
+            }
         }
         if(kind==Kind.TRANSFER) {
             AccountChoice("На счёт",targetId,active.filter{it.id!=accountId},compact=true){id->
@@ -408,7 +411,15 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             })
         }
         DateField("Дата",day,{day=it;error=""},supporting=null)
-        if(!recurring)Chips(listOf(today(),today()-1),runCatching{parseDay(day)}.getOrDefault(Long.MIN_VALUE),{if(it==today())"Сегодня" else "Вчера"}){day=iso(it);error=""}
+        if(!recurring){
+            val todayDay=today()
+            val selectedDate=runCatching{parseDay(day)}.getOrDefault(Long.MIN_VALUE)
+            FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                listOf(todayDay to "Сегодня",todayDay-1 to "Вчера").forEach{(date,label)->
+                    FilterChip(selected=date==selectedDate,onClick={day=iso(date);error=""},label={Text(label)},modifier=Modifier.testTag("entry-date:$label"))
+                }
+            }
+        }
         if(!recurring&&(planned||runCatching{parseDay(day)>today()}.getOrDefault(false)))
             Text("Запланировано — баланс изменится после проведения.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.tertiary)
         if(!recurring && !forcePlanned) OutlinedButton(onClick={advanced=!advanced},modifier=Modifier.fillMaxWidth().testTag("entry-details")) {
@@ -509,6 +520,8 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
                 require(it>0){"После округления сумма равна нулю"}
             }
         }
+        val convertedMinor=result.getOrNull()
+        val conversionError=result.exceptionOrNull()?.let{editorMessage(it,"Проверьте исходную сумму и курс.")}
         AlertDialog(
             onDismissRequest={cancelConversion()},
             title={Text("Пересчитать в $destination")},
@@ -522,8 +535,8 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
                     else if(quote!=null)Text("1 $conversionCurrency ≈ ${quote.toPlainString()} $destination · $day")
                     else Warning("Нет сохранённого курса на эту дату.")
                 }
-                result.onSuccess{MoneyText(it,destination,modifier=Modifier.testTag("entry-convert-result"),large=true)}
-                if(conversionAmount.isNotBlank())result.onFailure{Warning(editorMessage(it,"Проверьте исходную сумму и курс."))}
+                if(convertedMinor!=null)MoneyText(convertedMinor,destination,modifier=Modifier.testTag("entry-convert-result"),large=true)
+                else if(conversionAmount.isNotBlank()&&conversionError!=null)Warning(conversionError)
                 Text("В операцию будет внесена сумма в валюте счёта. Курс конвертации не изменяет сохранённые курсы.",style=MaterialTheme.typography.bodySmall)
                 if(splitMode)Text("После пересчёта проверьте распределение по категориям.",style=MaterialTheme.typography.bodySmall)
                 if(pendingAccount!=null)TextButton(onClick={selectAccount(pendingAccount.id);cancelConversion()}){
@@ -547,6 +560,15 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         require(l.schedules.find{it.id==previous.id}==previous){"Расписание изменилось. Откройте его снова."}
         l.copy(schedules=l.schedules.filterNot{it.id==previous.id})
     },close)},busy)
+}
+
+@Composable private fun EntryAmountInput(label:String,amount:String,onChange:(String)->Unit,guidedHint:Boolean,modifier:Modifier=Modifier){
+    val emphasis=if(guidedHint)Modifier.border(2.dp,MaterialTheme.colorScheme.primary,MaterialTheme.shapes.medium).padding(2.dp) else Modifier
+    Field(label,amount,onChange,true,modifier=modifier.then(emphasis))
+}
+
+@Composable private fun EntryConvertButton(busy:Boolean,onConvert:()->Unit){
+    TextButton(onClick=onConvert,enabled=!busy,modifier=Modifier.testTag("entry-convert")){Text("Другая валюта")}
 }
 
 @Composable private fun WeekdayChoices(selected:Set<Int>,onChange:(Set<Int>)->Unit) {

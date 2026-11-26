@@ -38,6 +38,7 @@ internal fun needsOnboarding(ledger: Ledger, settings: Settings): Boolean =
 internal fun firstAccountLedger(ledger: Ledger, currency: String, name: String, type: AccountType, opening: String): Ledger {
     require(isPristineLedger(ledger)) { "Данные уже существуют. Откройте настройки счёта." }
     require(name.isNotBlank()) { "Введите название счёта" }
+    require(name.trim().length<=160) { "Название счёта: не более 160 символов" }
     val minor = runCatching { Money.parse(opening.ifBlank { "0" }, currency) }.getOrElse {
         throw IllegalArgumentException("Проверьте начальный остаток и число знаков после запятой.")
     }

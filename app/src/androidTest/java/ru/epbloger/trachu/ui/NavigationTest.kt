@@ -26,6 +26,8 @@ class NavigationTest {
     @get:Rule val rule=createAndroidComposeRule<MainActivity>()
     private fun capture(name:String) {
         rule.waitForIdle()
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(500,5_000)
         val directory=requireNotNull(rule.activity.getExternalFilesDir("qa"))
         directory.mkdirs()
         val bitmap=requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
@@ -52,6 +54,18 @@ class NavigationTest {
         }.getOrElse{"UNCONFIRMED: ${it.javaClass.simpleName}: ${it.message.orEmpty().replace('\n',' ').take(240)}"}
         File(directory,"live-cbr.txt").writeText(result+"\n")
         android.util.Log.i("TrachuQA",result)
+    }
+    private fun selectStructure(income:Boolean){
+        val tag=if(income)"structure-income" else "structure-expense"
+        val list=rule.onNodeWithTag("analytics-list")
+        list.performScrollToNode(hasTestTag(tag))
+        rule.onNodeWithTag(tag).assertIsDisplayed().performClick().assertIsSelected()
+        val opposite=if(income)"structure-expense" else "structure-income"
+        rule.onNodeWithTag(opposite).assertIsNotSelected()
+        list.performScrollToNode(hasTestTag(if(income)"income-structure" else "expense-structure"))
+        rule.onNodeWithTag(if(income)"income-structure" else "expense-structure").assertExists()
+        rule.onNodeWithTag(if(income)"expense-structure" else "income-structure").assertDoesNotExist()
+        rule.onNodeWithContentDescription(if(income)"Диаграмма доходов" else "Диаграмма расходов").assertExists()
     }
     @Test fun recordExpenseAndNavigateAfterRotation() {
         val initialOrientation=rule.activity.resources.configuration.orientation
@@ -143,19 +157,21 @@ class NavigationTest {
         capture("dashboard")
         if(initialOrientation==Configuration.ORIENTATION_PORTRAIT){
             rule.onNodeWithTag("nav-reports").performClick()
-            rule.onNodeWithTag("analytics-list").performScrollToNode(hasTestTag("expense-structure") or hasAnyDescendant(hasTestTag("expense-structure")))
+            rule.onNodeWithTag("analytics-list").performScrollToNode(hasTestTag("expense-structure"))
             if(rule.activity.resources.configuration.screenWidthDp<840){
-                rule.onNodeWithTag("structure-expense").assertIsSelected()
-                rule.onNodeWithContentDescription("Диаграмма расходов").assertExists()
-                rule.onNodeWithTag("income-structure").assertDoesNotExist()
+                selectStructure(false)
+                // Scroll to the selector's own item, rather than a large card ancestor.
+                rule.onNodeWithTag("analytics-list").performScrollToIndex(3)
+                rule.onNodeWithTag("structure-expense").assertIsSelected().assertIsDisplayed()
+                rule.onNodeWithContentDescription("Диаграмма расходов").assertIsDisplayed()
                 capture("analytics_expense")
-                rule.onNodeWithTag("structure-income").performClick().assertIsSelected()
-                rule.onNodeWithTag("expense-structure").assertDoesNotExist()
-                rule.onNodeWithTag("income-structure").assertExists()
-                rule.onNodeWithContentDescription("Диаграмма доходов").assertExists()
+                selectStructure(true)
                 rule.onNodeWithText("Зарплата").assertExists()
+                rule.onNodeWithTag("analytics-list").performScrollToIndex(3)
+                rule.onNodeWithTag("structure-income").assertIsSelected().assertIsDisplayed()
+                rule.onNodeWithContentDescription("Диаграмма доходов").assertIsDisplayed()
                 capture("analytics_income")
-                rule.onNodeWithTag("structure-expense").performClick().assertIsSelected()
+                selectStructure(false)
             }
         }
         rule.onNodeWithTag("nav-operations").performClick()
@@ -168,6 +184,15 @@ class NavigationTest {
         rule.onNodeWithTag("operations-list").performScrollToNode(rowMatcher or hasAnyDescendant(rowMatcher))
         rule.onNode(amountMatcher,useUnmergedTree=true).assertIsDisplayed()
         capture("operations")
+        if(initialOrientation==Configuration.ORIENTATION_PORTRAIT && rule.activity.resources.configuration.screenWidthDp<760){
+            rule.onNode(rowMatcher).performClick()
+            rule.onNodeWithText("Редактировать",substring=false).performScrollTo().performClick()
+            rule.onNodeWithTag("field:Сумма (RUB)").performScrollTo().assertTextContains("12.34")
+            rule.onNodeWithTag("toggle:Разделить по категориям").performScrollTo().assertIsOn()
+            capture("entry_edit")
+            rule.onNodeWithText("Отмена").performClick()
+            rule.waitUntil(15_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+        }
         rule.activityRule.scenario.recreate()
         rule.waitUntil(20_000){rule.onAllNodesWithTag("nav-operations").fetchSemanticsNodes().isNotEmpty()}
         rule.onNodeWithTag("nav-operations").assertIsSelected()
@@ -188,15 +213,11 @@ class NavigationTest {
         capture("operations_landscape")
         rule.onNodeWithTag("nav-reports").performClick()
         rule.onAllNodesWithText("Аналитика").onFirst().assertExists()
-        rule.onNodeWithTag("analytics-list").performScrollToNode(hasTestTag("expense-structure") or hasAnyDescendant(hasTestTag("expense-structure")))
+        rule.onNodeWithTag("analytics-list").performScrollToIndex(3)
         rule.onNodeWithTag("expense-structure").assertExists()
         if(rule.onAllNodesWithTag("structure-income").fetchSemanticsNodes().isNotEmpty()){
-            rule.onNodeWithTag("analytics-list").performScrollToNode(hasTestTag("structure-income") or hasAnyDescendant(hasTestTag("structure-income")))
-            rule.onNodeWithTag("structure-income").performClick().assertIsSelected()
-            rule.onNodeWithTag("income-structure").assertExists()
-            rule.onNodeWithTag("expense-structure").assertDoesNotExist()
-            rule.onNodeWithTag("structure-expense").performClick().assertIsSelected()
-            rule.onNodeWithTag("expense-structure").assertExists()
+            selectStructure(true)
+            selectStructure(false)
         }else rule.onNodeWithTag("income-structure").assertExists()
         capture("analytics_landscape")
         rule.onNodeWithTag("nav-plan").performClick()

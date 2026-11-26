@@ -145,21 +145,22 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
         }
     }
 }
-@Composable fun AccountChoice(label:String,value:String,accounts:List<Account>,modifier:Modifier=Modifier,compact:Boolean=false,onChoose:(String)->Unit) {
+@Composable fun AccountChoice(label:String,value:String,accounts:List<Account>,modifier:Modifier=Modifier,compact:Boolean=false,allLabel:String?=null,onChoose:(String)->Unit) {
     var open by remember { mutableStateOf(false) }
     val current=accounts.find{it.id==value}
     Column(modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(4.dp)) {
         if(!compact||LocalDensity.current.fontScale>=1.3f)
             Text(label,style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Box {
-            OutlinedButton(onClick={open=true},enabled=accounts.isNotEmpty(),modifier=Modifier.fillMaxWidth().testTag("choice:$label")) {
+            OutlinedButton(onClick={open=true},enabled=accounts.isNotEmpty()||allLabel!=null,modifier=Modifier.fillMaxWidth().testTag("choice:$label")) {
                 if(compact&&LocalDensity.current.fontScale<1.3f)
                     Text("$label: ",style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(current?.name ?: "Выбрать счёт",Modifier.weight(1f),maxLines=2,overflow=TextOverflow.Ellipsis)
+                Text(current?.name ?: if(value.isEmpty())allLabel ?: "Выбрать счёт" else "Счёт недоступен",Modifier.weight(1f),maxLines=2,overflow=TextOverflow.Ellipsis)
                 if(current!=null)Text(accountCurrencyLabel(current.currency),Modifier.padding(start=6.dp,end=6.dp))
                 Text("⌄")
             }
             DropdownMenu(expanded=open,onDismissRequest={open=false},modifier=Modifier.heightIn(max=360.dp)) {
+                if(allLabel!=null)DropdownMenuItem(text={Text(allLabel)},onClick={open=false;onChoose("")},modifier=Modifier.testTag("choice-option:$label:"))
                 accounts.forEach{account->
                     DropdownMenuItem(
                         text={Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){

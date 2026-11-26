@@ -55,6 +55,10 @@ class EvidenceTest(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             verify.verify_screens(self.root, verify.SCREENS_V12)
         (self.root/'analytics_income.png').write_bytes(png(1080, 1920, 31))
+        with self.assertRaises(FileNotFoundError):
+            verify.verify_screens(self.root, verify.SCREENS_V12)
+        for index, name in enumerate(verify.PLANNER_SCREENS_V12 + ('entry_edit',), start=32):
+            (self.root/(name+'.png')).write_bytes(png(1080, 1920, index))
         verify.verify_screens(self.root, verify.SCREENS_V12)
 
     def test_v12_requires_planner_cases_on_all_android_tiers(self):
@@ -63,8 +67,8 @@ class EvidenceTest(unittest.TestCase):
         for device in ('phone', 'tablet', 'api26', 'api33'):
             minimum, critical = verify.device_test_requirements(
                 device, require_ux_v12=True)
-            self.assertEqual(minimum, {'phone': 32, 'tablet': 32, 'api26': 19, 'api33': 32}[device])
-            self.assertTrue(set(verify.PLANNER_UX_V12 + (verify.NOTIFICATION_OPT_OUT_V12,)).issubset(critical), device)
+            self.assertEqual(minimum, {'phone': 33, 'tablet': 33, 'api26': 20, 'api33': 33}[device])
+            self.assertTrue(set(verify.PLANNER_UX_V12 + (verify.NOTIFICATION_OPT_OUT_V12, verify.NOTIFICATION_RESULT_V12)).issubset(critical), device)
         _, store_phone = verify.device_test_requirements('store-phone', require_ux_v12=True)
         self.assertNotIn(verify.PLANNER_UX_V12[0], store_phone)
         self.assertNotIn(verify.PLANNER_UX_V12[1], store_phone)
@@ -85,6 +89,8 @@ class EvidenceTest(unittest.TestCase):
                         valid.replace("versionName='1.2.0'", "versionName='1.1.0'")):
             with self.assertRaises(ValueError):
                 verify.verify_badging(invalid, 'release')
+        # Historical evidence replay must not pretend older binaries are v1.2.
+        verify.verify_badging(valid.replace("versionCode='3'", "versionCode='2'").replace("1.2.0","1.1.0"), 'release', None)
 
     def test_wrong_orientation(self):
         (self.root/'dashboard.png').write_bytes(png(1920, 1080, 0))

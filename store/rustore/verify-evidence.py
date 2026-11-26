@@ -16,8 +16,11 @@ SCREENS = ('dashboard', 'operations', 'split_entry')
 SCREENS_V11 = SCREENS + ('onboarding', 'drawer', 'converter', 'quick_entry', 'dashboard_dark')
 SCREENS_GUIDED = SCREENS_V11 + ('tutorial',)
 SCREENS_V12 = SCREENS_GUIDED + ('analytics_expense', 'analytics_income')
+PLANNER_SCREENS_V12 = ('planner_calendar', 'goals', 'goal_funding', 'goal_history', 'debts', 'debt_payment')
+SCREENS_V12 += PLANNER_SCREENS_V12 + ('entry_edit',)
 PLANNER_UX_V12 = ('groupedNavigationAndGoalAdjustments', 'principalAndInterestAreRecordedExactlyOnce')
 NOTIFICATION_OPT_OUT_V12 = 'persistedPinRateLimitConsentAndBudgetThreshold'
+NOTIFICATION_RESULT_V12 = 'notificationChoiceAndPermissionResultSurviveRecreation'
 PAGE = 16 * 1024
 
 
@@ -141,9 +144,10 @@ def verify_tests(root, pattern, minimum, critical=()):
     return count
 
 
-def verify_badging(text, variant):
+def verify_badging(text, variant, version=('3', '1.2.0')):
     package = re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'", text, re.M)
-    require(package is not None and package.groups() == ('ru.epbloger.trachu', '3', '1.2.0'),
+    require(package is not None and package.group(1) == 'ru.epbloger.trachu' and
+            (version is None or package.groups()[1:] == version),
             f'{variant}: unexpected package, versionCode or versionName')
     require("sdkVersion:'26'" in text and "targetSdkVersion:'36'" in text,
             f'{variant}: unexpected Android SDK versions')
@@ -183,7 +187,7 @@ def device_test_requirements(device, require_ux_v11=False, require_guided_v11=Fa
                          'eachNewSplitPartRequiresItsOwnCategory',
                          'editingEntryKeepsItsOriginalCategorySelected')
     if require_ux_v12 and device != 'store-phone':
-        critical += PLANNER_UX_V12 + (NOTIFICATION_OPT_OUT_V12,)
+        critical += PLANNER_UX_V12 + (NOTIFICATION_OPT_OUT_V12, NOTIFICATION_RESULT_V12)
 
     minimums = {
         'phone': 17, 'tablet': 17, 'store-phone': 1, 'api26': 9, 'api33': 16,
@@ -191,7 +195,7 @@ def device_test_requirements(device, require_ux_v11=False, require_guided_v11=Fa
     if require_ux_v11:
         minimums.update(phone=23, tablet=23, api26=14, api33=23)
     if require_ux_v12:
-        minimums.update(phone=32, tablet=32, api26=19, api33=32)
+        minimums.update(phone=33, tablet=33, api26=20, api33=33)
     require(device in minimums, f'Unknown device tier: {device}')
     return minimums[device], critical
 
@@ -223,12 +227,15 @@ def verify_release(qa, apk, aab, commit, require_ux_v11=False, require_guided_v1
     for device in ('phone', 'tablet', 'store-phone', 'api26', 'api33'):
         minimum, critical = device_test_requirements(device, require_ux_v11, require_guided_v11, require_ux_v12)
         count += verify_tests(qa, f'qa/{device}/androidTest-results/connected/debug/TEST-*.xml', minimum, critical)
+    if require_ux_v12:
+        count += verify_tests(qa, 'qa/store-phone-planner/androidTest-results/connected/debug/TEST-*.xml', 2, PLANNER_UX_V12)
     for variant in ('debug', 'release'):
         lint = ET.parse(qa/f'app/build/reports/lint-results-{variant}.xml').getroot()
         require(not any(i.get('severity', '').lower() in ('error', 'fatal') for i in lint.findall('issue')),
                 f'Lint {variant}: errors')
     for variant, report in (('debug', 'apk-badging.txt'), ('release', 'release-apk-badging.txt')):
-        verify_badging((qa/'qa'/report).read_text(encoding='utf-8'), variant)
+        verify_badging((qa/'qa'/report).read_text(encoding='utf-8'), variant,
+                       ('3', '1.2.0') if require_ux_v12 else None)
     for report in ('apk-permissions.txt', 'release-apk-permissions.txt'):
         permissions = (qa/'qa'/report).read_text(encoding='utf-8')
         require(not re.search(r'permission\.(AD_ID|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|READ_CONTACTS|READ_SMS|RECORD_AUDIO)\b',
@@ -241,6 +248,25 @@ def verify_release(qa, apk, aab, commit, require_ux_v11=False, require_guided_v1
         require(re.search(r'Active default network:\s*(none|null)\s*$',
                           (offline/f'connectivity-{stage}.txt').read_text(), re.I|re.M),
                 f'Offline {stage}: default network exists')
+    if require_ux_v12:
+        for api in (33, 36):
+            require((qa/f'qa/notification-api{api}/result.txt').read_text(encoding='utf-8').strip() ==
+                    f'PASS: API {api} Android notification allow and deny, OS permission and app preference persisted, cold restart without prompt, onboarding preserved.',
+                    f'Missing real notification permission evidence on API {api}')
+        for directory, baseline, sha_file, sha in (
+            ('upgrade', '1.0.0', 'upgrade-baseline-commit.txt', '55a0d207e709d6319426772c1bd46d70943b1062'),
+            ('upgrade-v11', '1.1.0', 'upgrade-v11-baseline-commit.txt', '7e75bea159803e06d7473d8c4203e72f0b823bea')):
+            require((qa/'qa'/sha_file).read_text().strip() == sha, f'Incorrect {baseline} baseline')
+            require(re.fullmatch(r'PASS: '+re.escape(baseline)+r' -> 1\.2\.0, no clear or onboarding, [1-9][0-9]* identical ledger records, 4250 minor units; SHA256 [0-9a-f]{64}',
+                                 (qa/'qa'/directory/'result.txt').read_text().strip()),
+                    f'Missing successful in-place upgrade from {baseline}')
+        require(re.fullmatch(r'PASS: Android HTTPS CBR feed, [1-9][0-9]* positive rates, publication day \d+, requested day \d+',
+                             (qa/'qa/tablet/live-cbr.txt').read_text().strip()), 'No successful Android HTTPS CBR probe')
+        require((qa/'qa/ads-config.txt').read_text().strip() == 'Debug: official demo only\nRelease: disabled, empty placement',
+                'Unexpected advertising configuration for test delivery')
+        require('CN=Android Debug' in (qa/'qa/apk-signature.txt').read_text() and
+                'DOES NOT VERIFY' in (qa/'qa/release-apk-unsigned.txt').read_text() and
+                'jar is unsigned.' in (qa/'qa/release-aab-unsigned.txt').read_text(), 'Missing debug/unsigned signature evidence')
     screens = SCREENS_V12 if require_ux_v12 else SCREENS_GUIDED if require_guided_v11 else SCREENS_V11 if require_ux_v11 else SCREENS
     verify_screens(qa/'qa/store-phone', screens)
     print(f'PASS {count} tests, lint, exact offline amount and release artifact checks for {commit}')

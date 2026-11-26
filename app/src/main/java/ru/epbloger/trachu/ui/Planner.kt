@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.AppViewModel
 import ru.epbloger.trachu.core.*
@@ -45,6 +46,7 @@ private fun PlannerTab.group()=when(this){
     var monthKey by rememberSaveable{mutableStateOf(YearMonth.now().toString())}
     val month=YearMonth.parse(monthKey)
     var selectedDay by rememberSaveable{mutableStateOf(today())}
+    var historyId by rememberSaveable{mutableStateOf<String?>(null)}
     val calendar=remember(ledger,month) {
         runCatching { Finance.generate(ledger,month.atEndOfMonth().toEpochDay(),true).entries }.getOrElse{ledger.entries}
             .filter{it.day in month.atDay(1).toEpochDay()..month.atEndOfMonth().toEpochDay()}
@@ -99,6 +101,7 @@ private fun PlannerTab.group()=when(this){
                             Column(verticalArrangement=Arrangement.spacedBy(4.dp)){Fund(Modifier.fillMaxWidth());Withdraw(Modifier.fillMaxWidth())}
                         }else Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Fund(Modifier.weight(1f));Withdraw(Modifier.weight(1f))}
                     }
+                    TextButton(onClick={historyId=g.id},modifier=Modifier.fillMaxWidth().testTag("goal-history:${g.id}")){Text("История пополнений и снятий")}
                 }}
             }
             PlannerTab.DEBT->{
@@ -198,6 +201,24 @@ private fun PlannerTab.group()=when(this){
                 items(goals,key={"goal-"+it.id}){g->Panel{SectionTitle(g.name,"Срок цели",action="Открыть"){editGoal(g)}}}
             }
         }
+    }
+    ledger.goals.find{it.id==historyId}?.let{g->
+        AlertDialog(onDismissRequest={historyId=null},title={Text("История · "+g.name,maxLines=2,overflow=TextOverflow.Ellipsis)},
+            text={
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max=360.dp).testTag("goal-history-list"),verticalArrangement=Arrangement.spacedBy(8.dp)){
+                    item{Text("Начальные накопления: "+Money.format(g.savedMinor,g.currency))}
+                    if(g.adjustments.isEmpty())item{Text("Пока нет пополнений и снятий.")}
+                    items(g.adjustments.asReversed(),key={it.id}){a->
+                        Column(Modifier.testTag("goal-history-entry:${a.id}"),verticalArrangement=Arrangement.spacedBy(2.dp)){
+                            Text(if(a.minor>0)"Пополнение" else "Снятие",style=MaterialTheme.typography.labelMedium)
+                            MoneyText(a.minor,g.currency)
+                            Text(dayLabel(a.day),style=MaterialTheme.typography.bodySmall)
+                            if(a.note.isNotBlank())Text(a.note)
+                        }
+                        HorizontalDivider()
+                    }
+                }
+            },confirmButton={TextButton(onClick={historyId=null}){Text("Закрыть")}})
     }
 }
 
@@ -437,13 +458,15 @@ private fun plannerDate(value:String):Long =
     },compact=true,validationError=error){
         Text(debt.person,style=MaterialTheme.typography.titleMedium)
         Text("Остаток долга: "+Money.format(remaining,currency))
-        Text(accountChoiceLabel(a),style=MaterialTheme.typography.bodySmall)
+        Text((if(debt.owedByMe)"Списать со счёта: " else "Зачислить на счёт: ")+accountChoiceLabel(a),style=MaterialTheme.typography.bodySmall)
         Field("Основной долг",principal,{principal=it;error=""},true,supporting="Сумма, на которую уменьшится долг")
         if(showInterest){
             Field("Проценты",interest,{interest=it;error=""},true,supporting=if(debt.owedByMe)"Только фактически уплаченные проценты" else "Только фактически полученные проценты")
             TextButton(onClick={showInterest=false;interest="0";error=""}){Text("Без процентов")}
         }else TextButton(onClick={showInterest=true}){Text("Добавить проценты")}
         if(total!=null)Text((if(debt.owedByMe)"Всего списать: " else "Всего получить: ")+Money.format(total,currency),style=MaterialTheme.typography.titleMedium)
+        val afterPayment=runCatching{Money.parse(principal,currency).takeIf{it in 0..remaining}?.let{Money.sub(remaining,it)}}.getOrNull()
+        if(afterPayment!=null)Text("Останется: "+Money.format(afterPayment,currency))
         if(currency!=ledger.baseCurrency)Field("Курс ${ledger.baseCurrency} за 1 $currency",rate,{rate=it;error=""},true,supporting="Пустое поле использует сохранённый курс")
         TextButton(onClick={advanced=!advanced}){Text(if(advanced)"Свернуть детали" else "Дата и комментарий")}
         if(advanced){

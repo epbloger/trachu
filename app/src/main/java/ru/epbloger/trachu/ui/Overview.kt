@@ -254,7 +254,7 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
             item { SectionTitle("Аналитика",action="PDF"){exportPdf(period,selectedAccount)} }
             item { Panel {
                 PeriodControls(type,{type=it},period,{period=it},monthStart)
-                Choice("Счёт в отчёте",selectedAccount,listOf("")+ledger.accounts.filter{it.includeInStats}.map{it.id},{id->if(id.isEmpty())"Все счета отчётов" else ledger.accounts.find{it.id==id}?.let(::accountChoiceLabel) ?: "Счёт недоступен"}){selectedAccount=it}
+                AccountChoice("Счёт в отчёте",selectedAccount,ledger.accounts.filter{it.includeInStats},allLabel="Все счета отчётов"){selectedAccount=it}
                 if(selectedAccount.isNotEmpty())Text("Фильтр применяется к отчётам и PDF. Прогноз показывает все счета.",style=MaterialTheme.typography.bodySmall)
             } }
             item {
@@ -277,17 +277,17 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
                     Text("Изменение: "+Money.format(Money.sub(totals.net,previous.net),ledger.baseCurrency))
                 }
             }
-            item {
+            if(!wide) item(key="structure-selector") {
+                Row(Modifier.fillMaxWidth().testTag("structure-selector"),horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                    FilterChip(selected=!structureIncome,onClick={structureIncome=false},label={Text("Расходы")},modifier=Modifier.weight(1f).testTag("structure-expense"))
+                    FilterChip(selected=structureIncome,onClick={structureIncome=true},label={Text("Доходы")},modifier=Modifier.weight(1f).testTag("structure-income"))
+                }
+            }
+            item(key="category-structure") {
                 if(wide)Row(horizontalArrangement=Arrangement.spacedBy(16.dp)){
                     Box(Modifier.weight(1f)){CategoryReport(reportLedger,period)}
                     Box(Modifier.weight(1f)){CategoryReport(reportLedger,period,income=true)}
-                } else Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
-                    Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
-                        FilterChip(selected=!structureIncome,onClick={structureIncome=false},label={Text("Расходы")},modifier=Modifier.weight(1f).testTag("structure-expense"))
-                        FilterChip(selected=structureIncome,onClick={structureIncome=true},label={Text("Доходы")},modifier=Modifier.weight(1f).testTag("structure-income"))
-                    }
-                    CategoryReport(reportLedger,period,income=structureIncome)
-                }
+                } else CategoryReport(reportLedger,period,income=structureIncome)
             }
             item {
                 @Composable fun Tags(){ Panel {

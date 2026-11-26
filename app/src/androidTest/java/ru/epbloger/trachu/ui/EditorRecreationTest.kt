@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.ViewModelProvider
@@ -54,14 +53,13 @@ class EditorRecreationTest {
         if(imeDone)rule.onNodeWithTag(tag).performImeAction()
     }
     private fun chooseEntryKind(label:String){
-        val body=rule.onNodeWithTag("form_content")
-        fun offset()=body.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
-        val current=offset()
-        if(current>0f)body.performSemanticsAction(SemanticsActions.ScrollBy){scroll->scroll(0f,-current)}
-        rule.waitUntil(10_000){offset()<=1f}
-        // The kind chips have their own horizontal scroll; reveal the entire row vertically first.
         rule.onNodeWithTag("entry-kind:$label").performScrollTo().assertIsDisplayed()
-            .performTouchInput{click()}.assertIsSelected()
+            .performClick().assertIsSelected()
+    }
+    private fun chooseEntryDate(label:String,expected:Long){
+        rule.onNodeWithTag("entry-date:$label").performScrollTo().assertIsDisplayed().performClick().assertIsSelected()
+        rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(expected))
+        rule.onNodeWithTag("entry-date:${if(label=="Сегодня")"Вчера" else "Сегодня"}").assertIsNotSelected()
     }
 
     @Test fun accountDraftSurvivesRecreationAndCancelDiscardsIt(){
@@ -106,7 +104,7 @@ class EditorRecreationTest {
             awaitTag(amountTag)
             enter(amountTag,"1234")
             val draftDate=iso(today()-1)
-            rule.onNodeWithText("Вчера").performScrollTo().performClick().assertIsSelected()
+            chooseEntryDate("Вчера",today()-1)
             rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(draftDate)
             rule.onNodeWithTag("category-quick:transport").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithTag("toggle:Разделить по категориям").performScrollTo().performClick().assertIsOn()
@@ -224,12 +222,12 @@ class EditorRecreationTest {
             rule.onNodeWithTag("category-quick:food").assertIsNotSelected()
             rule.onNodeWithTag("category-selected:Категория").assertIsSelected().assertTextContains("Транспорт")
             rule.onNodeWithTag("field:Поиск категории").assertDoesNotExist()
-            rule.onNodeWithText("Сегодня").performScrollTo().assertIsSelected()
-            rule.onNodeWithText("Вчера").performScrollTo().performClick().assertIsSelected()
+            rule.onNodeWithTag("entry-date:Сегодня").performScrollTo().assertIsSelected()
+            chooseEntryDate("Вчера",today()-1)
             rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(today()-1))
-            rule.onNodeWithText("Сегодня").performScrollTo().performClick().assertIsSelected()
+            chooseEntryDate("Сегодня",today())
             rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(today()))
-            rule.onNodeWithText("Вчера").performScrollTo().performClick().assertIsSelected()
+            chooseEntryDate("Вчера",today()-1)
             rule.onNodeWithTag("entry-details").performScrollTo().performClick()
             enter("field:Комментарий","Комментарий до создания",imeDone=false)
             rule.onNodeWithTag("category-create:Категория").performScrollTo().performClick()
@@ -413,9 +411,17 @@ class EditorRecreationTest {
             rule.onNodeWithTag("field:Поиск валюты").performTextReplacement(source)
             rule.onNodeWithTag("field:Поиск валюты").performImeAction()
             rule.onNodeWithTag("currency-option:$source").performClick()
+            enter("field:Исходная сумма ($source)","0")
+            rule.onNodeWithTag("entry-convert-apply").assertIsNotEnabled()
+            rule.onNodeWithText("Введите положительную сумму").performScrollTo().assertIsDisplayed()
             enter("field:Исходная сумма ($source)","1200")
             // Stored-rate result must be applied in the account currency; the preview
             // alone must not save an entry or replace the previous amount.
+            rule.onNodeWithTag("entry-convert-result").performScrollTo().assertTextContains(Money.format(Money.parse("12",currency),currency))
+            enter("field:Исходная сумма ($source)","0")
+            rule.onNodeWithTag("entry-convert-result").assertDoesNotExist()
+            rule.onNodeWithTag("entry-convert-apply").assertIsNotEnabled()
+            enter("field:Исходная сумма ($source)","1200")
             rule.onNodeWithTag("entry-convert-result").performScrollTo().assertTextContains(Money.format(Money.parse("12",currency),currency))
             rule.onNodeWithTag("entry-convert-apply").assertIsEnabled().performClick()
             rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(Money.parse("12",currency),currency))
@@ -507,7 +513,9 @@ class EditorRecreationTest {
             rule.onNodeWithTag("form_save").performClick()
             rule.waitUntil(20_000){rule.onAllNodesWithText("Дата окончания раньше следующего повтора",substring=true).fetchSemanticsNodes().isNotEmpty()}
             assertEquals(saved,runBlocking{store.current().schedules.first{it.id==schedule.id}})
-            rule.onNodeWithText("OK").performClick()
+            rule.onNodeWithTag("form_save").assertExists()
+            rule.onNodeWithText("Дата окончания раньше следующего повтора",substring=true).assertIsDisplayed()
+            rule.onNodeWithTag("toggle:Активно").performScrollTo().assertIsOn()
             rule.onNodeWithText("Отмена").performClick()
         }finally{
             withVm{it.editor=null;it.clearMessage()}
