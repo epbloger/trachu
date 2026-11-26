@@ -236,6 +236,39 @@ object Finance {
         if(available.bitLength()>63)throw ArithmeticException("Лимит бюджета слишком большой")
         return BudgetProgress(available.toLong(),spentByMonth[target] ?: 0L)
     }
+    /** Edit metadata without reinterpreting a recorded loan or its payments. */
+    fun editDebt(ledger: Ledger, original: Debt, updated: Debt): Ledger {
+        require(updated.id == original.id && ledger.debts.find { it.id == original.id } == original) {
+            "Долг изменился. Откройте его снова."
+        }
+        val related = ledger.entries.filter { it.debtId == original.id }
+        val hasOpening = related.any { it.kind in setOf(Kind.LOAN_IN, Kind.LOAN_OUT) }
+        val hasPayments = related.any { it.kind in setOf(Kind.DEBT_IN, Kind.DEBT_OUT) }
+        require(updated.openedDay == original.openedDay) { "Дату записанного займа нельзя изменить" }
+        if (hasOpening || hasPayments) {
+            require(updated.accountId == original.accountId && updated.owedByMe == original.owedByMe) {
+                "У долга уже есть операции. Счёт и направление долга менять нельзя."
+            }
+        }
+        if (hasOpening) require(updated.principalMinor == original.principalMinor) {
+            "Сумму записанного займа нельзя изменить"
+        }
+        val account = requireNotNull(ledger.accounts.find { it.id == updated.accountId }) { "Выберите счёт" }
+        require(!account.archived || updated.accountId == original.accountId) { "Выберите активный счёт" }
+        require(debtRemaining(ledger, updated) >= 0) { "Сумма долга меньше уже погашенной суммы" }
+        return ledger.copy(debts = ledger.debts.map { if (it.id == updated.id) updated else it }).validated()
+    }
+
+    /** Recheck under the store transaction: the editor may have been open while a payment was recorded. */
+    fun deleteUnpaidDebt(ledger: Ledger, debtId: String): Ledger {
+        require(ledger.debts.any { it.id == debtId }) { "Долг уже удалён" }
+        require(ledger.entries.none { it.debtId == debtId && it.kind in setOf(Kind.DEBT_IN, Kind.DEBT_OUT) }) {
+            "По долгу уже есть платежи. Удалить его нельзя."
+        }
+        return ledger.copy(debts = ledger.debts.filterNot { it.id == debtId },
+            entries = ledger.entries.filterNot { it.debtId == debtId }).validated()
+    }
+
     fun debtRemaining(ledger: Ledger, debt: Debt): Long = Money.sub(debt.principalMinor,
         Money.sum(ledger.entries.filter { it.status == EntryStatus.POSTED && it.debtId == debt.id && it.kind in setOf(Kind.DEBT_IN, Kind.DEBT_OUT) }.map { it.principalMinor }))
 

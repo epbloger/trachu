@@ -311,7 +311,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val mime=resolver.getType(uri).orEmpty()
             require(mime in setOf("image/jpeg","image/png","image/webp")) { "Выберите JPEG, PNG или WebP" }
             val bytes=requireNotNull(resolver.openInputStream(uri)).use { it.readBounded(5*1024*1024) }
-            require(bytes.isNotEmpty())
+            require(bytes.isNotEmpty()) { "Выбранный файл пуст" }
             val bounds=android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds=true }
             android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,bounds)
             require(bounds.outWidth>0 && bounds.outHeight>0 && bounds.outMimeType==mime) { "Файл не является поддерживаемым изображением" }

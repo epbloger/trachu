@@ -96,6 +96,13 @@ class PortabilityTest {
         assertEquals(incoming,Csv.importFull(Ledger.initial(),incoming))
     }
 
+    @Test fun fullCsvImportCannotOverwriteExplicitBaseCurrency() {
+        val existing=Ledger.initial().copy(baseCurrency="USD")
+        val incoming=Ledger.initial().copy(accounts=listOf(Account("rub","Наличные")))
+        assertTrue(runCatching { Csv.importFull(existing,incoming) }.isFailure)
+        assertEquals(existing,Csv.importFull(existing,existing))
+    }
+
     @Test fun statementRepeatedImportDoesNotDuplicate() {
         val source = "date,amount,category,note\n2026-01-01,-12.34,Продукты,\"Чек, 1\"\n"
         val first = Csv.importStatement(source.byteInputStream(),original,"a")

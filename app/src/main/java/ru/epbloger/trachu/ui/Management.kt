@@ -1,6 +1,7 @@
 package ru.epbloger.trachu.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -29,6 +30,15 @@ import ru.epbloger.trachu.security.Settings
 import ru.epbloger.trachu.widget.refreshWidgets
 
 enum class MorePage(val label:String) { INDEX("Инструменты"), ACCOUNTS("Счета"), CATEGORIES("Категории"), CONVERTER("Валюты"), RATES("Курсы"), SETTINGS("Настройки"), DATA("Данные и копии"), TUTORIAL("Обучение"), ABOUT("Помощь") }
+
+internal fun notificationAccessAllowed(apiLevel:Int,systemEnabled:Boolean,runtimePermissionGranted:Boolean):Boolean =
+    systemEnabled && (apiLevel<33 || runtimePermissionGranted)
+
+private fun currentNotificationAccess(context:Context):Boolean {
+    val runtimeGranted=Build.VERSION.SDK_INT<33 ||
+        ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED
+    return notificationAccessAllowed(Build.VERSION.SDK_INT,NotificationManagerCompat.from(context).areNotificationsEnabled(),runtimeGranted)
+}
 
 @Composable fun Accounts(ledger:Ledger,edit:(Account?)->Unit,transfer:()->Unit,back:()->Unit,move:(String,Int)->Unit) {
     var showArchived by remember{mutableStateOf(false)}
@@ -131,16 +141,16 @@ private fun canChangeBaseCurrency(ledger:Ledger)=ledger.accounts.isEmpty()&&ledg
     var base by remember(ledger.baseCurrency){mutableStateOf(ledger.baseCurrency)}
     val context=LocalContext.current
     val lifecycle=LocalLifecycleOwner.current.lifecycle
-    var systemNotifications by remember{mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled())}
+    var systemNotifications by remember{mutableStateOf(currentNotificationAccess(context))}
     DisposableEffect(lifecycle,context){
         val observer=LifecycleEventObserver{_,event->
-            if(event==Lifecycle.Event.ON_RESUME)systemNotifications=NotificationManagerCompat.from(context).areNotificationsEnabled()
+            if(event==Lifecycle.Event.ON_RESUME)systemNotifications=currentNotificationAccess(context)
         }
         lifecycle.addObserver(observer)
         onDispose{lifecycle.removeObserver(observer)}
     }
     val notify=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){granted->
-        systemNotifications=NotificationManagerCompat.from(context).areNotificationsEnabled()
+        systemNotifications=currentNotificationAccess(context)
         vm.notificationPermissionResult(granted)
     }
     fun openNotificationSettings(){

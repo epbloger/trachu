@@ -109,6 +109,28 @@ class EditorRecreationTest {
         }
     }
 
+    @Test fun accountEditorCannotOverwriteAnOpeningBalanceChangedInTheBackground(){
+        val store=LedgerStore.get(context)
+        val currency=runBlocking{store.current().baseCurrency}
+        val account=Account(name="Счёт с обновляемым остатком ${newId()}",currency=currency)
+        runBlocking{store.change{it.copy(accounts=it.accounts+account)}}
+        try{
+            awaitTag("nav-home")
+            withVm{it.editor=Editor("account",account.id)}
+            awaitTag("field:Название")
+            runBlocking{store.change{l->l.copy(accounts=l.accounts.map{if(it.id==account.id)it.copy(openingMinor=12345) else it})}}
+            awaitTag("form_save")
+            rule.onNodeWithTag("form_save").performClick()
+            rule.onNodeWithText("Счёт изменился. Откройте его снова.").assertExists()
+            val latest=runBlocking{store.current().accounts.single{it.id==account.id}}
+            assertEquals(12345L,latest.openingMinor)
+            assertEquals(currency,latest.currency)
+        }finally{
+            withVm{it.editor=null;it.clearMessage()}
+            runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id})}}
+        }
+    }
+
     @Test fun entryDraftAndPendingReceiptSurviveRecreation(){
         val store=LedgerStore.get(context)
         val preferences=Preferences(context)

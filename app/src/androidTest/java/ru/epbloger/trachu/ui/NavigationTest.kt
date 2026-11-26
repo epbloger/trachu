@@ -87,6 +87,7 @@ class NavigationTest {
             rule.onNodeWithTag("field:Название счёта").performImeAction()
             rule.onNodeWithTag("field:Начальный остаток").performScrollTo().performTextReplacement("50")
             rule.onNodeWithTag("field:Начальный остаток").performImeAction()
+            rule.onNodeWithText("Начнём с вашего счёта").performScrollTo()
             capture("onboarding")
             rule.onNodeWithTag("onboarding-next").performClick()
             rule.onNodeWithText("Как пользоваться ТРАЧУ.").assertExists()
@@ -129,6 +130,9 @@ class NavigationTest {
         rule.onNodeWithTag("category-option:transport").assertTextContains("Транспорт").performClick()
         // The switch itself is the actionable node; its label is exposed as semantics.
         rule.onNodeWithTag("toggle:Разделить по категориям").performScrollTo().performClick()
+        rule.onNodeWithTag("field:Часть суммы 1").performScrollTo().performTextReplacement("-1")
+        rule.onNodeWithTag("form_save").performClick()
+        rule.onNodeWithText("Часть суммы 1: сумма должна быть больше нуля").assertExists()
         rule.onNodeWithTag("field:Часть суммы 1").performScrollTo().performTextReplacement("5")
         rule.onNodeWithTag("field:Часть суммы 1").performImeAction()
         rule.onNodeWithText("Добавить часть").performScrollTo().performClick()
@@ -239,6 +243,9 @@ class NavigationTest {
         rule.onNodeWithTag("drawer-about").performScrollTo().performClick()
         rule.onNodeWithTag("help-tutorial").performScrollTo().performClick()
         rule.waitUntil(20_000){rule.onAllNodesWithTag("tutorial-target-expense").fetchSemanticsNodes().isNotEmpty()}
+        rule.waitUntil(20_000){rule.onAllNodesWithTag("tutorial-overlay").fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithTag("tutorial-overlay").assertIsDisplayed()
+        rule.onNodeWithTag("tutorial-target-expense").assertIsDisplayed()
         capture(if(initialOrientation==Configuration.ORIENTATION_PORTRAIT)"tutorial" else "tutorial_landscape")
         rule.onNodeWithTag("tutorial-skip").performClick()
         rule.onNodeWithTag("nav-more").performClick()
@@ -268,9 +275,12 @@ class NavigationTest {
         rule.onNodeWithTag("converter-list").performScrollToNode(hasTestTag("converter-rates") or hasAnyDescendant(hasTestTag("converter-rates")))
         rule.onNodeWithTag("converter-rates").performClick()
         rule.onNodeWithText("Курсы валют").assertExists()
-        rule.onNodeWithText("Конвертер",substring=false).performClick()
+        rule.activityRule.scenario.onActivity{it.onBackPressedDispatcher.onBackPressed()}
         rule.onNodeWithTag("converter-list").performScrollToNode(hasTestTag("field:Сумма (USD)"))
         rule.onNodeWithTag("field:Сумма (USD)").assertTextContains("2.00")
+        rule.onNodeWithTag("field:RUB за 1 USD").assertTextContains("100")
+        rule.activityRule.scenario.onActivity{it.onBackPressedDispatcher.onBackPressed()}
+        rule.onNodeWithTag("nav-home").assertIsSelected()
         val prefs=Preferences(InstrumentationRegistry.getInstrumentation().targetContext)
         val previousTheme=runBlocking{prefs.current().theme}
         try {

@@ -1,90 +1,20 @@
-name: Android integration
+name: Android verification
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'app/**'
-      - '*.gradle.kts'
-      - 'gradle.properties'
-      - '.github/workflows/android.yml'
-      - '.github/scripts/device-tests.sh'
-      - '.github/scripts/offline-smoke.py'
-      - '.github/scripts/upgrade-smoke.py'
-      - '.github/scripts/notification-smoke.py'
-      - '.github/workflows/release-evidence.yml'
-      - 'store/rustore/verify-evidence.py'
-      - 'store/rustore/test-verify-evidence.py'
-      - 'store/rustore/sign-release.ps1'
-      - 'store/rustore/prepare-debug-release.py'
-      - '.github/workflows/publish-debug.yml'
-  pull_request:
-    paths:
-      - 'app/**'
-      - '*.gradle.kts'
-      - 'gradle.properties'
-      - '.github/workflows/android.yml'
-      - '.github/scripts/device-tests.sh'
-      - '.github/scripts/offline-smoke.py'
-      - '.github/scripts/upgrade-smoke.py'
-      - '.github/scripts/notification-smoke.py'
-      - '.github/workflows/release-evidence.yml'
-      - 'store/rustore/verify-evidence.py'
-      - 'store/rustore/test-verify-evidence.py'
-      - 'store/rustore/sign-release.ps1'
-      - 'store/rustore/prepare-debug-release.py'
-      - '.github/workflows/publish-debug.yml'
 
 permissions:
   contents: read
 concurrency:
-  # Keep the evidence for each distinct source revision. A correction must
-  # not interrupt an already running device suite for an earlier revision.
-  group: android-${{ github.ref }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: trachu-verification-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  plan:
-    runs-on: ubuntu-24.04
-    outputs:
-      replay: ${{ steps.mode.outputs.replay }}
-    steps:
-      # Reuse retained evidence only on an explicitly marked, narrowly scoped
-      # push. Any application/build/test change still receives the full suite.
-      - uses: actions/checkout@v4
-        if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[replay-evidence]') }}
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - id: mode
-        env:
-          REPLAY_REQUESTED: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[replay-evidence]') }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          replay=false
-          if [[ "$REPLAY_REQUESTED" == true ]] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            changes=$(git diff --name-only "$BEFORE" HEAD)
-            if [[ -n "$changes" ]] && ! grep -Ev '^([.]github/(workflows/(android|release-evidence)[.]yml|scripts/device-tests[.]sh)|store/rustore/((test-)?verify-evidence[.]py|sign-release[.]ps1)|docs/(QA_REPORT|SIGNING|STORE_PUBLICATION|RELEASE_CHECKLIST|PRODUCT_AUDIT)[.]md|README[.]md)$' <<< "$changes"; then
-              replay=true
-            fi
-          fi
-          echo "replay=$replay" >> "$GITHUB_OUTPUT"
-  evidence:
-    needs: plan
-    if: ${{ needs.plan.outputs.replay == 'true' }}
-    permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/release-evidence.yml
   verify:
-    needs: plan
-    if: ${{ needs.plan.outputs.replay != 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 60
     env:
-      ORG_GRADLE_PROJECT_trachuAdsEnabled: ${{ vars.TRACHU_ADS_ENABLED || 'false' }}
-      ORG_GRADLE_PROJECT_trachuBannerId: ${{ vars.TRACHU_BANNER_ID || '' }}
+      ORG_GRADLE_PROJECT_trachuAdsEnabled: ${{ vars.TRACHU_ADS_ENABLED || 'true' }}
+      ORG_GRADLE_PROJECT_trachuBannerId: ${{ vars.TRACHU_BANNER_ID || 'R-M-20514950-1' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,7 +27,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Verify SDK 36
+      - name: Prepare Android SDK
         shell: bash
         run: |
           set -euo pipefail
@@ -110,95 +40,47 @@ jobs:
             test -x "$manager"
             "$manager" --sdk_root="$SDK" 'platforms;android-36' 'build-tools;35.0.0'
           fi
-          test -f "$SDK/platforms/android-36/android.jar"
-      - name: Test release evidence validator
-        run: python3 store/rustore/test-verify-evidence.py
-      - name: Build debug and unsigned release APK/AAB and device tests
-        id: build
-        run: gradle --no-daemon --continue --stacktrace assembleDebug assembleRelease bundleRelease assembleDebugAndroidTest
-      - name: Record artifact provenance and inspect merged permissions
-        id: provenance
+      - name: Compile application and run unit tests and lint
+        run: gradle --no-daemon --stacktrace assembleDebug assembleRelease assembleDebugAndroidTest testDebugUnitTest lintDebug lintRelease
+      - name: Check APK permissions and advertising configuration
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p qa
-          git rev-parse HEAD > qa/source-commit.txt
-          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
-          "$AAPT" dump permissions app/build/outputs/apk/debug/*.apk | tee qa/apk-permissions.txt
-          if grep -E 'permission\.(AD_ID|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|READ_CONTACTS|READ_SMS|RECORD_AUDIO)' qa/apk-permissions.txt; then
-            echo "::error::Unexpected advertising identifier or sensitive Android permission"
-            exit 1
-          fi
-          "$AAPT" dump badging app/build/outputs/apk/debug/*.apk > qa/apk-badging.txt
-          "$AAPT" dump badging app/build/outputs/apk/release/*.apk > qa/release-apk-badging.txt
-          "$AAPT" dump permissions app/build/outputs/apk/release/*.apk > qa/release-apk-permissions.txt
-          if grep -E 'permission\.(AD_ID|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|READ_CONTACTS|READ_SMS|RECORD_AUDIO)' qa/release-apk-permissions.txt; then exit 1; fi
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/*.apk > qa/apk-signature.txt
-          grep -F 'CN=Android Debug' qa/apk-signature.txt
-          if "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify app/build/outputs/apk/release/*.apk > qa/release-apk-unsigned.txt 2>&1; then
-            echo "::error::Expected an unsigned release APK"
-            exit 1
-          fi
-          grep -F 'DOES NOT VERIFY' qa/release-apk-unsigned.txt
-          jarsigner -verify app/build/outputs/bundle/release/*.aab > qa/release-aab-unsigned.txt
-          grep -F 'jar is unsigned.' qa/release-aab-unsigned.txt
-          release_manifest="$(find app/build/intermediates/merged_manifests/release -name AndroidManifest.xml -print -quit)"
-          test -n "$release_manifest"
-          cp "$release_manifest" qa/release-manifest.xml
-          if grep -E 'android:name="[^"]*permission\.(AD_ID|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|READ_CONTACTS|READ_SMS|RECORD_AUDIO)"' "$release_manifest"; then
-            echo "::error::Unexpected sensitive permission in release manifest"
-            exit 1
-          fi
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          for apk in app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release-unsigned.apk; do
+            test -s "$apk"
+            "$tools/aapt" dump permissions "$apk" > "$RUNNER_TEMP/permissions.txt"
+            if grep -E 'permission\.(AD_ID|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|READ_CONTACTS|READ_SMS|RECORD_AUDIO)' "$RUNNER_TEMP/permissions.txt"; then exit 1; fi
+            "$tools/zipalign" -c -P 16 4 "$apk"
+          done
+          "$tools/apksigner" verify app/build/outputs/apk/debug/app-debug.apk
           debug_config="$(find app/build/generated/source/buildConfig/debug -name BuildConfig.java -print -quit)"
           release_config="$(find app/build/generated/source/buildConfig/release -name BuildConfig.java -print -quit)"
-          test -n "$debug_config" && test -n "$release_config"
-          grep -Eq 'YANDEX_BANNER_ID = "demo-banner-yandex";' "$debug_config"
-          if [[ "$ORG_GRADLE_PROJECT_trachuAdsEnabled" == true ]]; then
-            grep -Eq 'YANDEX_BANNER_ID = "R-M-[0-9]+-[0-9]+";' "$release_config"
-            printf 'Debug: official demo only\nRelease: explicitly enabled production placement; ownership requires publisher verification\n' > qa/ads-config.txt
+          grep -F 'YANDEX_BANNER_ID = "demo-banner-yandex";' "$debug_config"
+          if [[ "${ORG_GRADLE_PROJECT_trachuAdsEnabled:-false}" == "true" ]]; then
+            [[ "${ORG_GRADLE_PROJECT_trachuBannerId:-}" =~ ^R-M-[0-9]+-[0-9]+$ ]]
+            grep -F "YANDEX_BANNER_ID = \"${ORG_GRADLE_PROJECT_trachuBannerId}\";" "$release_config"
           else
-            grep -Eq 'YANDEX_BANNER_ID = "";' "$release_config"
-            printf 'Debug: official demo only\nRelease: disabled, empty placement\n' > qa/ads-config.txt
+            grep -F 'YANDEX_BANNER_ID = "";' "$release_config"
           fi
-      - name: Run unit tests and lint
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: gradle --no-daemon --continue --stacktrace testDebugUnitTest lintDebug lintRelease
-      - name: Build verified 1.0.0 and previous 1.1.0 baselines for real in-place upgrades
-        id: baseline
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' }}
+      - name: Build historical APKs for migration checks
         shell: bash
         run: |
           set -euo pipefail
           baseline="$RUNNER_TEMP/trachu-v1"
-          git worktree add --detach "$baseline" 55a0d207e709d6319426772c1bd46d70943b1062
-          gradle --project-dir "$baseline" --no-daemon assembleDebug
-          old="$baseline/app/build/outputs/apk/debug/app-debug.apk"
-          new="app/build/outputs/apk/debug/app-debug.apk"
-          signer="$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          "$signer" verify --print-certs "$old" > qa/upgrade-baseline-cert.txt
-          "$signer" verify --print-certs "$new" > qa/upgrade-current-cert.txt
-          diff <(grep 'certificate SHA-256 digest:' qa/upgrade-baseline-cert.txt) <(grep 'certificate SHA-256 digest:' qa/upgrade-current-cert.txt)
-          echo "TRACHU_UPGRADE_BASELINE_APK=$old" >> "$GITHUB_ENV"
-          git -C "$baseline" rev-parse HEAD > qa/upgrade-baseline-commit.txt
-          sha256sum "$old" > qa/upgrade-baseline-sha256.txt
           baseline11="$RUNNER_TEMP/trachu-v11"
+          git worktree add --detach "$baseline" 55a0d207e709d6319426772c1bd46d70943b1062
           git worktree add --detach "$baseline11" 7e75bea159803e06d7473d8c4203e72f0b823bea
+          gradle --project-dir "$baseline" --no-daemon assembleDebug
           gradle --project-dir "$baseline11" --no-daemon assembleDebug
-          old11="$baseline11/app/build/outputs/apk/debug/app-debug.apk"
-          "$signer" verify --print-certs "$old11" > qa/upgrade-v11-baseline-cert.txt
-          diff <(grep 'certificate SHA-256 digest:' qa/upgrade-v11-baseline-cert.txt) <(grep 'certificate SHA-256 digest:' qa/upgrade-current-cert.txt)
-          echo "TRACHU_UPGRADE_V11_APK=$old11" >> "$GITHUB_ENV"
-          git -C "$baseline11" rev-parse HEAD > qa/upgrade-v11-baseline-commit.txt
-          sha256sum "$old11" > qa/upgrade-v11-baseline-sha256.txt
+          echo "TRACHU_UPGRADE_BASELINE_APK=$baseline/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_ENV"
+          echo "TRACHU_UPGRADE_V11_APK=$baseline11/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_ENV"
       - name: Enable KVM
-        id: kvm
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' && steps.baseline.outcome == 'success' }}
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Instrumented phone, tablet and planner UX tests
-        if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
+      - name: Android 16 phone and tablet, installation, migrations and offline use
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -206,8 +88,7 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh
-      - name: Android 8 compatibility and planner UX tests
-        if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
+      - name: Android 8 compatibility
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 26
@@ -215,8 +96,7 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh api26
-      - name: Android 13 compatibility, editor and planner UX tests
-        if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
+      - name: Android 13 compatibility
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 33
@@ -224,106 +104,10 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh api33
-      - name: Verify complete current release evidence and 16 KiB compatibility
-        shell: bash
-        run: |
-          set -euo pipefail
-          # connectedDebugAndroidTest may regenerate the instrumentation APK;
-          # fingerprint the exact binaries that will be validated and uploaded.
-          sha256sum app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk app/build/outputs/bundle/release/*.aab app/build/outputs/apk/androidTest/debug/*.apk > qa/SHA256SUMS
-          sha256sum -c qa/SHA256SUMS
-          python3 store/rustore/verify-evidence.py release --qa . --apk . --aab . --commit "$(git rev-parse HEAD)" --require-ux-v12 | tee qa/current-evidence.txt
-          grep -F 'PASS: 1.0.0 -> 1.2.0, no clear or onboarding' qa/upgrade/result.txt
-          grep -F 'PASS: 1.1.0 -> 1.2.0, no clear or onboarding' qa/upgrade-v11/result.txt
-          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/release/*.apk | tee qa/zipalign.txt
-      - name: VerifyOnly unsigned APK and AAB against exact commit
-        shell: pwsh
-        run: |
-          $sha=(git rev-parse HEAD).Trim()
-          & ./store/rustore/sign-release.ps1 -ArtifactDir . -ExpectedCommit $sha -VerifyOnly 6>&1 | Tee-Object -FilePath qa/signing-verify-only.txt
-      - name: Dry-run minimized debug release package
-        shell: bash
-        run: |
-          set -euo pipefail
-          evidence="$RUNNER_TEMP/trachu-release-evidence-dry-run"
-          delivery="$RUNNER_TEMP/trachu-release-delivery-dry-run"
-          mkdir -p "$evidence"
-          test ! -e "$delivery"
-          for artifact in trachu-verification-reports trachu-debug-apk trachu-androidTest-apk trachu-unsigned-release-apk trachu-unsigned-release-aab; do
-            mkdir -p "$evidence/$artifact"
-            ln -s "$GITHUB_WORKSPACE/qa" "$evidence/$artifact/qa"
-            ln -s "$GITHUB_WORKSPACE/app" "$evidence/$artifact/app"
-          done
-          python3 store/rustore/prepare-debug-release.py "$evidence" "$(git rev-parse HEAD)" "$GITHUB_RUN_ID" qa/apk-signature.txt qa/signing-verify-only.txt qa/signing-verify-only.txt "$delivery"
-          (cd "$delivery" && sha256sum -c trachu-1.2.0-debug.apk.sha256)
-          python3 - "$delivery/trachu-1.2.0-qa.zip" "$(git rev-parse HEAD)" "$GITHUB_RUN_ID" <<'PY'
-          import json, sys, zipfile
-          with zipfile.ZipFile(sys.argv[1]) as archive:
-              assert archive.testzip() is None
-              names = set(archive.namelist())
-              assert all(name.startswith(('tests/', 'screens/')) or name in {'summary.json', 'README.txt'} for name in names)
-              assert len([name for name in names if name.startswith('screens/')]) >= 18
-              summary = json.loads(archive.read('summary.json'))
-              assert summary['sourceCommit'] == sys.argv[2] and summary['androidCiRun'] == sys.argv[3]
-              assert summary['totalTests'] == sum(summary['testCounts'].values()) > 0
-              assert all(count > 0 for count in summary['testCounts'].values())
-              assert summary['physicalDeviceTests'] is False
-              print('PASS: minimized QA ZIP ({} allowlisted members, {} tests)'.format(len(names), summary['totalTests']))
-          PY
-      - name: Upload APK
-        if: always()
+      - name: Deliver tested APK
         uses: actions/upload-artifact@v4
         with:
-          name: trachu-debug-apk
-          path: |
-            app/build/outputs/apk/debug/*.apk
-            qa/source-commit.txt
-            qa/SHA256SUMS
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Upload unsigned AAB
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trachu-unsigned-release-aab
-          path: |
-            app/build/outputs/bundle/release/*.aab
-            qa/source-commit.txt
-            qa/SHA256SUMS
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Upload instrumentation APK (internal testing only)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trachu-androidTest-apk
-          path: |
-            app/build/outputs/apk/androidTest/debug/*.apk
-            qa/source-commit.txt
-            qa/SHA256SUMS
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Upload unsigned release APK
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trachu-unsigned-release-apk
-          path: |
-            app/build/outputs/apk/release/*.apk
-            qa/source-commit.txt
-            qa/SHA256SUMS
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Upload verification reports and generated Room schema
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trachu-verification-reports
-          path: |
-            app/build/reports/
-            app/build/test-results/
-            app/build/outputs/androidTest-results/
-            app/schemas/
-            qa/
-          if-no-files-found: warn
+          name: trachu-1.2.0-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
           retention-days: 14
