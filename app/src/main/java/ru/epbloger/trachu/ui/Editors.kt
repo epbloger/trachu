@@ -49,6 +49,19 @@ private fun requireEditorNote(note:String) {
 
 private data class EntryConversionPreview(val quote:java.math.BigDecimal?,val minor:Long?,val error:String?)
 
+private fun entryDayOrNull(text:String):Long? = runCatching{parseDay(text)}.getOrNull()
+
+private fun entryRateOrNull(ledger:Ledger,currency:String,day:Long?):String? =
+    day?.let{runCatching{Finance.rate(ledger,currency,it)}.getOrNull()}
+
+private fun entrySplitRemainder(amount:String,currency:String,parts:List<SplitDraft>):Long? = runCatching {
+    val total=Money.parse(amount,currency)
+    val allocated=Money.sum(parts.map{part->
+        if(part.amount.isBlank())0L else Money.parse(part.amount,currency).also{require(it>=0)}
+    })
+    Money.sub(total,allocated)
+}.getOrNull()
+
 // Keep all potentially throwing parsers and branching calculation outside the
 // composable. Inline try/runCatching around snapshot reads can leave compiler-
 // generated Compose groups unbalanced when the user enters invalid text.
@@ -266,7 +279,10 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
     val account=ledger.accounts.find{it.id==accountId}
     val target=ledger.accounts.find{it.id==targetId}
     val cats=ledger.categories.filter{it.income==(kind==Kind.INCOME) && (!it.archived || splitDrafts.any{d->d.category==it.id})}
-    val currentRate=account?.let{a->runCatching{Finance.rate(ledger,a.currency,parseDay(day))}.getOrNull()}
+    val parsedDay=entryDayOrNull(day)
+    val todayDay=today()
+    val futureDay=parsedDay!=null&&parsedDay>todayDay
+    val currentRate=account?.let{a->entryRateOrNull(ledger,a.currency,parsedDay)}
     val rateRequired=account!=null && account.currency!=ledger.baseCurrency
     fun openConversion(from:String, value:String="", nextAccountId:String="") {
         conversionCurrency=from
@@ -413,9 +429,7 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             if(account!=null && target!=null && account.currency!=target.currency)Field("Получено (${target.currency})",targetAmount,{targetAmount=it;error=""},true)
         } else {
             val currency=account?.currency ?: ledger.baseCurrency
-            val totalMinor=runCatching{Money.parse(amount,currency)}.getOrNull()
-            val allocated=runCatching{Money.sum(splitDrafts.map{if(it.amount.isBlank())0L else Money.parse(it.amount,currency).also{value->require(value>=0)}})}.getOrNull()
-            val remainder=if(totalMinor!=null&&allocated!=null)runCatching{Money.sub(totalMinor,allocated)}.getOrNull() else null
+            val remainder=if(splitMode)entrySplitRemainder(amount,currency,splitDrafts) else null
             if(splitMode) {
                 if(remainder==null)Text("Введите корректные суммы для расчёта остатка.")
                 else if(remainder<0)Warning("Распределено больше суммы операции")
@@ -441,15 +455,13 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         }
         DateField("Дата",day,{day=it;error=""},supporting=null)
         if(!recurring){
-            val todayDay=today()
-            val selectedDate=runCatching{parseDay(day)}.getOrDefault(Long.MIN_VALUE)
             FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
                 listOf(todayDay to "Сегодня",todayDay-1 to "Вчера").forEach{(date,label)->
-                    FilterChip(selected=date==selectedDate,onClick={day=iso(date);error=""},label={Text(label)},modifier=Modifier.testTag("entry-date:$label"))
+                    FilterChip(selected=date==parsedDay,onClick={day=iso(date);error=""},label={Text(label)},modifier=Modifier.testTag("entry-date:$label"))
                 }
             }
         }
-        if(!recurring&&(planned||runCatching{parseDay(day)>today()}.getOrDefault(false)))
+        if(!recurring&&(planned||futureDay))
             Text("Запланировано — баланс изменится после проведения.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.tertiary)
         if(!recurring && !forcePlanned) OutlinedButton(onClick={advanced=!advanced},modifier=Modifier.fillMaxWidth().testTag("entry-details")) {
             Text(if(advanced)"Свернуть детали" else "Детали и планирование",Modifier.weight(1f))
@@ -466,7 +478,7 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             Field("Теги",tags,{tags=it;error=""},supporting="Через запятую")
             if(kind==Kind.EXPENSE)Toggle("Обязательная трата",essential,{essential=it})
             if(!recurring)Toggle("Запланировать",planned,{planned=it},"До проведения операция не меняет баланс. Будущая дата всегда означает план.")
-            if(!recurring&&(planned||runCatching{parseDay(day)>today()}.getOrDefault(false)))Toggle("Проводить автоматически",autoPostPlanned,{autoPostPlanned=it},"В назначенную дату и время, когда Android выполнит фоновую задачу. Для архивных счетов автоматическое проведение недоступно.")
+            if(!recurring&&(planned||futureDay))Toggle("Проводить автоматически",autoPostPlanned,{autoPostPlanned=it},"В назначенную дату и время, когда Android выполнит фоновую задачу. Для архивных счетов автоматическое проведение недоступно.")
         }
         if(recurring) {
             Choice("Повторять",frequency,Frequency.entries,{it.label()}){frequency=it}

@@ -23,6 +23,35 @@ private fun currencyTitle(code: String): String {
     return "$code · ${currency.getSymbol(russian)} · ${currencyName(code)}"
 }
 
+private fun converterDayOrNull(date:String):Long? = runCatching {
+    parseDay(date).also{require(it<=today())}
+}.getOrNull()
+
+private fun converterQuote(ledger:Ledger,from:String,to:String,day:Long?):java.math.BigDecimal? =
+    day?.let{runCatching{CurrencyConversion.quote(ledger,from,to,it)}.getOrNull()}
+
+private data class ConverterPreview(val minor:Long?,val error:String?)
+
+// Parse ordinary values outside Compose; invalid text is a preview state,
+// never an exception crossing a compiler-generated composition group.
+private fun converterPreview(ledger:Ledger,from:String,to:String,amount:String,manual:Boolean,
+    rateText:String,day:Long?,saved:java.math.BigDecimal?):ConverterPreview = try {
+    val minor=Money.parse(amount,from)
+    val converted=when {
+        from==to->CurrencyConversion.convert(minor,from,to,java.math.BigDecimal.ONE)
+        manual->CurrencyConversion.convert(minor,from,to,CurrencyConversion.manualRate(rateText))
+        else->{
+            val selectedDay=requireNotNull(day){"Укажите корректную дату, не позже сегодняшней."}
+            requireNotNull(saved){"Нет сохранённого курса. Введите курс вручную или обновите данные."}
+            CurrencyConversion.convertStored(ledger,minor,from,to,selectedDay)
+        }
+    }
+    ConverterPreview(converted,null)
+} catch(e:kotlinx.coroutines.CancellationException){throw e}
+catch(e:Exception){
+    ConverterPreview(null,e.message?.takeIf{m->m.any{c->c in 'А'..'я'||c=='ё'||c=='Ё'}} ?: "Проверьте сумму и курс")
+}
+
 @Composable
 fun CurrencyPicker(label: String, value: String, onChange: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
@@ -79,7 +108,7 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
     val settings by vm.settings.collectAsState()
     val automatic=settings?.automaticRates==true
     val status by vm.converterRateStatus.collectAsState()
-    val day = runCatching { parseDay(date).also { require(it <= today()) } }.getOrNull()
+    val day = converterDayOrNull(date)
     val currentStatus=status?.takeIf{it.base==ledger.baseCurrency&&it.day==day}
     LaunchedEffect(ledger.baseCurrency,day,automatic,manual,from==to) {
         if(automatic&&!manual&&from!=to&&day!=null){
@@ -92,24 +121,13 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
             }
         }
     }
-    val saved = remember(ledger, from, to, day) { day?.let { selectedDay ->
-        runCatching { CurrencyConversion.quote(ledger, from, to, selectedDay) }.getOrNull()
-    } }
+    val saved = remember(ledger, from, to, day) { converterQuote(ledger,from,to,day) }
     val quoteRates=remember(ledger,from,to,day){
         listOf(from,to).distinct().filter{it!=ledger.baseCurrency}.mapNotNull{code->
             ledger.rates.filter{it.currency==code&&day!=null&&it.day<=day}.maxByOrNull{it.day}
         }
     }
-    val result = runCatching {
-        val minor = Money.parse(amount, from)
-        if (from == to) CurrencyConversion.convert(minor, from, to, java.math.BigDecimal.ONE)
-        else if (manual) CurrencyConversion.convert(minor, from, to, CurrencyConversion.manualRate(rateText))
-        else {
-            val selectedDay = requireNotNull(day) { "Укажите корректную дату, не позже сегодняшней." }
-            requireNotNull(saved) { "Нет сохранённого курса. Введите курс вручную или обновите данные." }
-            CurrencyConversion.convertStored(ledger, minor, from, to, selectedDay)
-        }
-    }
+    val result = converterPreview(ledger,from,to,amount,manual,rateText,day,saved)
     LazyColumn(modifier = Modifier.testTag("converter-list"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { SectionTitle("Конвертер валют", action = "Назад", onAction = back) }
         item {
@@ -117,7 +135,7 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
                 CurrencyPicker("Из валюты", from) { from = it; rateText = "" }
                 Field("Сумма ($from)", amount, { amount = it }, numeric = true)
                 OutlinedButton(onClick = {
-                    val converted = result.getOrNull()
+                    val converted = result.minor
                     val old = from
                     from = to
                     to = old
@@ -135,12 +153,11 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
                 CurrencyPicker("В валюту", to) { to = it; rateText = "" }
                 HorizontalDivider()
                 Text("Результат", style = MaterialTheme.typography.titleMedium)
-                result.onSuccess { MoneyText(it, to, large = true) }
-                    .onFailure {
-                        if(!manual&&from!=to&&saved==null&&currentStatus?.loading==true)
-                            Text("Получаем курс ЦБ РФ…",style=MaterialTheme.typography.bodyLarge)
-                        else Warning(it.message?.takeIf{m->m.any{c->c in 'А'..'я'||c=='ё'||c=='Ё'}} ?: "Проверьте сумму и курс")
-                    }
+                val converted=result.minor
+                if(converted!=null)MoneyText(converted,to,large=true)
+                else if(!manual&&from!=to&&saved==null&&currentStatus?.loading==true)
+                    Text("Получаем курс ЦБ РФ…",style=MaterialTheme.typography.bodyLarge)
+                else Warning(result.error ?: "Проверьте сумму и курс")
                 if(!manual&&from!=to&&currentStatus?.loading==true){
                     LinearProgressIndicator(Modifier.fillMaxWidth().testTag("converter-loading"))
                     if(saved!=null)Text("Обновляем курс. Пока показан сохранённый.",style=MaterialTheme.typography.bodyMedium)
