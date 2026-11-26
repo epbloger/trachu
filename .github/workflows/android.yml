@@ -2,7 +2,7 @@ name: Android integration
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'dev/1.2.0-finalization']
     paths:
       - 'app/**'
       - '*.gradle.kts'
@@ -83,8 +83,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     env:
-      ORG_GRADLE_PROJECT_trachuAdsEnabled: ${{ vars.TRACHU_ADS_ENABLED || 'false' }}
-      ORG_GRADLE_PROJECT_trachuBannerId: ${{ vars.TRACHU_BANNER_ID || '' }}
+      ORG_GRADLE_PROJECT_trachuAdsEnabled: ${{ vars.TRACHU_ADS_ENABLED || 'true' }}
+      ORG_GRADLE_PROJECT_trachuBannerId: ${{ vars.TRACHU_BANNER_ID || 'R-M-20514950-1' }}
     steps:
       - uses: actions/checkout@v4
         with:
