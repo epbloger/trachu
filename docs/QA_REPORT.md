@@ -1,6 +1,6 @@
 # Отчёт о проверке кандидата 1.0.0
 
-Дата: 26 ноября 2026 года. Актуальный проверенный Android-код: [`55a0d20`](https://github.com/epbloger/trachu/commit/55a0d207e709d6319426772c1bd46d70943b1062). Источник — [Android integration #45801256985](https://github.com/epbloger/trachu/actions/runs/45801256985). Само задание получило failure только из-за неверного ожидания размеров PNG (1080×2400 вместо фактических 1080×1920); все 95 автоматизированных тестов прошли. Повторная проверка существующих артефактов выполняется отдельным workflow Release evidence replay, без пересборки. Это не изменение исходного результата #45801256985 и не новая серия испытаний на устройствах.
+Дата: 26 ноября 2026 года. Актуальный проверенный Android-код: [`55a0d20`](https://github.com/epbloger/trachu/commit/55a0d207e709d6319426772c1bd46d70943b1062). Источник — [Android integration #45801256985](https://github.com/epbloger/trachu/actions/runs/45801256985). Само задание получило failure только из-за неверного ожидания размеров PNG (1080×2400 вместо фактических 1080×1920); все 95 автоматизированных тестов прошли. Исправление [`f7de661`](https://github.com/epbloger/trachu/commit/f7de66114f138a69ef1c8494c613f5904365608a) проверено в [Android integration #45804081213](https://github.com/epbloger/trachu/actions/runs/45804081213): plan и evidence/replay успешны, полная сборка намеренно пропущена. Подтверждены идентичность Android-кода, SHA-256 APK/AAB, целостность архивов, 95 успешных отчётов, три реальных кадра, Lint, манифесты, офлайн-результат и выравнивание 16 КиБ. Восемь новых тестов валидатора прошли; `sign-release.ps1 -VerifyOnly` прошёл на обоих реальных архивах. Это не изменение исходного результата #45801256985, не новая серия испытаний на устройствах и не подпись издателя.
 
 | Проверка | Результат |
 |---|---|
@@ -32,6 +32,7 @@
 - [Unsigned release APK](https://github.com/epbloger/trachu/actions/runs/45801256985/artifacts/15107787296), SHA-256 `f4702a561f127aae0b0c1c80c10938411cab0723602774a1c95f3c57b110e157`.
 - [Unsigned AAB](https://github.com/epbloger/trachu/actions/runs/45801256985/artifacts/15107502850), SHA-256 `24a895722c5607c2239fea848bea23368e5bcd4a25f06ef667eefa44337b5119`.
 - [Полный отчёт и реальные скриншоты](https://github.com/epbloger/trachu/actions/runs/45801256985/artifacts/15108146944), каталог `qa/store-phone/`.
+- [Успешная повторная проверка доказательств](https://github.com/epbloger/trachu/actions/runs/45804081213/artifacts/15109120309).
 
 Для проверки скачанного файла используйте `qa/SHA256SUMS` и `qa/source-commit.txt` внутри артефакта. Артефакты Actions хранятся 14 дней; для скачивания может потребоваться вход в GitHub.
 
