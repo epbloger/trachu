@@ -82,6 +82,20 @@ class PortabilityTest {
         assertEquals(original.copy(categories=original.categories.sortedBy { it.id }), imported.copy(categories=imported.categories.sortedBy { it.id }))
         assertEquals(1,Csv.merge(original,imported).entries.size)
     }
+    @Test fun fullCsvImportMergesWhenOnlyGoalsOrOtherPlanningDataExist() {
+        val goal=Goal(name="Резерв",currency="RUB",targetMinor=250000,savedMinor=10000)
+        val existing=Ledger.initial().copy(goals=listOf(goal))
+        val importedAccount=Account("imported","Основной счёт")
+        val incoming=Ledger.initial().copy(accounts=listOf(importedAccount))
+        val merged=Csv.importFull(existing,incoming)
+        assertEquals(goal,merged.goals.single())
+        assertEquals(importedAccount,merged.accounts.single())
+    }
+    @Test fun fullCsvImportReplacesOnlyPristineLedger() {
+        val incoming=Ledger.initial().copy(baseCurrency="USD",accounts=listOf(Account("usd","Основной",currency="USD")))
+        assertEquals(incoming,Csv.importFull(Ledger.initial(),incoming))
+    }
+
     @Test fun statementRepeatedImportDoesNotDuplicate() {
         val source = "date,amount,category,note\n2026-01-01,-12.34,Продукты,\"Чек, 1\"\n"
         val first = Csv.importStatement(source.byteInputStream(),original,"a")

@@ -288,7 +288,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     "statement" -> store.change { Csv.importStatement(input,it,accountId) }
                     else -> {
                         val imported=Csv.read(input)
-                        store.change { if(it.accounts.isEmpty() && it.entries.isEmpty()) imported else Csv.merge(it,imported) }
+                        store.change { Csv.importFull(it,imported) }
                     }
                 }
             }
