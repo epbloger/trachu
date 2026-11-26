@@ -34,9 +34,10 @@ class CbrHttpsIntegrationTest {
             "Live CBR HTTPS request failed: ${lastFailure?.javaClass?.simpleName ?: "empty feed"}"
         }
         for (code in listOf("USD", "EUR")) {
-            val rate = actual.singleOrNull { it.currency == code }
-            assertNotNull("CBR response must contain $code", rate)
-            assertEquals("CBR", rate!!.source)
+            val rate = requireNotNull(actual.singleOrNull { it.currency == code }) {
+                "CBR response must contain $code"
+            }
+            assertEquals("CBR", rate.source)
             assertTrue(BigDecimal(rate.unitsOfBasePerUnit).signum() > 0)
             assertTrue("CBR date must not be in the future or stale", rate.day in (requestedDay - 10)..requestedDay)
         }
