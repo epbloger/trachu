@@ -18,6 +18,8 @@ import ru.epbloger.trachu.worker.RatesWorker
 import ru.epbloger.trachu.widget.refreshWidgets
 import ru.epbloger.trachu.ui.EntryDraft
 import ru.epbloger.trachu.ui.FileRequest
+import ru.epbloger.trachu.ui.firstAccountLedger
+import ru.epbloger.trachu.ui.isPristineLedger
 
 internal sealed interface PickedResult {
     data class File(val uri:Uri,val request:FileRequest):PickedResult
@@ -29,6 +31,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // Activity recreation retains this state without serializing financial drafts,
     // backup passwords or receipt bytes into Android's saved-instance state.
     internal val editorState=mutableStateOf<Editor?>(null)
+    internal var onboardingDraft=EntryDraft()
     internal var editor:Editor?
         get()=editorState.value
         set(value){editorState.value=value}
@@ -91,7 +94,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             store.ledger.catch {
                 _ledger.value=null
                 _loadingError.value="Не удалось открыть финансовые данные. Повторите попытку."
-            }.collect { _ledger.value=it }
+            }.collect {
+                // A previously used ledger must not return to first launch if all accounts are removed later.
+                if(!isPristineLedger(it) && _settings.value?.onboardingCompleted!=true) {
+                    try { preferences.completeOnboarding() }
+                    catch(e:kotlinx.coroutines.CancellationException) { throw e }
+                    catch(_:Exception) { /* Settings loading reports its own errors. */ }
+                }
+                _ledger.value=it
+            }
         }
         settingsJob=viewModelScope.launch {
             preferences.settings.catch {
@@ -109,6 +120,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     internal fun notice(text:String){_message.value=text}
     fun rememberAccount(id: String) { viewModelScope.launch { preferences.lastAccount(id) } }
     fun quick(kind: Kind?) { _quick.value=kind }
+    internal fun finishOnboarding(currency:String,name:String,type:AccountType,opening:String) = perform {
+        val s=preferences.current()
+        require(!s.protected && !s.onboardingCompleted) { "Первоначальная настройка уже завершена" }
+        val next=store.change { firstAccountLedger(it,currency,name,type,opening) }
+        preferences.completeOnboarding()
+        preferences.lastAccount(next.accounts.single().id)
+        onboardingDraft=EntryDraft()
+        runCatching { FinanceWorker.refresh(getApplication()) }
+    }
     fun lock() { _unlocked.value=false; _message.value=null }
     fun unlockBiometric() = perform {
         val s=preferences.current()
@@ -148,6 +168,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun change(transform: (Ledger)->Ledger, onDone: ()->Unit = {}) = perform {
+        if(_settings.value?.onboardingCompleted!=true && _ledger.value?.let{!isPristineLedger(it)}==true) {
+            try { preferences.completeOnboarding() }
+            catch(e:kotlinx.coroutines.CancellationException) { throw e }
+            catch(_:Exception) { /* An unavailable settings store must not block ledger edits. */ }
+        }
         store.change(transform)
         runCatching { FinanceWorker.refresh(getApplication()) }
         onDone()
@@ -198,7 +223,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         runCatching { FinanceWorker.refresh(getApplication()) }
-        if(mode=="backup" && _ledger.value==null)retryLoad()
+        if(mode=="backup") {
+            try { preferences.completeOnboarding() }
+            catch(e:kotlinx.coroutines.CancellationException) { throw e }
+            catch(_:Exception) { /* The verified backup has already been restored. */ }
+            onboardingDraft=EntryDraft()
+            if(_ledger.value==null)retryLoad()
+        }
         _message.value="Данные загружены"
     }
     fun readReceipt(uri: Uri, onDone: (Receipt)->Unit) = perform {

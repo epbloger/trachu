@@ -96,7 +96,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
         keyboardActions=KeyboardActions(onDone={focusManager.clearFocus()}),
         supportingText=if(supporting==null) null else { { Text(supporting) } },trailingIcon=trailing)
 }
-@Composable fun DateField(label:String,value:String,onChange:(String)->Unit,supporting:String="ГГГГ-ММ-ДД") {
+@Composable fun DateField(label:String,value:String,onChange:(String)->Unit,supporting:String?="ГГГГ-ММ-ДД") {
     val context=LocalContext.current
     val theme=if(MaterialTheme.colorScheme.surface.luminance()<0.5f)android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert
     Field(label,value,onChange,supporting=supporting,trailing={
@@ -118,34 +118,59 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
         }){Icon(Icons.Outlined.AccessTime,contentDescription="Выбрать время")}
     })
 }
-@Composable fun <T> Choice(label: String, value: T?, options: List<T>, title: (T)->String, modifier: Modifier=Modifier, onChoose: (T)->Unit) {
+@Composable fun <T> Choice(label: String, value: T?, options: List<T>, title: (T)->String, modifier: Modifier=Modifier, compact:Boolean=false, onChoose: (T)->Unit) {
     var open by remember { mutableStateOf(false) }
     Column(modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(4.dp)) {
-        Text(label,style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        if(!compact)Text(label,style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Box {
-            OutlinedButton(onClick={open=true},enabled=options.isNotEmpty(),modifier=Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick={open=true},enabled=options.isNotEmpty(),modifier=Modifier.fillMaxWidth().testTag("choice:$label")) {
+                if(compact)Text("$label: ",style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(value?.let(title) ?: "Выбрать",modifier=Modifier.weight(1f),maxLines=2,overflow=TextOverflow.Ellipsis)
                 Text("⌄")
             }
             DropdownMenu(expanded=open,onDismissRequest={open=false},modifier=Modifier.heightIn(max=360.dp)) {
-                options.forEach { option -> DropdownMenuItem(text={Text(title(option))},onClick={open=false;onChoose(option)}) }
+                options.forEach { option -> DropdownMenuItem(text={Text(title(option))},onClick={open=false;onChoose(option)},modifier=Modifier.testTag("choice-option:$label:$option")) }
             }
         }
     }
 }
-@Composable fun CategoryChoice(label:String, value:String, options:List<Category>, ledger:Ledger, onChoose:(String)->Unit) {
+@OptIn(ExperimentalLayoutApi::class)
+@Composable fun CategoryChoice(label:String, value:String, options:List<Category>, ledger:Ledger, onCreate:(()->Unit)?=null, quick:Boolean=false, onChoose:(String)->Unit) {
     var open by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     fun title(c:Category)=c.parentId?.let{ledger.categoryName(it)+" / "+c.name} ?: c.name
     val current=options.find{it.id==value}
+    val commonIds=listOf("food","transport","home","health","leisure","other","salary","other-income")
+    val quickCategories=if(quick)options.filter{!it.archived}
+        .sortedWith(compareBy<Category>{it.parentId!=null}.thenBy{commonIds.indexOf(it.id).let{index->if(index<0)Int.MAX_VALUE else index}})
+        .take(6) else emptyList()
     Column(verticalArrangement=Arrangement.spacedBy(4.dp)) {
-        Text(label,style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedButton(onClick={query="";open=true},enabled=options.isNotEmpty(),modifier=Modifier.fillMaxWidth().testTag("category-choice:$label")) {
-            if(current!=null)CategoryDot(current,Modifier.padding(end=4.dp))
-            Text(current?.let(::title) ?: "Выбрать категорию",Modifier.weight(1f))
-            Text("⌄")
+        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+            Text(label,Modifier.weight(1f),style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            if(onCreate!=null)TextButton(onClick=onCreate,modifier=Modifier.testTag("category-create:$label")) { Text("+ Новая категория") }
         }
-        if(options.isEmpty())Text("Создайте категорию в разделе «Ещё».",style=MaterialTheme.typography.bodySmall)
+        if(quickCategories.isNotEmpty()) {
+            FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalArrangement=Arrangement.spacedBy(0.dp)) {
+                quickCategories.forEach { category->
+                    FilterChip(
+                        selected=category.id==value,onClick={onChoose(category.id)},
+                        label={Text(title(category),maxLines=1,overflow=TextOverflow.Ellipsis)},
+                        modifier=Modifier.testTag("category-quick:${category.id}")
+                    )
+                }
+                AssistChip(onClick={query="";open=true},label={Text("Все категории ⌄")},modifier=Modifier.testTag("category-choice:$label"))
+            }
+            if(current!=null&&quickCategories.none{it.id==value}) {
+                Text("Выбрано: "+title(current),style=MaterialTheme.typography.bodyMedium,modifier=Modifier.testTag("category-selected:$label"))
+            }
+        } else {
+            OutlinedButton(onClick={query="";open=true},enabled=options.isNotEmpty()||onCreate!=null,modifier=Modifier.fillMaxWidth().testTag("category-choice:$label")) {
+                if(current!=null)CategoryDot(current,Modifier.padding(end=4.dp))
+                Text(current?.let(::title) ?: "Выбрать категорию",Modifier.weight(1f))
+                Text("⌄")
+            }
+        }
+        if(onCreate==null&&options.isEmpty())Text("Категории не найдены.",style=MaterialTheme.typography.bodySmall)
     }
     if(open)Dialog(onDismissRequest={open=false},properties=DialogProperties(usePlatformDefaultWidth=false)) {
         Surface(Modifier.widthIn(max=540.dp).fillMaxWidth(.94f).fillMaxHeight(.85f),shape=MaterialTheme.shapes.extraLarge) {
@@ -164,6 +189,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
                     }
                     if(matches.isEmpty())item{Text("Категории не найдены.",Modifier.padding(8.dp))}
                 }
+                if(onCreate!=null)Button(onClick={open=false;onCreate()},modifier=Modifier.fillMaxWidth()){Text("+ Новая категория")}
                 TextButton(onClick={open=false},modifier=Modifier.align(Alignment.End)){Text("Отмена")}
             }
         }
@@ -197,16 +223,16 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
         Switch(checked,onCheckedChange=onChange,modifier=Modifier.testTag("toggle:$label").semantics{contentDescription=label})
     }
 }
-@Composable fun Form(title: String, onClose: ()->Unit, busy: Boolean, saveLabel: String="Сохранить", onSave: ()->Unit,
+@Composable fun Form(title: String, onClose: ()->Unit, busy: Boolean, saveLabel: String="Сохранить", onSave: ()->Unit, spacing: Int=12, compact:Boolean=false,
     content: @Composable ColumnScope.()->Unit) {
     Dialog(onDismissRequest={if(!busy)onClose()},properties=DialogProperties(usePlatformDefaultWidth=false)) {
-        Surface(Modifier.widthIn(max=620.dp).fillMaxWidth(.94f).fillMaxHeight(.88f),shape=MaterialTheme.shapes.extraLarge,
+        Surface(Modifier.widthIn(max=620.dp).fillMaxWidth(if(compact).96f else .94f).fillMaxHeight(if(compact).94f else .88f),shape=MaterialTheme.shapes.extraLarge,
             color=MaterialTheme.colorScheme.surface) {
-            Column(Modifier.padding(20.dp)) {
-                Text(title,style=MaterialTheme.typography.headlineSmall)
-                Spacer(Modifier.height(12.dp))
-                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).testTag("form_content"),verticalArrangement=Arrangement.spacedBy(12.dp),content=content)
-                Spacer(Modifier.height(12.dp))
+            Column(Modifier.padding(if(compact)12.dp else 20.dp)) {
+                Text(title,style=if(compact)MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall)
+                Spacer(Modifier.height(if(compact)6.dp else 12.dp))
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).testTag("form_content"),verticalArrangement=Arrangement.spacedBy(spacing.dp),content=content)
+                Spacer(Modifier.height(if(compact)6.dp else 12.dp))
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
                     @Composable fun Cancel(modifier:Modifier=Modifier) { TextButton(onClick=onClose,enabled=!busy,modifier=modifier) { Text("Отмена") } }
                     @Composable fun Save(modifier:Modifier=Modifier) { Button(onClick=onSave,enabled=!busy,modifier=modifier.testTag("form_save")) { if(busy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Text(saveLabel) } }

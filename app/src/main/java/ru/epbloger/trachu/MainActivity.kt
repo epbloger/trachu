@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
@@ -141,6 +143,7 @@ class MainActivity : FragmentActivity() {
                         if(error==null)CircularProgressIndicator()
                         else RecoveryScreen(error,canRestore=s!=null&&l==null,busy=busy,retry=vm::retryLoad,file=::launchFile)
                     }
+                    else if(!s.protected && needsOnboarding(l,s)) OnboardingScreen(l,vm,busy,::launchFile)
                     else AppShell(l,s,vm,busy,biometricAvailable(),s.protected&&!unlocked,{done->authenticate(done)},::launchFile,::chooseReceipt)
                     if(message!=null && (settings?.protected!=true || unlocked || message=="Неверный PIN" || message?.startsWith("Слишком много попыток")==true))AlertDialog(onDismissRequest=vm::clearMessage,title={Text("ТРАЧУ.")},text={Text(message.orEmpty())},
                         confirmButton={TextButton(onClick=vm::clearMessage){Text("OK")}})
@@ -217,7 +220,7 @@ class MainActivity : FragmentActivity() {
 
 private enum class Tab(val label:String,val icon:ImageVector) {
     HOME("Обзор",Icons.Outlined.Home), OPERATIONS("Операции",Icons.Outlined.AccountBalanceWallet),
-    PLAN("План",Icons.Outlined.CalendarMonth), REPORTS("Отчёты",Icons.Outlined.BarChart), MORE("Ещё",Icons.Outlined.MoreHoriz)
+    PLAN("План",Icons.Outlined.CalendarMonth), REPORTS("Аналитика",Icons.Outlined.BarChart), MORE("Инструменты",Icons.Outlined.MoreHoriz)
 }
 internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXPENSE,val initialDay:Long?=null,val draft:EntryDraft=EntryDraft())
 
@@ -237,8 +240,11 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
         if(ledger.accounts.none{!it.archived}){openMore(MorePage.ACCOUNTS);editor=Editor("account")}
         else editor=Editor("schedule",s?.id)
     }
-    LaunchedEffect(quick,locked){if(quick!=null&&!locked){
-        if(editor==null&&!vm.pickerPending()&&!busy)add(requireNotNull(quick))
+    LaunchedEffect(quick,locked,busy){if(quick!=null&&!locked&&!busy){
+        if(editor==null&&!vm.pickerPending()){
+            if(tab==Tab.MORE&&more==MorePage.TUTORIAL){tab=Tab.HOME;more=MorePage.INDEX}
+            add(requireNotNull(quick))
+        }
         else vm.notice("Сначала завершите текущую операцию. Черновик сохранён.")
         vm.quick(null)
     }}
@@ -247,6 +253,39 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
         return
     }
     fun choose(t:Tab){tab=t;if(t==Tab.MORE)more=MorePage.INDEX}
+    val drawerState=rememberDrawerState(DrawerValue.Closed)
+    val scope=rememberCoroutineScope()
+    val mainTabs=Tab.entries.filter{it!=Tab.MORE}
+    val drawerPages=listOf(MorePage.ACCOUNTS,MorePage.CATEGORIES,MorePage.CONVERTER,MorePage.RATES,
+        MorePage.DATA,MorePage.SETTINGS,MorePage.TUTORIAL,MorePage.ABOUT,MorePage.INDEX)
+    LaunchedEffect(editor){if(editor!=null && drawerState.targetValue!=DrawerValue.Closed)drawerState.close()}
+    ModalNavigationDrawer(
+        drawerState=drawerState,
+        gesturesEnabled=editor==null && !busy,
+        drawerContent={
+            ModalDrawerSheet {
+                val visible=drawerState.currentValue==DrawerValue.Open || drawerState.targetValue==DrawerValue.Open
+                Column(Modifier.then(if(visible)Modifier else Modifier.clearAndSetSemantics{}).fillMaxHeight().verticalScroll(rememberScrollState()).padding(horizontal=12.dp),
+                    verticalArrangement=Arrangement.spacedBy(2.dp)){
+                    Text("ТРАЧУ.",style=MaterialTheme.typography.headlineLarge,color=MaterialTheme.colorScheme.primary,modifier=Modifier.padding(16.dp))
+                    Text("Личные финансы",style=MaterialTheme.typography.bodyMedium,modifier=Modifier.padding(horizontal=16.dp))
+                    Spacer(Modifier.height(8.dp))
+                    mainTabs.forEach{t->
+                        NavigationDrawerItem(label={Text(t.label)},selected=tab==t,
+                            icon={Icon(t.icon,contentDescription=null)},onClick={choose(t);scope.launch{drawerState.close()}},
+                            modifier=Modifier.testTag("drawer-tab-${t.name.lowercase()}"))
+                    }
+                    HorizontalDivider(Modifier.padding(vertical=8.dp))
+                    Text("Инструменты",style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(horizontal=16.dp,vertical=4.dp))
+                    drawerPages.forEach{page->
+                        NavigationDrawerItem(label={Text(if(page==MorePage.INDEX)"Все инструменты" else page.label)},selected=tab==Tab.MORE&&more==page,
+                            onClick={openMore(page);scope.launch{drawerState.close()}},modifier=Modifier.testTag("drawer-${page.name.lowercase()}"))
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+            }
+        }
+    ){
     BoxWithConstraints(Modifier.fillMaxSize()){
         // Keep every navigation destination reachable on short landscape phones.
         val rail=maxWidth>=680.dp && maxHeight>=460.dp
@@ -255,12 +294,23 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
         Row(Modifier.fillMaxSize()){
             if(rail)NavigationRail(modifier=Modifier.fillMaxHeight().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start+WindowInsetsSides.Top+WindowInsetsSides.Bottom)),
                 header={Text("Т.",style=MaterialTheme.typography.headlineSmall,color=MaterialTheme.colorScheme.primary,modifier=Modifier.padding(12.dp))}){
-                Tab.entries.forEach{t->NavigationRailItem(selected=t==tab,onClick={choose(t)},modifier=Modifier.testTag("nav-${t.name.lowercase()}"),icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label)},alwaysShowLabel=!largeFont)}
+                mainTabs.forEach{t->NavigationRailItem(selected=t==tab,onClick={choose(t)},modifier=Modifier.testTag("nav-${t.name.lowercase()}"),icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label)},alwaysShowLabel=!largeFont)}
             }
             Scaffold(modifier=Modifier.weight(1f),containerColor=MaterialTheme.colorScheme.background,
                 contentWindowInsets=WindowInsets.safeDrawing,
+                topBar={
+                    Surface(color=MaterialTheme.colorScheme.background){
+                        Row(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top+WindowInsetsSides.Horizontal))
+                            .padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically){
+                            IconButton(onClick={scope.launch{drawerState.open()}},enabled=editor==null&&!busy,modifier=Modifier.testTag("nav-more")){
+                                Icon(Icons.Outlined.Menu,contentDescription="Открыть меню")
+                            }
+                            Text("ТРАЧУ.",style=MaterialTheme.typography.titleLarge,color=MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                },
                 bottomBar={if(!rail)NavigationBar{
-                    Tab.entries.forEach{t->NavigationBarItem(selected=t==tab,onClick={choose(t)},modifier=Modifier.testTag("nav-${t.name.lowercase()}"),icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label,maxLines=1)},alwaysShowLabel=!largeFont)}
+                    mainTabs.forEach{t->NavigationBarItem(selected=t==tab,onClick={choose(t)},modifier=Modifier.testTag("nav-${t.name.lowercase()}"),icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label,maxLines=1)},alwaysShowLabel=!largeFont)}
                 }},
                 floatingActionButton={if(tab==Tab.OPERATIONS)FloatingActionButton(onClick={add(Kind.EXPENSE)}){Text("+",style=MaterialTheme.typography.headlineSmall)}}){padding->
                 Column(Modifier.fillMaxSize().padding(padding)){
@@ -286,24 +336,34 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                                     })
                                 }
                                 MorePage.CATEGORIES->Categories(ledger,{editor=Editor("category",it?.id)},{more=MorePage.INDEX})
+                                MorePage.CONVERTER->CurrencyConverter(ledger,vm,busy,{more=MorePage.INDEX},{more=MorePage.RATES})
                                 MorePage.RATES->Rates(ledger,settings,vm,busy){more=MorePage.INDEX}
                                 MorePage.SETTINGS->SettingsPage(settings,vm,busy,biometricAvailable,authenticate){more=MorePage.INDEX}
                                 MorePage.DATA->DataPage(ledger,file,busy){more=MorePage.INDEX}
                                 MorePage.ABOUT->AboutPage{more=MorePage.INDEX}
+                                MorePage.TUTORIAL->{
+                                    MoreIndex{more=it}
+                                    TutorialDialog{more=MorePage.INDEX}
+                                }
                             }
                         }
                     }
                     // Only the overview may show an ad. Editors, details, quick entry,
                     // lock screen and financial actions remove it from composition.
-                    if(tab==Tab.HOME && editor==null && quick==null && !busy && allowBanner) {
+                    if(tab==Tab.HOME && editor==null && quick==null && !busy && allowBanner &&
+                        drawerState.currentValue==DrawerValue.Closed && drawerState.targetValue==DrawerValue.Closed) {
                         OverviewAdBanner(settings.adsConsent)
                     }
                 }
             }
         }
     }
-    androidx.activity.compose.BackHandler(enabled=editor==null&&(tab!=Tab.HOME||more!=MorePage.INDEX)){
+    }
+    androidx.activity.compose.BackHandler(enabled=editor==null&&drawerState.currentValue==DrawerValue.Closed&&drawerState.targetValue==DrawerValue.Closed&&tab!=Tab.HOME){
         if(tab==Tab.MORE&&more!=MorePage.INDEX)more=MorePage.INDEX else tab=Tab.HOME
+    }
+    androidx.activity.compose.BackHandler(enabled=editor==null&&(drawerState.currentValue==DrawerValue.Open||drawerState.targetValue==DrawerValue.Open)){
+        scope.launch{drawerState.close()}
     }
     val current=editor
     if(current!=null){

@@ -20,7 +20,7 @@ import ru.epbloger.trachu.core.*
 import ru.epbloger.trachu.security.Settings
 import ru.epbloger.trachu.widget.refreshWidgets
 
-enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"), CATEGORIES("Категории"), RATES("Валюты и курсы"), SETTINGS("Настройки"), DATA("Файлы и копии"), ABOUT("О приложении") }
+enum class MorePage(val label:String) { INDEX("Инструменты"), ACCOUNTS("Счета"), CATEGORIES("Категории"), CONVERTER("Конвертер валют"), RATES("Валюты и курсы"), SETTINGS("Настройки"), DATA("Файлы и копии"), TUTORIAL("Обучение"), ABOUT("О приложении") }
 
 @Composable fun Accounts(ledger:Ledger,edit:(Account?)->Unit,transfer:()->Unit,back:()->Unit,move:(String,Int)->Unit) {
     var showArchived by remember{mutableStateOf(false)}
@@ -88,7 +88,7 @@ enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"),
         item{Panel{
             Text("Основная валюта отчётов: ${ledger.baseCurrency}",style=MaterialTheme.typography.titleMedium)
             if(canChange) {
-                Choice("Валюта отчётов",base,allCurrencies,{it}){base=it}
+                CurrencyPicker("Валюта отчётов",base){base=it}
                 Button(onClick={vm.change({l->require(l.accounts.isEmpty()&&l.entries.isEmpty()&&l.budgets.isEmpty()&&l.schedules.isEmpty()&&l.debts.isEmpty());l.copy(baseCurrency=base,rates=emptyList())})},enabled=!busy&&base!=ledger.baseCurrency){Text("Изменить основную валюту")}
             } else Text("После создания финансовых записей основная валюта фиксируется для корректных исторических отчётов.")
         }}
@@ -119,13 +119,15 @@ enum class MorePage(val label:String) { INDEX("Ещё"), ACCOUNTS("Счета"),
 }
 @Composable fun MoreIndex(open:(MorePage)->Unit) {
     LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
-        item{Text("Ещё",style=MaterialTheme.typography.headlineLarge)}
+        item{Text("Инструменты",style=MaterialTheme.typography.headlineLarge)}
         val descriptions=mapOf(
             MorePage.ACCOUNTS to "Наличные, карты, накопления и архив",
             MorePage.CATEGORIES to "Категории, подкатегории, цвета и значки",
+            MorePage.CONVERTER to "Пересчёт любой суммы в другую валюту",
             MorePage.RATES to "Исторические курсы и основная валюта",
             MorePage.DATA to "Резервные копии, CSV, PDF и импорт",
             MorePage.SETTINGS to "Тема, PIN, биометрия, уведомления и виджет",
+            MorePage.TUTORIAL to "Краткое знакомство с приложением",
             MorePage.ABOUT to "Приватность, условия и контакты")
         items(descriptions.toList()){(page,detail)->Panel{
             SectionTitle(page.label,detail,action="Открыть"){open(page)}
@@ -269,7 +271,7 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
         item{Panel{
             Text("ТРАЧУ.",style=MaterialTheme.typography.displaySmall,color=MaterialTheme.colorScheme.primary)
             Text("Личные финансы под контролем")
-            Text("Moorkis Development · 1.0.0")
+            Text("Moorkis Development · ${BuildConfig.VERSION_NAME}")
             Text("© 2026 Moorkis Development. Все права защищены.")
             Text("https://github.com/epbloger/trachu")
             Text("helpmoorkis@yandex.ru")

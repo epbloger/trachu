@@ -1,5 +1,5 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent" android:layout_height="match_parent" android:background="#173B35">
+    android:layout_width="match_parent" android:layout_height="match_parent" android:background="#27243E">
     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-        android:layout_gravity="center" android:text="@string/app_name" android:textColor="#C6F4DE" android:textSize="18sp"/>
+        android:layout_gravity="center" android:text="@string/app_name" android:textColor="#E8E2FC" android:textSize="18sp"/>
 </FrameLayout>

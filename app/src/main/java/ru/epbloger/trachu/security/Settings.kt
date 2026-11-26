@@ -18,7 +18,8 @@ data class Settings(
     val showWidgetBalance: Boolean = false,
     val failedAttempts: Int = 0,
     val lockedUntil: Long = 0L, val monthStart: Int = 1, val automaticRates:Boolean=false,
-    val adsConsent:Boolean?=null
+    val adsConsent:Boolean?=null,
+    val onboardingCompleted:Boolean=false
 ) { val protected get() = credential.isNotEmpty() }
 
 class Preferences(context: Context) {
@@ -35,11 +36,14 @@ class Preferences(context: Context) {
         val monthStart = intPreferencesKey("month_start")
         val automaticRates = booleanPreferencesKey("automatic_rates")
         val adsConsent = booleanPreferencesKey("ads_consent_v1")
+        val onboardingCompleted = booleanPreferencesKey("onboarding_completed_v1")
     }
     val settings: Flow<Settings> = store.data.map { p ->
         Settings(p[K.theme] ?: "system",p[K.pin] ?: "",p[K.biometric] ?: false,
             p[K.timeout] ?: 30,p[K.account] ?: "",p[K.widget] ?: false,
-            p[K.failures] ?: 0,p[K.until] ?: 0,p[K.monthStart] ?: 1,p[K.automaticRates] ?: false,p[K.adsConsent])
+            p[K.failures] ?: 0,p[K.until] ?: 0,p[K.monthStart] ?: 1,p[K.automaticRates] ?: false,p[K.adsConsent],
+            // Older installations with preferences already configured must not be sent through setup.
+            p[K.onboardingCompleted] ?: p.asMap().isNotEmpty())
     }
     suspend fun current() = settings.first()
     suspend fun theme(value: String) { require(value in listOf("system","light","dark")); store.edit { it[K.theme]=value } }
@@ -47,6 +51,7 @@ class Preferences(context: Context) {
     suspend fun widget(value: Boolean) { store.edit { it[K.widget]=value } }
     suspend fun automaticRates(value:Boolean) { store.edit { it[K.automaticRates]=value } }
     suspend fun adsConsent(value:Boolean) { store.edit { it[K.adsConsent]=value } }
+    suspend fun completeOnboarding() { store.edit { it[K.onboardingCompleted]=true } }
     suspend fun monthStart(value: Int) { require(value in 1..31); store.edit { it[K.monthStart]=value } }
     suspend fun timeout(value: Int) { require(value in listOf(0,15,30,60,300)); store.edit { it[K.timeout]=value } }
     suspend fun biometric(value: Boolean) { store.edit { require(!value || !it[K.pin].isNullOrEmpty()); it[K.biometric]=value } }

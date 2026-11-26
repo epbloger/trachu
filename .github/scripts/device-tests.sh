@@ -4,6 +4,7 @@ if [[ "${1:-}" == "api26" || "${1:-}" == "api33" ]]; then
   mkdir -p "qa/$1"
   status=0
   classes=ru.epbloger.trachu.data.LedgerStoreTest,ru.epbloger.trachu.security.DeviceSecurityTest,ru.epbloger.trachu.data.PdfReportTest
+  classes+=,ru.epbloger.trachu.ui.NavigationTest
   if [[ "$1" == "api33" ]]; then classes+=,ru.epbloger.trachu.ui.EditorRecreationTest; fi
   gradle --no-daemon --stacktrace connectedDebugAndroidTest "-Pandroid.testInstrumentationRunnerArguments.class=$classes" || status=1
   cp -a app/build/outputs/androidTest-results "qa/$1/" || true

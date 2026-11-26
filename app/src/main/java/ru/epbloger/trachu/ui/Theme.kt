@@ -11,25 +11,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-val Mint = Color(0xFFB9F3D5)
-val Deep = Color(0xFF173B35)
+val Lavender = Color(0xFFE8E2FC)
+val Graphite = Color(0xFF27243E)
 private val Light = lightColorScheme(
-    primary=Color(0xFF176C54), onPrimary=Color.White,
-    primaryContainer=Color(0xFFCEF2DF), onPrimaryContainer=Color(0xFF123F31),
-    secondary=Color(0xFF566860), secondaryContainer=Color(0xFFE1EBE5),
-    tertiary=Color(0xFF6C5C9E), background=Color(0xFFF4F6F3),
-    surface=Color(0xFFFFFFFF), onSurface=Color(0xFF172B25),
-    surfaceVariant=Color(0xFFE4ECE7), onSurfaceVariant=Color(0xFF465B52),
-    outline=Color(0xFF7C8B83), error=Color(0xFFB3424B)
+    primary=Color(0xFF6143CC), onPrimary=Color.White,
+    primaryContainer=Lavender, onPrimaryContainer=Color(0xFF422B99),
+    secondary=Color(0xFF555675), secondaryContainer=Color(0xFFE5E5F5),
+    onSecondaryContainer=Color(0xFF30304D),
+    tertiary=Color(0xFF995041), background=Color(0xFFF5F5F8),
+    surface=Color.White, onSurface=Color(0xFF242338),
+    surfaceVariant=Color(0xFFE8E7EF), onSurfaceVariant=Color(0xFF545166),
+    outline=Color(0xFF77738B), error=Color(0xFFB23D52)
 )
 private val Dark = darkColorScheme(
-    primary=Color(0xFF9AE5C3), onPrimary=Color(0xFF103C2E),
-    primaryContainer=Color(0xFF214F40), onPrimaryContainer=Color(0xFFC6F4DE),
-    secondary=Color(0xFFB5C9BD), secondaryContainer=Color(0xFF34463E),
-    tertiary=Color(0xFFC8B9F3), background=Color(0xFF101B19),
-    surface=Color(0xFF182824), onSurface=Color(0xFFE4F0E9),
-    surfaceVariant=Color(0xFF2C4038), onSurfaceVariant=Color(0xFFB9C9C0),
-    outline=Color(0xFF81968A), error=Color(0xFFFFAAB1)
+    primary=Color(0xFFC7B9FF), onPrimary=Color(0xFF2F206C),
+    primaryContainer=Color(0xFF49358C), onPrimaryContainer=Color(0xFFE8E2FC),
+    secondary=Color(0xFFC5C5E1), secondaryContainer=Color(0xFF383851),
+    onSecondaryContainer=Color(0xFFE5E5F5),
+    tertiary=Color(0xFFFFB8AA), background=Color(0xFF161522),
+    surface=Color(0xFF222131), onSurface=Color(0xFFF1EFFA),
+    surfaceVariant=Color(0xFF39364A), onSurfaceVariant=Color(0xFFCDC8DE),
+    outline=Color(0xFF9A95AF), error=Color(0xFFFFAAB9)
 )
 private val Type = Typography(
     displaySmall=TextStyle(fontFamily=FontFamily.SansSerif,fontWeight=FontWeight.Bold,fontSize=34.sp,lineHeight=40.sp,letterSpacing=(-1).sp),

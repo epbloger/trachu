@@ -46,19 +46,19 @@ import java.time.temporal.TemporalAdjusters
             item {
                 @Composable fun Hero() {
                     Card(shape=MaterialTheme.shapes.extraLarge) {
-                        Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Deep,Color(0xFF245D4C)))).padding(24.dp),
+                        Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Graphite,Color(0xFF44356D)))).padding(20.dp),
                             verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                            Text("Общий баланс",color=Mint,style=MaterialTheme.typography.labelLarge)
+                            Text("Общий баланс",color=Lavender,style=MaterialTheme.typography.labelLarge)
                             MoneyText(valuation.minor,ledger.baseCurrency,color=Color.White,large=true)
-                            if(valuation.missingCurrencies.isNotEmpty()) Text("Не включены валюты: "+valuation.missingCurrencies.joinToString(),color=Mint,style=MaterialTheme.typography.bodyMedium)
-                            Text("Результат выбранного периода",color=Mint,style=MaterialTheme.typography.bodyMedium)
+                            if(valuation.missingCurrencies.isNotEmpty()) Text("Не включены валюты: "+valuation.missingCurrencies.joinToString(),color=Lavender,style=MaterialTheme.typography.bodyMedium)
+                            Text("Результат выбранного периода",color=Lavender,style=MaterialTheme.typography.bodyMedium)
                             MoneyText(totals.net,ledger.baseCurrency,color=Color.White)
                             BoxWithConstraints(Modifier.fillMaxWidth()) {
                                 @Composable fun Expense(modifier:Modifier) {
-                                    Button(onClick={add(Kind.EXPENSE)},modifier=modifier.testTag("add-expense"),colors=ButtonDefaults.buttonColors(containerColor=Mint,contentColor=Deep)) { Text("− Расход") }
+                                    Button(onClick={add(Kind.EXPENSE)},modifier=modifier.heightIn(min=52.dp).testTag("add-expense"),colors=ButtonDefaults.buttonColors(containerColor=Lavender,contentColor=Graphite)) { Text("− Расход") }
                                 }
                                 @Composable fun Income(modifier:Modifier) {
-                                    OutlinedButton(onClick={add(Kind.INCOME)},modifier=modifier,colors=ButtonDefaults.outlinedButtonColors(contentColor=Color.White)) { Text("+ Доход") }
+                                    OutlinedButton(onClick={add(Kind.INCOME)},modifier=modifier.heightIn(min=52.dp).testTag("add-income"),colors=ButtonDefaults.outlinedButtonColors(contentColor=Color.White)) { Text("+ Доход") }
                                 }
                                 if(maxWidth<260.dp||LocalDensity.current.fontScale>=1.3f)Column(verticalArrangement=Arrangement.spacedBy(8.dp)){Expense(Modifier.fillMaxWidth());Income(Modifier.fillMaxWidth())}
                                 else Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Expense(Modifier.weight(1f));Income(Modifier.weight(1f))}
@@ -71,11 +71,24 @@ import java.time.temporal.TemporalAdjusters
                         SectionTitle("Движение денег",action="Отчёты",onAction=reports)
                         TextButton(onClick={showPeriod=!showPeriod}){Text("${periodType.label} · ${iso(p.from)} — ${iso(p.through)}")}
                         if(showPeriod)PeriodControls(periodType,{periodType=it},p,{p=it},monthStart)
-                        Text("Доходы",color=MaterialTheme.colorScheme.onSurfaceVariant)
-                        MoneyText(totals.income,ledger.baseCurrency,color=MaterialTheme.colorScheme.primary,large=true)
-                        HorizontalDivider()
-                        Text("Расходы",color=MaterialTheme.colorScheme.onSurfaceVariant)
-                        MoneyText(totals.expense,ledger.baseCurrency,color=MaterialTheme.colorScheme.error,large=true)
+                        BoxWithConstraints(Modifier.fillMaxWidth()) {
+                            @Composable fun Total(label:String,value:Long,color:Color,modifier:Modifier) {
+                                Column(modifier,verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                                    Text(label,color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodyMedium)
+                                    MoneyText(value,ledger.baseCurrency,color=color)
+                                }
+                            }
+                            if(maxWidth>=270.dp&&LocalDensity.current.fontScale<1.3f) {
+                                Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
+                                    Total("Доходы",totals.income,MaterialTheme.colorScheme.primary,Modifier.weight(1f))
+                                    Total("Расходы",totals.expense,MaterialTheme.colorScheme.error,Modifier.weight(1f))
+                                }
+                            } else Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                                Total("Доходы",totals.income,MaterialTheme.colorScheme.primary,Modifier.fillMaxWidth())
+                                HorizontalDivider()
+                                Total("Расходы",totals.expense,MaterialTheme.colorScheme.error,Modifier.fillMaxWidth())
+                            }
+                        }
                     }
                 }
                 if(wide) Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
@@ -93,6 +106,13 @@ import java.time.temporal.TemporalAdjusters
                         }
                     }
                     OutlinedButton(onClick={add(Kind.TRANSFER)},modifier=Modifier.fillMaxWidth(),enabled=ledger.accounts.count{!it.archived}>=2){Text("Перевод между счетами")}
+                }
+            }
+            item {
+                Panel {
+                    SectionTitle("Последние операции",action="Все",onAction=operations)
+                    if(recent.isEmpty()) Text("Здесь появятся ваши операции.",color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    recent.forEach { EntryRow(ledger,it){openEntry(it)} }
                 }
             }
             item {
@@ -119,13 +139,6 @@ import java.time.temporal.TemporalAdjusters
             }
             item {
                 Panel {
-                    SectionTitle("Последние операции",action="Все",onAction=operations)
-                    if(recent.isEmpty()) Text("Здесь появятся ваши операции.",color=MaterialTheme.colorScheme.onSurfaceVariant)
-                    recent.forEach { EntryRow(ledger,it){openEntry(it)} }
-                }
-            }
-            item {
-                Panel {
                     SectionTitle("Предстоящие платежи",action="Календарь",onAction=calendar)
                     if(planned.isEmpty()) Text("Пока ничего не запланировано.",color=MaterialTheme.colorScheme.onSurfaceVariant)
                     planned.forEach { EntryRow(ledger,it){openEntry(it)} }
@@ -146,7 +159,7 @@ import java.time.temporal.TemporalAdjusters
         if(categories.isEmpty()) Text("Нет операций за выбранный период.",color=MaterialTheme.colorScheme.onSurfaceVariant)
         else {
             Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(6.dp)) {
-                Donut(positive.map{(id,v)->Color(ledger.categories.find{it.id==id}?.color ?: 0xFF218C75) to v},"Диаграмма категорий")
+                Donut(positive.map{(id,v)->Color(ledger.categories.find{it.id==id}?.color ?: 0xFF6143CC) to v},"Диаграмма категорий")
                 Text("Итого",style=MaterialTheme.typography.labelSmall)
                 MoneyText(total,ledger.baseCurrency,large=true)
             }
@@ -161,7 +174,7 @@ import java.time.temporal.TemporalAdjusters
                         if(v>0&&positiveTotal>0) {
                             val share=(v.toDouble()/positiveTotal.toDouble()*100).coerceIn(0.0,100.0)
                             Text(String.format(java.util.Locale("ru"),"%.1f%% положительных сумм",share),style=MaterialTheme.typography.labelSmall)
-                            Progress(v,positiveTotal,Color(category?.color ?: 0xFF218C75))
+                            Progress(v,positiveTotal,Color(category?.color ?: 0xFF6143CC))
                         }
                     }
                 }

@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
+import kotlinx.coroutines.runBlocking
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -13,6 +14,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import ru.epbloger.trachu.MainActivity
 import ru.epbloger.trachu.core.Money
+import ru.epbloger.trachu.data.LedgerStore
 
 @RunWith(AndroidJUnit4::class)
 class NavigationTest {
@@ -27,16 +29,43 @@ class NavigationTest {
         } finally { bitmap.recycle() }
     }
     @Test fun recordExpenseAndNavigateAfterRotation() {
-        rule.waitUntil(20_000){rule.onAllNodesWithTag("add-expense").fetchSemanticsNodes().isNotEmpty()}
-        rule.onNodeWithTag("add-expense").performClick()
-        rule.waitUntil(10_000){rule.onAllNodesWithTag("field:Название").fetchSemanticsNodes().isNotEmpty()}
-        rule.onNodeWithTag("field:Название").performTextInput("Тестовый кошелёк")
-        rule.onNodeWithTag("field:Название").performImeAction()
-        rule.onNodeWithTag("form_save").performClick()
-        rule.waitUntil(15_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
-        rule.waitUntil(15_000){rule.onAllNodesWithText("Тестовый кошелёк").fetchSemanticsNodes().isNotEmpty()}
+        val store=LedgerStore.get(InstrumentationRegistry.getInstrumentation().targetContext)
+        rule.waitUntil(20_000){rule.onAllNodesWithTag("add-expense").fetchSemanticsNodes().isNotEmpty() ||
+            rule.onAllNodesWithTag("onboarding-next").fetchSemanticsNodes().isNotEmpty()}
+        if(rule.onAllNodesWithTag("onboarding-next").fetchSemanticsNodes().isNotEmpty()) {
+            rule.onNodeWithTag("onboarding-restore").assertIsDisplayed()
+            rule.onNodeWithTag("onboarding-restore").performClick()
+            rule.onNodeWithText("Пароль резервной копии").assertExists()
+            rule.onNodeWithText("Отмена").performClick()
+            rule.onNodeWithTag("field:Название счёта").performScrollTo().performTextInput("Тестовый кошелёк")
+            rule.onNodeWithTag("field:Название счёта").performImeAction()
+            rule.onNodeWithTag("field:Начальный остаток").performScrollTo().performTextReplacement("50")
+            rule.onNodeWithTag("field:Начальный остаток").performImeAction()
+            capture("onboarding")
+            rule.onNodeWithTag("onboarding-next").performClick()
+            rule.onNodeWithText("Как пользоваться ТРАЧУ.").assertExists()
+            rule.onNodeWithText("Пропустить обучение").assertExists()
+            rule.onNodeWithTag("form_save").performClick()
+            rule.waitUntil(15_000){rule.onAllNodesWithTag("add-expense").fetchSemanticsNodes().isNotEmpty()}
+            org.junit.Assert.assertEquals(5000L,runBlocking{store.current().accounts.single().openingMinor})
+        } else if(runBlocking{store.current().accounts.none{it.name=="Тестовый кошелёк"}}) {
+            rule.onNodeWithTag("nav-more").performClick()
+            rule.onNodeWithTag("drawer-accounts").performScrollTo().performClick()
+            rule.onNodeWithText("Добавить счёт").performScrollTo().performClick()
+            rule.waitUntil(10_000){rule.onAllNodesWithTag("field:Название").fetchSemanticsNodes().isNotEmpty()}
+            rule.onNodeWithTag("field:Название").performTextInput("Тестовый кошелёк")
+            rule.onNodeWithTag("field:Название").performImeAction()
+            rule.onNodeWithTag("form_save").performClick()
+            rule.waitUntil(15_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+        }
+        rule.waitUntil(15_000){runBlocking{store.current().accounts.any{it.name=="Тестовый кошелёк"}}}
         rule.onNodeWithTag("nav-home").performClick()
-        rule.onNodeWithTag("add-expense").performClick()
+        rule.onNodeWithTag("add-expense").performScrollTo().performClick()
+        val selectedAccount=hasTestTag("choice:Счёт") and hasText("Тестовый кошелёк · RUB",substring=true)
+        if(rule.onAllNodes(selectedAccount).fetchSemanticsNodes().isEmpty()) {
+            rule.onNodeWithTag("choice:Счёт").performScrollTo().performClick()
+            rule.onNodeWithText("Тестовый кошелёк · RUB").performScrollTo().performClick()
+        }
         rule.onNodeWithTag("field:Сумма (RUB)").performTextInput("0")
         rule.onNodeWithTag("field:Сумма (RUB)").performImeAction()
         rule.onNodeWithTag("form_save").performClick()
@@ -52,12 +81,12 @@ class NavigationTest {
         rule.onNodeWithTag("toggle:Разделить по категориям").performScrollTo().performClick()
         rule.onNodeWithTag("field:Часть суммы 1").performScrollTo().performTextReplacement("5")
         rule.onNodeWithTag("field:Часть суммы 1").performImeAction()
-        rule.onNodeWithText("Добавить категорию").performScrollTo().performClick()
+        rule.onNodeWithText("Добавить часть").performScrollTo().performClick()
         rule.onNodeWithText("Заполнить остатком").performScrollTo().performClick()
         rule.onNodeWithTag("field:Часть суммы 2").performScrollTo().assertTextContains("7.34")
         rule.onNodeWithText("Осталось распределить: "+Money.format(0,"RUB")).assertExists()
         capture("split_entry")
-        rule.onNodeWithText("Дата, комментарий, теги и чек").performScrollTo().performClick()
+        rule.onNodeWithText("Комментарий, теги и чек").performScrollTo().performClick()
         rule.onNodeWithTag("toggle:Запланировать").performScrollTo().performClick()
         rule.onNodeWithTag("toggle:Проводить автоматически").performScrollTo().assertIsOff().performClick().assertIsOn()
         rule.onNodeWithTag("toggle:Проводить автоматически").performClick().assertIsOff()
@@ -95,12 +124,32 @@ class NavigationTest {
         rule.onNode(amountMatcher,useUnmergedTree=true).assertIsDisplayed()
         capture("operations_landscape")
         rule.onNodeWithTag("nav-reports").performClick()
-        rule.onNodeWithText("Аналитика").assertExists()
+        rule.onAllNodesWithText("Аналитика").onFirst().assertExists()
         capture("analytics_landscape")
         rule.onNodeWithTag("nav-plan").performClick()
         rule.onNodeWithText("Календарь",substring=false).performScrollTo().performClick()
         rule.onNodeWithTag("calendar-next").performScrollTo().performClick()
         rule.onNodeWithText("Добавить",substring=false).performScrollTo().performClick()
         rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(java.time.YearMonth.now().plusMonths(1).atDay(1).toString())
+        rule.onNodeWithText("Отмена").performClick()
+        rule.onNodeWithTag("nav-more").performClick()
+        rule.onNodeWithTag("drawer-tutorial").performScrollTo().performClick()
+        rule.onNodeWithText("Как пользоваться ТРАЧУ.").assertExists()
+        rule.onNodeWithTag("form_save").performClick()
+        rule.onNodeWithTag("nav-more").performClick()
+        rule.onNodeWithTag("drawer-converter").performScrollTo().performClick()
+        rule.onNodeWithTag("converter-list").assertExists()
+        rule.onNodeWithTag("converter-list").performScrollToNode(hasTestTag("field:Сумма (RUB)"))
+        rule.onNodeWithTag("field:Сумма (RUB)").performTextReplacement("200")
+        rule.onNodeWithTag("field:Сумма (RUB)").performImeAction()
+        // The lazy list can place the result panel below the viewport.
+        rule.onNodeWithTag("converter-list").performScrollToNode(hasTestTag("toggle:Ввести курс вручную"))
+        rule.onNodeWithTag("toggle:Ввести курс вручную").performClick()
+        rule.onNodeWithTag("converter-list").performScrollToNode(hasTestTag("field:USD за 1 RUB"))
+        rule.onNodeWithTag("field:USD за 1 RUB").performTextReplacement("0.01")
+        rule.onNodeWithTag("field:USD за 1 RUB").performImeAction()
+        rule.onNodeWithTag("converter-list").performScrollToNode(hasText(Money.format(200,"USD")))
+        rule.onNodeWithText(Money.format(200,"USD")).assertIsDisplayed()
+        capture("converter_landscape")
     }
 }

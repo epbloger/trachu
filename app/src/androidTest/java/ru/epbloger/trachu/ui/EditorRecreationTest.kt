@@ -10,6 +10,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,6 +31,7 @@ import java.io.File
 class EditorRecreationTest {
     @get:Rule val rule=createAndroidComposeRule<MainActivity>()
     private val context get()=InstrumentationRegistry.getInstrumentation().targetContext
+    @Before fun completeInitialSetup() { runBlocking{Preferences(context).completeOnboarding()} }
     private fun withVm(block:(AppViewModel)->Unit){
         rule.activityRule.scenario.onActivity{block(ViewModelProvider(it)[AppViewModel::class.java])}
     }
@@ -82,7 +84,7 @@ class EditorRecreationTest {
             enter(amountTag,"1234")
             rule.onNodeWithTag("toggle:Разделить по категориям").performScrollTo().performClick().assertIsOn()
             enter("field:Часть суммы 1","1234")
-            rule.onNodeWithText("Дата, комментарий, теги и чек").performScrollTo().performClick()
+            rule.onNodeWithText("Комментарий, теги и чек").performScrollTo().performClick()
             enter("field:Комментарий","Несохранённая покупка",imeDone=false)
             enter("field:Теги","черновик")
             rule.onNodeWithTag("toggle:Запланировать").performScrollTo().performClick().assertIsOn()
@@ -100,6 +102,132 @@ class EditorRecreationTest {
         } finally {
             withVm{it.editor=null;it.receiptRequest=null}
             runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id})}}
+        }
+    }
+
+    @Test fun createCategoryFromEntryKeepsDraftAndSelectsIt(){
+        val store=LedgerStore.get(context)
+        val initial=runBlocking{store.current()}
+        val account=Account(name="Категории ${newId()}",currency=initial.baseCurrency)
+        val name="Покупки ${newId()}"
+        runBlocking{store.change{it.copy(accounts=it.accounts+account)}}
+        try {
+            awaitTag("nav-home")
+            lateinit var vm:AppViewModel
+            withVm{vm=it}
+            rule.waitUntil(20_000){vm.ledger.value?.accounts?.any{it.id==account.id}==true}
+            withVm{it.editor=Editor("entry",draft=EntryDraft().apply{state("accountId"){account.id}})}
+            val amountTag="field:Сумма (${account.currency})"
+            awaitTag(amountTag)
+            enter(amountTag,"12")
+            rule.onNodeWithTag("category-quick:food").performScrollTo().performClick().assertIsSelected()
+            rule.onNodeWithTag("category-quick:transport").performScrollTo().performClick().assertIsSelected()
+            rule.onNodeWithTag("category-quick:food").assertIsNotSelected()
+            rule.onNodeWithTag("field:Поиск категории").assertDoesNotExist()
+            rule.onNodeWithText("Вчера").performScrollTo().performClick()
+            rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(today()-1))
+            rule.onNodeWithText("Комментарий, теги и чек").performScrollTo().performClick()
+            enter("field:Комментарий","Комментарий до создания",imeDone=false)
+            rule.onNodeWithTag("category-create:Категория").performScrollTo().performClick()
+            rule.onNodeWithTag("field:Название категории").performTextReplacement(name)
+            rule.activityRule.scenario.recreate()
+            awaitTag("category-create-confirm")
+            rule.onNodeWithTag("field:Название категории").assertTextContains(name)
+            rule.onNodeWithTag("category-create-confirm").performClick()
+            rule.waitUntil(20_000){vm.ledger.value?.categories?.any{it.name==name}==true}
+            val category=runBlocking{store.current().categories.single{it.name==name}}
+            assertEquals(0xFF6143CCL,category.color)
+            rule.waitUntil(20_000){rule.onAllNodesWithTag("category-create-confirm").fetchSemanticsNodes().isEmpty()}
+            rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertTextContains(name,substring=true)
+            rule.onNodeWithTag("category-quick:transport").assertIsNotSelected()
+            rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains("12")
+            rule.onNodeWithTag("field:Комментарий").performScrollTo().assertTextContains("Комментарий до создания")
+            rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(today()-1))
+            rule.onNodeWithTag("form_save").performClick()
+            rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+            val saved=runBlocking{store.current().entries.single{it.accountId==account.id}}
+            assertEquals(listOf(category.id),saved.splits.map{it.categoryId})
+            assertEquals(Money.parse("12",account.currency),saved.minor)
+            assertEquals(today()-1,saved.day)
+            assertEquals("Комментарий до создания",saved.note)
+        }finally{
+            withVm{it.editor=null}
+            runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id},entries=it.entries.filterNot{e->e.accountId==account.id},categories=it.categories.filterNot{c->c.name==name})}}
+        }
+    }
+
+    @Test fun searchCurrencyAndConvertOnlyAfterConfirmation(){
+        val store=LedgerStore.get(context)
+        val initial=runBlocking{store.current()}
+        val currency=initial.baseCurrency
+        val foreign=if(currency=="USD")"EUR" else "USD"
+        val source=if(currency=="JPY")"USD" else "JPY"
+        val account=Account(name="Валюта ${newId()}",currency=currency)
+        val second=Account(name="Другой счёт ${newId()}",currency=foreign)
+        val third=Account(name="Та же валюта ${newId()}",currency=currency)
+        val ids=setOf(account.id,second.id,third.id)
+        runBlocking{store.change{it.copy(accounts=it.accounts+listOf(account,second,third))}}
+        try{
+            awaitTag("nav-home")
+            lateinit var vm:AppViewModel
+            withVm{vm=it}
+            rule.waitUntil(20_000){vm.ledger.value?.accounts?.map{it.id}?.containsAll(ids)==true}
+            withVm{it.editor=Editor("account")}
+            awaitTag("field:Название")
+            enter("field:Название","Счёт с поиском")
+            rule.onNodeWithTag("currency:Валюта").performScrollTo().performClick()
+            rule.onNodeWithTag("field:Поиск валюты").performTextReplacement("JPY")
+            rule.onNodeWithTag("currency-option:JPY").performClick()
+            rule.onNodeWithTag("currency:Валюта").assertTextContains("JPY",substring=true)
+            rule.onNodeWithTag("field:Название").performScrollTo().assertTextContains("Счёт с поиском")
+            rule.onNodeWithText("Отмена").performClick()
+            rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+            withVm{it.editor=Editor("entry",draft=EntryDraft().apply{state("accountId"){account.id}})}
+            val amountTag="field:Сумма ($currency)"
+            awaitTag(amountTag)
+            enter(amountTag,"10")
+            rule.onNodeWithTag("entry-convert").performScrollTo().performClick()
+            rule.onNodeWithTag("currency:Исходная валюта").performScrollTo().performClick()
+            rule.onNodeWithTag("field:Поиск валюты").performTextReplacement(source)
+            rule.onNodeWithTag("currency-option:$source").performClick()
+            enter("field:Исходная сумма ($source)","1200")
+            rule.onNodeWithTag("toggle:Ручной курс").performScrollTo().performClick()
+            enter("field:$currency за 1 $source","0.025")
+            rule.onNodeWithTag("entry-convert-apply").assertIsEnabled()
+            assertTrue(runBlocking{store.current().entries.none{it.accountId in ids}})
+            rule.activityRule.scenario.recreate()
+            awaitTag("entry-convert-apply")
+            rule.onNodeWithTag("entry-convert-apply").assertIsEnabled().performClick()
+            rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(Money.parse("30",currency),currency))
+            // Same-currency account changes do not alter the amount; cross-currency changes
+            // require a decision, and cancelling preserves the original account and amount.
+            rule.onNodeWithTag("choice:Счёт").performScrollTo().performClick()
+            rule.onNodeWithTag("choice-option:Счёт:${third.id}").performClick()
+            rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(Money.parse("30",currency),currency))
+            rule.onNodeWithTag("choice:Счёт").performScrollTo().performClick()
+            rule.onNodeWithTag("choice-option:Счёт:${second.id}").performClick()
+            awaitTag("entry-convert-apply")
+            rule.onNodeWithTag("field:Исходная сумма ($currency)").assertTextContains(Money.input(Money.parse("30",currency),currency))
+            rule.onNodeWithTag("entry-convert-cancel").performClick()
+            rule.onNodeWithTag("choice:Счёт").performScrollTo().assertTextContains(third.name,substring=true)
+            rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(Money.parse("30",currency),currency))
+            rule.onNodeWithTag("choice:Счёт").performScrollTo().performClick()
+            rule.onNodeWithTag("choice-option:Счёт:${second.id}").performClick()
+            rule.onNodeWithTag("toggle:Ручной курс").performScrollTo().performClick()
+            enter("field:$foreign за 1 $currency","2")
+            rule.onNodeWithTag("entry-convert-apply").performClick()
+            rule.onNodeWithTag("choice:Счёт").performScrollTo().assertTextContains(second.name,substring=true)
+            rule.onNodeWithTag("field:Сумма ($foreign)").performScrollTo().assertTextContains(Money.input(Money.parse("60",foreign),foreign))
+            enter("field:Курс: $currency за 1 $foreign","0.5")
+            rule.onNodeWithTag("form_save").performClick()
+            rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+            val saved=runBlocking{store.current().entries.single{it.accountId in ids}}
+            assertEquals(second.id,saved.accountId)
+            assertEquals(Money.parse("60",foreign),saved.minor)
+            assertEquals(Money.parse("30",currency),saved.baseMinor)
+        }finally{
+            withVm{it.editor=null}
+            runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id in ids},entries=it.entries.filterNot{e->e.accountId in ids})}}
         }
     }
 
@@ -165,6 +293,7 @@ class EditorRecreationTest {
             awaitTag(amountTag)
             rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(1234,account.currency))
             rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(today()))
+            rule.onNodeWithTag("field:Комментарий").performScrollTo().assertTextContains(original.note)
             assertEquals(listOf(original),runBlocking{store.current().entries.filter{it.accountId==account.id}})
             rule.onNodeWithTag("form_save").performClick()
             rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}

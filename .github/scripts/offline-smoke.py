@@ -84,12 +84,25 @@ try:
     adb('shell', 'svc', 'wifi', 'disable')
     adb('shell', 'svc', 'data', 'disable')
     assert_offline('before')
-    start(quick=True)
-    text('Новый счёт')
-    enter('OfflineQA')
-    tap(text('Сохранить'))
-    wait_closed('Новый счёт')
-    wait_node(lambda n: 'OfflineQA' in (n.get('text','') + n.get('content-desc','')), 'saved account')
+    start()
+    first = wait_node(lambda n: n.get('text') in ('Начнём с вашего счёта', 'Обзор') or
+                      n.get('content-desc') in ('Начнём с вашего счёта', 'Обзор'), 'onboarding or overview')
+    if 'Начнём с вашего счёта' in (first.get('text'), first.get('content-desc')):
+        enter('OfflineQA')
+        tap(text('Далее'))
+        text('Как пользоваться ТРАЧУ.')
+        tap(text('Пропустить обучение'))
+        wait_closed('Как пользоваться ТРАЧУ.')
+        text('Обзор')
+    else:
+        # The optional workflow also replays a pinned pre-onboarding APK.
+        adb('shell', 'am', 'force-stop', package)
+        start(quick=True)
+        text('Новый счёт')
+        enter('OfflineQA')
+        tap(text('Сохранить'))
+        wait_closed('Новый счёт')
+        wait_node(lambda n: 'OfflineQA' in (n.get('text','') + n.get('content-desc','')), 'saved account')
     adb('shell', 'am', 'force-stop', package)
     start(quick=True)
     text('Новая операция')
@@ -111,6 +124,7 @@ try:
         rows = [(kind, json.loads(payload)) for kind, payload in db.execute("SELECT kind,payload FROM ledger_records WHERE kind IN ('account','entry')")]
     accounts = [a for kind, a in rows if kind == 'account' and a.get('name') == 'OfflineQA']
     assert len(accounts) == 1, accounts
+    assert accounts[0]['currency'] == 'RUB' and accounts[0].get('openingMinor', 0) == 0, accounts
     entries = [e for kind, e in rows if kind == 'entry' and e.get('accountId') == accounts[0]['id']]
     assert len(entries) == 1 and entries[0]['kind'] == 'EXPENSE' and entries[0]['minor'] == 4250, entries
     assert entries[0].get('status', 'POSTED') == 'POSTED', entries

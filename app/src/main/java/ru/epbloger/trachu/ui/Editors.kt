@@ -4,6 +4,8 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -12,6 +14,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -56,7 +60,7 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
         Field("Название",name,{name=it})
         Choice("Тип",type,AccountType.entries,{it.label()}){type=it}
         if(used)Text("Валюта: $currency. Её нельзя менять после появления операций.")
-        else Choice("Валюта",currency,allCurrencies,{it}){currency=it;opening="0"}
+        else CurrencyPicker("Валюта",currency){if(it!=currency){currency=it;opening="0"}}
         Field("Начальный остаток",opening,{opening=it},true,supporting="Не входит в доходы или расходы. Для кредитного счёта можно указать отрицательное значение.")
         Toggle("Включать в общий баланс",included,{included=it})
         Toggle("Включать в отчёты и бюджеты",statistics,{statistics=it},"Исключение не изменяет операции и остаток счёта.")
@@ -67,14 +71,17 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     if(delete&&current!=null)Confirm("Удалить счёт?","Начальный остаток будет удалён.",{delete=false},{vm.change({l->l.copy(accounts=l.accounts.filterNot{it.id==current.id})},close)},busy)
 }
 
-private val categoryColors=listOf(0xFF218C75L,0xFF4677BDL,0xFF9469B6L,0xFFBF646CL,0xFFB98B40L,0xFF657984L,0xFF54864DL,0xFFB25C32L)
+// UI default for newly created categories only. The serialized model retains its
+// historical default for old backups that omit the color field.
+private const val newCategoryColor=0xFF6143CCL
+private val categoryColors=listOf(newCategoryColor,0xFF218C75L,0xFF4677BDL,0xFF9469B6L,0xFFBF646CL,0xFFB98B40L,0xFF657984L,0xFF54864DL,0xFFB25C32L)
 private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","☕","🎁","✈","📚","🎮","👕","🐾","💼","💳","🚗","💡","🍽","🏋")
 @Composable fun CategoryEditor(ledger: Ledger, current: Category?, busy: Boolean, vm: AppViewModel, close: ()->Unit, draft:EntryDraft) {
     var name by draft.state("name"){current?.name.orEmpty()}
     var income by draft.state("income"){current?.income ?: false}
     var parent by draft.state("parent"){current?.parentId.orEmpty()}
     var icon by draft.state("icon"){current?.icon ?: "•"}
-    var color by draft.state("color"){current?.color ?: categoryColors.first()}
+    var color by draft.state("color"){current?.color ?: newCategoryColor}
     var archived by draft.state("archived"){current?.archived ?: false}
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
@@ -94,7 +101,7 @@ private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","�
             Choice("Родительская категория",parent,parents,{if(it.isEmpty())"Нет (основная)" else ledger.categoryName(it)}){parent=it}
         Choice("Значок",icon,categoryIcons,{it}){icon=it}
         Text("Цвет",style=MaterialTheme.typography.labelLarge)
-        categoryColors.chunked(4).forEach { row->
+        categoryColors.chunked(3).forEach { row->
             Row(horizontalArrangement=Arrangement.spacedBy(4.dp)) {
                 row.forEach { c->
                     FilterChip(selected=color==c,onClick={color=c},label={Text("●",color=Color(c))},modifier=Modifier.weight(1f))
@@ -189,12 +196,44 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
     var error by draft.state("error") { "" }
     var advanced by draft.state("advanced") { original!=null || recurring || forcePlanned }
     var deleteSchedule by draft.state("deleteSchedule") { false }
+    var categoryCreationIndex by draft.state("categoryCreationIndex") { -1 }
+    var categoryCreationName by draft.state("categoryCreationName") { "" }
+    var conversionOpen by draft.state("conversionOpen") { false }
+    var conversionCurrency by draft.state("conversionCurrency") { "" }
+    var conversionAmount by draft.state("conversionAmount") { "" }
+    var conversionManual by draft.state("conversionManual") { false }
+    var conversionRate by draft.state("conversionRate") { "" }
+    var pendingAccountId by draft.state("conversionAccountId") { "" }
     val account=ledger.accounts.find{it.id==accountId}
     val target=ledger.accounts.find{it.id==targetId}
     val cats=ledger.categories.filter{it.income==(kind==Kind.INCOME) && (!it.archived || splitDrafts.any{d->d.category==it.id})}
     val currentRate=account?.let{a->runCatching{Finance.rate(ledger,a.currency,parseDay(day))}.getOrNull()}
     val rateRequired=account!=null && account.currency!=ledger.baseCurrency
-    Form(if(recurring)"Регулярная операция" else if(current==null)"Новая операция" else "Редактировать операцию",close,busy,onSave={
+    fun openConversion(from:String, value:String="", nextAccountId:String="") {
+        conversionCurrency=from
+        conversionAmount=value
+        conversionManual=false
+        conversionRate=""
+        pendingAccountId=nextAccountId
+        conversionOpen=true
+    }
+    fun cancelConversion(){
+        conversionOpen=false
+        pendingAccountId=""
+    }
+    fun selectAccount(id:String) {
+        val changedCurrency=account?.currency!=active.first{it.id==id}.currency
+        if(changedCurrency){
+            amount=""
+            splitDrafts=splitDrafts.map{it.copy(amount="")}
+            explicitRate=""
+            targetAmount=""
+        }
+        accountId=id
+        error=""
+        if(targetId==id){targetId="";targetAmount=""}
+    }
+    Form(if(recurring)"Регулярная операция" else if(current==null)"Новая операция" else "Редактировать операцию",close,busy,spacing=6,compact=true,onSave={
         runCatching {
             val a=requireNotNull(account){"Сначала создайте счёт"}
             val minor=Money.parse(amount,a.currency);require(minor>0){"Сумма должна быть положительной"}
@@ -235,32 +274,56 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             }) { vm.rememberAccount(a.id); close() }
         }.onFailure{error=it.message ?: "Проверьте данные"}
     }) {
-        if(active.isEmpty())Warning("Создайте хотя бы один счёт в разделе «Ещё».")
+        if(active.isEmpty())Warning("Создайте хотя бы один счёт в разделе «Счета».")
         Chips(listOf(Kind.EXPENSE,Kind.INCOME,Kind.TRANSFER),kind,{it.label()}){ k->
             if(k!=kind){kind=k;splitDrafts=listOf(SplitDraft(ledger.categories.firstOrNull{it.income==(k==Kind.INCOME)&&!it.archived}?.id.orEmpty(),""));splitMode=false}
         }
-        Choice("Счёт",accountId,active.map{it.id},{ledger.accountName(it)}){id->if(id!=accountId){accountId=id;explicitRate="";if(targetId==id)targetId=""}}
-        Field("Сумма (${account?.currency ?: ledger.baseCurrency})",amount,{amount=it;error=""},true)
+        Choice("Счёт",accountId,active.map{it.id},{id->active.find{it.id==id}?.let{"${it.name} · ${it.currency}"} ?: "Выбрать счёт"},compact=true){id->
+            if(id!=accountId){
+                val previousCurrency=account?.currency
+                val nextCurrency=active.first{it.id==id}.currency
+                if(previousCurrency!=null&&previousCurrency!=nextCurrency&&amount.isNotBlank())
+                    openConversion(previousCurrency,amount,id)
+                else selectAccount(id)
+            }
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            @Composable fun AmountInput(modifier:Modifier=Modifier) {
+                Field("Сумма (${account?.currency ?: ledger.baseCurrency})",amount,{amount=it;error=""},true,modifier=modifier)
+            }
+            @Composable fun ConvertButton() {
+                if(account!=null)TextButton(onClick={
+                    openConversion(if(account.currency=="USD")"EUR" else "USD")
+                },enabled=!busy,modifier=Modifier.testTag("entry-convert")) {Text("Другая валюта")}
+            }
+            if(maxWidth>=300.dp&&LocalDensity.current.fontScale<=1.2f) {
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)){
+                    AmountInput(Modifier.weight(1f));ConvertButton()
+                }
+            } else Column { AmountInput();ConvertButton() }
+        }
         if(error.isNotEmpty())Warning(error)
+        DateField("Дата",day,{day=it},supporting=null)
+        if(!recurring)Chips(listOf(today(),today()-1),runCatching{parseDay(day)}.getOrDefault(Long.MIN_VALUE),{if(it==today())"Сегодня" else "Вчера"}){day=iso(it)}
         if(kind==Kind.TRANSFER) {
-            Choice("На счёт",targetId,active.filter{it.id!=accountId}.map{it.id},{ledger.accountName(it)}){targetId=it}
+            Choice("На счёт",targetId,active.filter{it.id!=accountId}.map{it.id},{id->active.find{it.id==id}?.let{"${it.name} · ${it.currency}"} ?: "Выбрать счёт"},compact=true){id->
+                if(target?.currency!=active.first{it.id==id}.currency)targetAmount=""
+                targetId=id
+            }
             if(account!=null && target!=null && account.currency!=target.currency)Field("Получено (${target.currency})",targetAmount,{targetAmount=it},true)
         } else {
             val currency=account?.currency ?: ledger.baseCurrency
             val totalMinor=runCatching{Money.parse(amount,currency)}.getOrNull()
             val allocated=runCatching{Money.sum(splitDrafts.map{if(it.amount.isBlank())0L else Money.parse(it.amount,currency).also{value->require(value>=0)}})}.getOrNull()
             val remainder=if(totalMinor!=null&&allocated!=null)runCatching{Money.sub(totalMinor,allocated)}.getOrNull() else null
-            Toggle("Разделить по категориям",splitMode,{value->
-                splitMode=value
-                splitDrafts=if(value)listOf(splitDrafts.first().copy(amount=amount)) else listOf(splitDrafts.first().copy(amount=""))
-            })
             if(splitMode) {
                 if(remainder==null)Text("Введите корректные суммы для расчёта остатка.")
                 else if(remainder<0)Warning("Распределено больше суммы операции")
                 else Text("Осталось распределить: "+Money.format(remainder,currency),style=MaterialTheme.typography.titleMedium)
             }
             splitDrafts.forEachIndexed { i,draft->
-                CategoryChoice(if(splitMode)"Категория ${i+1}" else "Категория",draft.category,cats.filter{c->c.id==draft.category || (!c.archived && splitDrafts.none{it.category==c.id})},ledger){id->
+                CategoryChoice(if(splitMode)"Категория ${i+1}" else "Категория",draft.category,cats.filter{c->c.id==draft.category || (!c.archived && splitDrafts.none{it.category==c.id})},ledger,
+                    onCreate=if(busy)null else ({categoryCreationIndex=i;categoryCreationName=""}),quick=!splitMode){id->
                     splitDrafts=splitDrafts.mapIndexed{j,d->if(j==i)d.copy(category=id) else d}}
                 if(splitMode) {
                     Field("Часть суммы ${i+1}",draft.amount,{v->splitDrafts=splitDrafts.mapIndexed{j,d->if(i==j)d.copy(amount=v) else d}},true)
@@ -268,11 +331,14 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
                     if(splitDrafts.size>1)TextButton(onClick={splitDrafts=splitDrafts.filterIndexed{j,_->j!=i}}){Text("Удалить часть")}
                 }
             }
-            if(splitMode)OutlinedButton(onClick={splitDrafts=splitDrafts+SplitDraft(cats.firstOrNull{c->!c.archived&&splitDrafts.none{it.category==c.id}}?.id.orEmpty(),"")},enabled=cats.any{c->!c.archived&&splitDrafts.none{it.category==c.id}}){Text("Добавить категорию")}
+            if(splitMode)OutlinedButton(onClick={splitDrafts=splitDrafts+SplitDraft(cats.firstOrNull{c->!c.archived&&splitDrafts.none{it.category==c.id}}?.id.orEmpty(),"")},enabled=splitDrafts.none{it.category.isBlank()}){Text("Добавить часть")}
+            Toggle("Разделить по категориям",splitMode,{value->
+                splitMode=value
+                splitDrafts=if(value)listOf(splitDrafts.first().copy(amount=amount)) else listOf(splitDrafts.first().copy(amount=""))
+            })
         }
-        if(!recurring && !forcePlanned) TextButton(onClick={advanced=!advanced}) { Text(if(advanced)"Свернуть детали" else "Дата, комментарий, теги и чек") }
+        if(!recurring && !forcePlanned) TextButton(onClick={advanced=!advanced}) { Text(if(advanced)"Свернуть детали" else "Комментарий, теги и чек") }
         if(advanced) {
-            DateField("Дата",day,{day=it})
             TimeField("Время",time,{time=it})
         }
         if(rateRequired)Field("Курс: ${ledger.baseCurrency} за 1 ${account?.currency}",explicitRate,{explicitRate=it},true,
@@ -308,6 +374,81 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             }
             OutlinedButton(onClick=chooseReceipt,enabled=!busy && receiptIds.size<4){Text("Прикрепить фото чека")}
         }
+    }
+    if(categoryCreationIndex in splitDrafts.indices && kind!=Kind.TRANSFER) {
+        val index=categoryCreationIndex
+        val income=kind==Kind.INCOME
+        val name=categoryCreationName.trim()
+        val duplicate=ledger.categories.any{it.income==income && it.parentId==null && it.name.equals(name,true)}
+        AlertDialog(
+            onDismissRequest={if(!busy)categoryCreationIndex=-1},
+            title={Text(if(income)"Новая категория доходов" else "Новая категория расходов")},
+            text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
+                Field("Название категории",categoryCreationName,{categoryCreationName=it})
+                if(duplicate)Warning("Категория с таким названием уже существует.")
+                else Text("Категория появится в списке и будет выбрана в этой операции.")
+            }},
+            confirmButton={Button(onClick={
+                val category=Category(name=name,income=income,color=newCategoryColor)
+                vm.change({old->
+                    require(old.categories.none{it.income==income&&it.parentId==null&&it.name.equals(name,true)}){"Категория с таким названием уже существует"}
+                    old.copy(categories=old.categories+category)
+                }){
+                    splitDrafts=splitDrafts.mapIndexed{j,d->if(j==index)d.copy(category=category.id) else d}
+                    categoryCreationIndex=-1
+                    categoryCreationName=""
+                }
+            },enabled=!busy&&name.isNotBlank()&&name.length<=160&&!duplicate,modifier=Modifier.testTag("category-create-confirm")){Text("Создать и выбрать")}},
+            dismissButton={TextButton(onClick={categoryCreationIndex=-1},enabled=!busy){Text("Отмена")}}
+        )
+    }
+    if(conversionOpen&&account!=null) {
+        val pendingAccount=active.find{it.id==pendingAccountId}
+        val destination=pendingAccount?.currency ?: account.currency
+        val quote=runCatching{CurrencyConversion.quote(ledger,conversionCurrency,destination,parseDay(day))}.getOrNull()
+        val rate=runCatching{
+            if(conversionCurrency==destination)java.math.BigDecimal.ONE
+            else if(conversionManual)CurrencyConversion.manualRate(conversionRate)
+            else requireNotNull(quote){"Нет сохранённого курса на эту дату. Введите курс вручную."}
+        }
+        val result=runCatching{
+            val source=Money.parse(conversionAmount,conversionCurrency)
+            require(source>0){"Введите положительную сумму"}
+            CurrencyConversion.convert(source,conversionCurrency,destination,rate.getOrThrow()).also{
+                require(it>0){"После округления сумма равна нулю"}
+            }
+        }
+        AlertDialog(
+            onDismissRequest={cancelConversion()},
+            title={Text("Пересчитать в $destination")},
+            text={Column(Modifier.heightIn(max=420.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
+                CurrencyPicker("Исходная валюта",conversionCurrency){conversionCurrency=it;conversionRate=""}
+                Field("Исходная сумма ($conversionCurrency)",conversionAmount,{conversionAmount=it},true)
+                if(conversionCurrency!=destination){
+                    Toggle("Ручной курс",conversionManual,{conversionManual=it})
+                    if(conversionManual)Field("$destination за 1 $conversionCurrency",conversionRate,{conversionRate=it},true)
+                    else if(quote!=null)Text("1 $conversionCurrency = ${quote.toPlainString()} $destination · $day")
+                    else Warning("Нет сохранённого курса на эту дату.")
+                }
+                result.onSuccess{MoneyText(it,destination,large=true)}
+                if(conversionAmount.isNotBlank())result.onFailure{Warning(it.message ?: "Проверьте сумму и курс")}
+                Text("В операцию будет внесена сумма в валюте счёта. Курс конвертации не изменяет сохранённые курсы.",style=MaterialTheme.typography.bodySmall)
+                if(splitMode)Text("После пересчёта проверьте распределение по категориям.",style=MaterialTheme.typography.bodySmall)
+                if(pendingAccount!=null)TextButton(onClick={selectAccount(pendingAccount.id);cancelConversion()}){
+                    Text("Сменить счёт и ввести сумму заново")
+                }
+            }},
+            confirmButton={Button(onClick={
+                result.getOrNull()?.let{minor->
+                    if(pendingAccount!=null)selectAccount(pendingAccount.id)
+                    amount=Money.input(minor,destination)
+                    if(splitMode&&splitDrafts.size==1)splitDrafts=listOf(splitDrafts.first().copy(amount=amount))
+                    cancelConversion()
+                    error=""
+                }
+            },enabled=result.isSuccess&&(pendingAccountId.isBlank()||pendingAccount!=null),modifier=Modifier.testTag("entry-convert-apply")){Text("Применить сумму")}},
+            dismissButton={TextButton(onClick={cancelConversion()},modifier=Modifier.testTag("entry-convert-cancel")){Text("Отмена")}}
+        )
     }
     val previous=originalSchedule
     if(deleteSchedule&&previous!=null)Confirm("Удалить расписание?","Уже созданные операции останутся.",{deleteSchedule=false},{vm.change({l->

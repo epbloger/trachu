@@ -168,6 +168,12 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh api33
+      - name: Verify complete current release evidence and 16 KiB compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 store/rustore/verify-evidence.py release --qa . --apk . --aab . --commit "$(git rev-parse HEAD)" | tee qa/current-evidence.txt
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/release/*.apk | tee qa/zipalign.txt
       - name: Upload APK
         if: always()
         uses: actions/upload-artifact@v4

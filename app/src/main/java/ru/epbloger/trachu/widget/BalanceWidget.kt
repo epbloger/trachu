@@ -34,8 +34,8 @@ class BalanceWidget : GlanceAppWidget() {
         provideContent { Content(context,value) }
     }
     @Composable private fun Content(context: Context,value: String) {
-        val text=ColorProvider(Color(0xFFB9F3D5))
-        Column(GlanceModifier.fillMaxSize().background(Color(0xFF173B35)).padding(12.dp),verticalAlignment=Alignment.CenterVertically) {
+        val text=ColorProvider(Color(0xFFE8E2FC))
+        Column(GlanceModifier.fillMaxSize().background(Color(0xFF27243E)).padding(12.dp),verticalAlignment=Alignment.CenterVertically) {
             Text("ТРАЧУ.",style=TextStyle(color=text,fontSize=13.sp,fontWeight=FontWeight.Bold))
             Text(value,style=TextStyle(color=ColorProvider(Color.White),fontSize=if(value.length>16) 15.sp else 22.sp,fontWeight=FontWeight.Bold),maxLines=2)
             Spacer(GlanceModifier.height(8.dp))
