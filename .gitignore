@@ -6,3 +6,10 @@ local.properties
 *.keystore
 *.iml
 /_site/
+/qa/
+/offline-qa/
+*.trachu
+*.sqlite
+*.db
+*.db-wal
+*.db-shm

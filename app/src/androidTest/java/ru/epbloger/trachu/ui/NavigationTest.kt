@@ -180,7 +180,9 @@ class NavigationTest {
         val rowMatcher=hasTestTag("operation-row") and hasText(expected)
         rule.onNodeWithTag("field:Поиск по сумме, заметке, тегу").performTextInput("12.34")
         rule.onNodeWithTag("field:Поиск по сумме, заметке, тегу").performImeAction()
-        rule.onNodeWithText("Расход",substring=false).performClick()
+        for(kind in listOf("Все","Расход","Доход","Перевод"))
+            rule.onNodeWithTag("operation-main-type:$kind").assertExists()
+        rule.onNodeWithTag("operation-main-type:Расход").assertIsDisplayed().performClick().assertIsSelected()
         rule.onNodeWithTag("operations-list").performScrollToNode(rowMatcher or hasAnyDescendant(rowMatcher))
         rule.onNode(amountMatcher,useUnmergedTree=true).assertIsDisplayed()
         capture("operations")
@@ -198,7 +200,7 @@ class NavigationTest {
         rule.onNodeWithTag("nav-operations").assertIsSelected()
         rule.onNodeWithTag("operations-list").performScrollToNode(hasTestTag("field:Поиск по сумме, заметке, тегу") or hasAnyDescendant(hasTestTag("field:Поиск по сумме, заметке, тегу")))
         rule.onNodeWithTag("field:Поиск по сумме, заметке, тегу").assertTextContains("12.34")
-        rule.onNodeWithText("Расход",substring=false).assertIsSelected()
+        rule.onNodeWithTag("operation-main-type:Расход").assertIsSelected()
         rule.activity.runOnUiThread{rule.activity.requestedOrientation=ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE}
         rule.waitUntil(20_000) {
             rule.activity.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
@@ -207,7 +209,7 @@ class NavigationTest {
         rule.onNodeWithTag("nav-operations").assertIsSelected()
         rule.onNodeWithTag("operations-list").performScrollToNode(hasTestTag("field:Поиск по сумме, заметке, тегу") or hasAnyDescendant(hasTestTag("field:Поиск по сумме, заметке, тегу")))
         rule.onNodeWithTag("field:Поиск по сумме, заметке, тегу").assertTextContains("12.34")
-        rule.onNodeWithText("Расход",substring=false).assertIsSelected()
+        rule.onNodeWithTag("operation-main-type:Расход").assertIsSelected()
         rule.onNodeWithTag("operations-list").performScrollToNode(rowMatcher or hasAnyDescendant(rowMatcher))
         rule.onNode(amountMatcher,useUnmergedTree=true).assertIsDisplayed()
         capture("operations_landscape")

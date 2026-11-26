@@ -16,6 +16,8 @@ on:
       - 'store/rustore/verify-evidence.py'
       - 'store/rustore/test-verify-evidence.py'
       - 'store/rustore/sign-release.ps1'
+      - 'store/rustore/prepare-debug-release.py'
+      - '.github/workflows/publish-debug.yml'
   pull_request:
     paths:
       - 'app/**'
@@ -30,6 +32,8 @@ on:
       - 'store/rustore/verify-evidence.py'
       - 'store/rustore/test-verify-evidence.py'
       - 'store/rustore/sign-release.ps1'
+      - 'store/rustore/prepare-debug-release.py'
+      - '.github/workflows/publish-debug.yml'
 
 permissions:
   contents: read

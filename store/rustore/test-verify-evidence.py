@@ -11,6 +11,9 @@ import zlib
 spec = importlib.util.spec_from_file_location('verify_evidence', pathlib.Path(__file__).with_name('verify-evidence.py'))
 verify = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verify)
+delivery_spec = importlib.util.spec_from_file_location('prepare_debug_release', pathlib.Path(__file__).with_name('prepare-debug-release.py'))
+delivery = importlib.util.module_from_spec(delivery_spec)
+delivery_spec.loader.exec_module(delivery)
 
 
 def png(width, height, pixel):
@@ -121,6 +124,20 @@ class EvidenceTest(unittest.TestCase):
     def test_summary_cannot_hide_failure(self):
         (self.root/'TEST.xml').write_text('<testsuite tests="1" failures="0" errors="0"><testcase classname="Example" name="required"><failure/></testcase></testsuite>')
         with self.assertRaises(ValueError): verify.verify_tests(self.root, 'TEST.xml', 1, ('required',))
+
+    def test_public_xml_omits_logs_and_runner_metadata(self):
+        (self.root/'TEST.xml').write_text('<testsuite tests="1" failures="0" errors="0" hostname="private-runner"><testcase classname="Example" name="required"/><system-out>private output</system-out></testsuite>')
+        xml, count = delivery.reduced_tests(self.root, 'TEST.xml', 'phone')
+        self.assertEqual(count, 1)
+        self.assertIn(b'name="required"', xml)
+        self.assertNotIn(b'private', xml)
+        self.assertNotIn(b'system-out', xml)
+        (self.root/'TEST.xml').write_text('<testsuite tests="1" failures="0" errors="0"><testcase classname="Example" name="required"><failure/></testcase></testsuite>')
+        with self.assertRaises(ValueError): delivery.reduced_tests(self.root, 'TEST.xml', 'phone')
+
+    def test_public_text_rejects_runner_path(self):
+        self.assertEqual(delivery.safe_text('PASS: synthetic ledger'), 'PASS: synthetic ledger')
+        with self.assertRaises(ValueError): delivery.safe_text('/home/runner/work/private/file')
 
 
 if __name__ == '__main__':

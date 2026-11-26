@@ -399,6 +399,7 @@ class EditorRecreationTest {
             rule.onNodeWithTag("field:Название").performScrollTo().assertTextContains("Счёт с поиском")
             rule.onNodeWithText("Отмена").performClick()
             rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+            android.util.Log.i("TrachuQA","Conversion editor: currency search passed; testing stored-rate preview")
             withVm{it.editor=Editor("entry",draft=EntryDraft().apply{state("accountId"){account.id}})}
             val amountTag="field:Сумма ($currency)"
             awaitTag(amountTag)
@@ -414,6 +415,7 @@ class EditorRecreationTest {
             enter("field:Исходная сумма ($source)","0")
             rule.onNodeWithTag("entry-convert-apply").assertIsNotEnabled()
             rule.onNodeWithText("Введите положительную сумму").performScrollTo().assertIsDisplayed()
+            android.util.Log.i("TrachuQA","Conversion editor: invalid amount rejected")
             enter("field:Исходная сумма ($source)","1200")
             // Stored-rate result must be applied in the account currency; the preview
             // alone must not save an entry or replace the previous amount.
@@ -426,6 +428,7 @@ class EditorRecreationTest {
             rule.onNodeWithTag("entry-convert-apply").assertIsEnabled().performClick()
             rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(Money.parse("12",currency),currency))
             assertTrue(runBlocking{store.current().entries.none{it.accountId in ids}})
+            android.util.Log.i("TrachuQA","Conversion editor: stored-rate result applied to draft only")
             rule.onNodeWithTag("entry-convert").performScrollTo().performClick()
             rule.onNodeWithTag("currency:Исходная валюта").performScrollTo().performClick()
             rule.onNodeWithTag("field:Поиск валюты").performTextReplacement(source)
@@ -441,6 +444,7 @@ class EditorRecreationTest {
             rule.onNodeWithTag("currency:Исходная валюта").assertExists()
             rule.onNodeWithTag("entry-convert-apply").assertIsEnabled().performClick()
             rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(Money.parse("30",currency),currency))
+            android.util.Log.i("TrachuQA","Conversion editor: manual-rate draft survives recreation")
             // Same-currency account changes do not alter the amount; cross-currency changes
             // require a decision, and cancelling preserves the original account and amount.
             rule.onNodeWithTag("choice:Счёт").performScrollTo().performClick()

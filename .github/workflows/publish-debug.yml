@@ -1,0 +1,91 @@
+name: Publish reviewed 1.2.0 debug APK
+on:
+  push:
+    tags: ['v1.2.0-debug']
+
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: trachu-debug-1.2.0-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: v1.2.0-debug
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require reviewed tag and full successful integration on exact main
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/tags/$TAG"
+          test "$(git cat-file -t "$GITHUB_REF")" = tag
+          sha=$(git rev-parse "$GITHUB_REF^{commit}")
+          test "$sha" = "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          annotation=$(git for-each-ref --format='%(contents:subject)' "$GITHUB_REF")
+          [[ "$annotation" =~ ^Reviewed\ Android\ integration\ \#([0-9]+)\ QA\ (sha256:[0-9a-f]{64})$ ]]
+          run=${BASH_REMATCH[1]}
+          digest=${BASH_REMATCH[2]}
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" > "$RUNNER_TEMP/run.json"
+          jq -e --arg sha "$sha" --arg repo "$GITHUB_REPOSITORY" '.head_sha==$sha and .head_branch=="main" and .head_repository.full_name==$repo and .path==".github/workflows/android.yml" and .status=="completed" and .conclusion=="success"' "$RUNNER_TEMP/run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/jobs.json"
+          jq -e '[.jobs[] | select(.name=="verify" and .conclusion=="success")] | length==1' "$RUNNER_TEMP/jobs.json"
+          for step in 'Build debug and unsigned release APK/AAB and device tests' 'Run unit tests and lint' 'Instrumented phone, tablet and planner UX tests' 'Android 8 compatibility and planner UX tests' 'Android 13 compatibility, editor and planner UX tests' 'Verify complete current release evidence and 16 KiB compatibility' 'VerifyOnly unsigned APK and AAB against exact commit'; do
+            jq -e --arg step "$step" 'any(.jobs[] | select(.name=="verify") | .steps[]; .name==$step and .conclusion=="success")' "$RUNNER_TEMP/jobs.json"
+          done
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" > "$RUNNER_TEMP/artifacts.json"
+          jq -e --arg digest "$digest" 'any(.artifacts[]; .name=="trachu-verification-reports" and .expired==false and .digest==$digest)' "$RUNNER_TEMP/artifacts.json"
+          if gh release view "$TAG" >/dev/null 2>&1; then echo 'Release already exists; refusing replacement'; exit 1; fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ steps.gate.outputs.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: trachu-*
+          path: evidence
+      - name: Verify exact artifacts and curated QA inputs
+        env:
+          SOURCE_COMMIT: ${{ steps.gate.outputs.sha }}
+          SOURCE_RUN: ${{ steps.gate.outputs.run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 store/rustore/verify-evidence.py release --qa evidence/trachu-verification-reports --apk evidence/trachu-unsigned-release-apk --aab evidence/trachu-unsigned-release-aab --commit "$SOURCE_COMMIT" --require-ux-v12
+          signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          test -x "$signer"
+          "$signer" verify --verbose --print-certs evidence/trachu-debug-apk/app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/debug-signature.txt"
+          python3 store/rustore/prepare-debug-release.py evidence "$SOURCE_COMMIT" "$SOURCE_RUN" "$RUNNER_TEMP/debug-signature.txt" delivery
+      - name: VerifyOnly both original unsigned artifacts
+        env:
+          SOURCE_COMMIT: ${{ steps.gate.outputs.sha }}
+        shell: pwsh
+        run: |
+          & ./store/rustore/sign-release.ps1 -ArtifactDir evidence/trachu-unsigned-release-apk -ExpectedCommit $env:SOURCE_COMMIT -VerifyOnly
+          & ./store/rustore/sign-release.ps1 -ArtifactDir evidence/trachu-unsigned-release-aab -ExpectedCommit $env:SOURCE_COMMIT -VerifyOnly
+      - name: Create reviewed draft, verify uploaded assets, publish and verify public bytes
+        env:
+          SOURCE_COMMIT: ${{ steps.gate.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SOURCE_COMMIT" = "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          gh release create "$TAG" --verify-tag --draft --prerelease --title 'ТРАЧУ. 1.2.0 — тестовая debug-сборка' --notes-file delivery/release-notes.md delivery/trachu-1.2.0-debug.apk delivery/trachu-1.2.0-debug.apk.sha256 delivery/trachu-1.2.0-qa.zip
+          gh release download "$TAG" --dir uploaded
+          for name in trachu-1.2.0-debug.apk trachu-1.2.0-debug.apk.sha256 trachu-1.2.0-qa.zip; do cmp "delivery/$name" "uploaded/$name"; done
+          gh release edit "$TAG" --draft=false --prerelease
+          mkdir public-download
+          for name in trachu-1.2.0-debug.apk trachu-1.2.0-debug.apk.sha256 trachu-1.2.0-qa.zip; do
+            curl --fail --silent --show-error --location --retry 4 --retry-all-errors "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$name" --output "public-download/$name"
+            cmp "delivery/$name" "public-download/$name"
+          done
+          (cd public-download && sha256sum -c trachu-1.2.0-debug.apk.sha256)

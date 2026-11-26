@@ -3,6 +3,7 @@
 No permission is granted/revoked by adb: both decisions are made through the
 system PermissionController UI. Only a small synthetic verdict is retained.
 """
+import os
 import pathlib
 import re
 import subprocess
@@ -218,6 +219,7 @@ def scenario(apk, allow):
 
 def main():
     require(len(sys.argv) == 3 and sys.argv[2] in ('33', '36'), 'Usage: notification-smoke.py APK 33|36')
+    require(os.environ.get('GITHUB_ACTIONS') == 'true', 'Destructive notification smoke is restricted to GitHub Actions CI')
     apk, api = pathlib.Path(sys.argv[1]), sys.argv[2]
     require(apk.is_file(), 'APK missing')
     require(adb('shell', 'getprop', 'ro.build.version.sdk').strip() == api, 'Wrong emulator SDK')

@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.core.*
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable fun Operations(ledger: Ledger, open: (Entry)->Unit, monthStart:Int=1) {
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf("Все") }
@@ -52,7 +53,9 @@ import ru.epbloger.trachu.core.*
              val primaryTypes=listOf("Все","Расход","Доход","Перевод")
              val otherTypes=listOf("Возврат","План","Погашение долга","Возврат долга вам","Получение займа","Выдача займа")
              var moreTypes by rememberSaveable{mutableStateOf(false)}
-             Chips(primaryTypes,filter,{it}){filter=it}
+             FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                 primaryTypes.forEach{kind->FilterChip(selected=filter==kind,onClick={filter=kind},label={Text(kind)},modifier=Modifier.testTag("operation-main-type:$kind"))}
+             }
              Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                  TextButton(onClick={moreTypes=true},modifier=Modifier.testTag("operation-more-types")){
                      Text(if(filter in otherTypes)"Тип: $filter ▾" else "Другие типы ▾")

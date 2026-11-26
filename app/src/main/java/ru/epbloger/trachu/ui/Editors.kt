@@ -47,6 +47,35 @@ private fun requireEditorNote(note:String) {
     require(note.trim().length<=8_000){"Комментарий: не более 8000 символов"}
 }
 
+private data class EntryConversionPreview(val quote:java.math.BigDecimal?,val minor:Long?,val error:String?)
+
+// Keep all potentially throwing parsers and branching calculation outside the
+// composable. Inline try/runCatching around snapshot reads can leave compiler-
+// generated Compose groups unbalanced when the user enters invalid text.
+private fun entryConversionPreview(ledger:Ledger,from:String,to:String,dateText:String,amountText:String,
+    manual:Boolean,rateText:String):EntryConversionPreview {
+    val quote=runCatching{CurrencyConversion.quote(ledger,from,to,parseDay(dateText))}.getOrNull()
+    return try {
+        val source=editorAmount(amountText,from,"Исходная сумма")
+        require(source>0){"Введите положительную сумму"}
+        val converted=when {
+            from==to->source
+            manual->{
+                val rate=editorInput("Ручной курс: введите положительное число."){CurrencyConversion.manualRate(rateText)}
+                editorInput("Исходная сумма: результат пересчёта слишком велик."){CurrencyConversion.convert(source,from,to,rate)}
+            }
+            else->{
+                val date=editorDate(dateText)
+                require(quote!=null){"На выбранную дату нет курса. Введите курс вручную."}
+                editorInput("Исходная сумма: результат пересчёта слишком велик."){CurrencyConversion.convertStored(ledger,source,from,to,date)}
+            }
+        }
+        require(converted>0){"После округления сумма равна нулю"}
+        EntryConversionPreview(quote,converted,null)
+    } catch(e:kotlinx.coroutines.CancellationException){throw e}
+    catch(e:Exception){EntryConversionPreview(quote,null,editorMessage(e,"Проверьте исходную сумму и курс."))}
+}
+
 private val currencies = Currency.getAvailableCurrencies().map { it.currencyCode }.filter { runCatching { Money.digits(it) }.isSuccess }.sorted()
 private val commonCurrencies = listOf("RUB","USD","EUR","CNY","KZT","BYN","TRY","JPY","GBP","AED")
 val allCurrencies = (commonCurrencies+currencies).distinct()
@@ -500,66 +529,53 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
     if(conversionOpen&&account!=null) {
         val pendingAccount=active.find{it.id==pendingAccountId}
         val destination=pendingAccount?.currency ?: account.currency
-        val quote=runCatching{CurrencyConversion.quote(ledger,conversionCurrency,destination,parseDay(day))}.getOrNull()
-        val result=runCatching{
-                val source=editorAmount(conversionAmount,conversionCurrency,"Исходная сумма")
-            require(source>0){"Введите положительную сумму"}
-            val converted=when {
-                conversionCurrency==destination->source
-                conversionManual->{
-                    val manual=editorInput("Ручной курс: введите положительное число."){CurrencyConversion.manualRate(conversionRate)}
-                    editorInput("Исходная сумма: результат пересчёта слишком велик."){CurrencyConversion.convert(source,conversionCurrency,destination,manual)}
-                }
-                else->{
-                    val date=editorDate(day)
-                    require(quote!=null){"На выбранную дату нет курса. Введите курс вручную."}
-                    editorInput("Исходная сумма: результат пересчёта слишком велик."){CurrencyConversion.convertStored(ledger,source,conversionCurrency,destination,date)}
-                }
-            }
-            converted.also{
-                require(it>0){"После округления сумма равна нулю"}
-            }
-        }
-        val convertedMinor=result.getOrNull()
-        val conversionError=result.exceptionOrNull()?.let{editorMessage(it,"Проверьте исходную сумму и курс.")}
-        AlertDialog(
-            onDismissRequest={cancelConversion()},
-            title={Text("Пересчитать в $destination")},
-            text={Column(Modifier.heightIn(max=420.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
-                if(pendingAccountId.isNotBlank())Text("Исходная валюта: $conversionCurrency")
-                else CurrencyPicker("Исходная валюта",conversionCurrency){conversionCurrency=it;conversionRate=""}
-                Field("Исходная сумма ($conversionCurrency)",conversionAmount,{conversionAmount=it},true)
-                if(conversionCurrency!=destination){
-                    Toggle("Ручной курс",conversionManual,{conversionManual=it})
-                    if(conversionManual)Field("$destination за 1 $conversionCurrency",conversionRate,{conversionRate=it},true)
-                    else if(quote!=null)Text("1 $conversionCurrency ≈ ${quote.toPlainString()} $destination · $day")
-                    else Warning("Нет сохранённого курса на эту дату.")
-                }
-                if(convertedMinor!=null)MoneyText(convertedMinor,destination,modifier=Modifier.testTag("entry-convert-result"),large=true)
-                else if(conversionAmount.isNotBlank()&&conversionError!=null)Warning(conversionError)
-                Text("В операцию будет внесена сумма в валюте счёта. Курс конвертации не изменяет сохранённые курсы.",style=MaterialTheme.typography.bodySmall)
-                if(splitMode)Text("После пересчёта проверьте распределение по категориям.",style=MaterialTheme.typography.bodySmall)
-                if(pendingAccount!=null)TextButton(onClick={selectAccount(pendingAccount.id);cancelConversion()}){
-                    Text("Сменить счёт и ввести сумму заново")
-                }
-            }},
-            confirmButton={Button(onClick={
-                result.getOrNull()?.let{minor->
-                    if(pendingAccount!=null)selectAccount(pendingAccount.id)
-                    amount=Money.input(minor,destination)
-                    if(splitMode&&splitDrafts.size==1)splitDrafts=listOf(splitDrafts.first().copy(amount=amount))
-                    cancelConversion()
-                    error=""
-                }
-            },enabled=result.isSuccess&&(pendingAccountId.isBlank()||pendingAccount!=null),modifier=Modifier.testTag("entry-convert-apply")){Text("Применить сумму")}},
-            dismissButton={TextButton(onClick={cancelConversion()},modifier=Modifier.testTag("entry-convert-cancel")){Text("Отмена")}}
-        )
+        EntryConversionDialog(ledger,conversionCurrency,destination,day,conversionAmount,conversionManual,conversionRate,
+            changingAccount=pendingAccountId.isNotBlank(),accountAvailable=pendingAccount!=null,splitMode=splitMode,
+            onCurrency={conversionCurrency=it;conversionRate=""},onAmount={conversionAmount=it},
+            onManual={conversionManual=it},onRate={conversionRate=it},onCancel={cancelConversion()},
+            onReset={if(pendingAccount!=null){selectAccount(pendingAccount.id);cancelConversion()}},
+            onApply={minor->
+                if(pendingAccount!=null)selectAccount(pendingAccount.id)
+                amount=Money.input(minor,destination)
+                if(splitMode&&splitDrafts.size==1)splitDrafts=listOf(splitDrafts.first().copy(amount=amount))
+                cancelConversion()
+                error=""
+            })
     }
     val previous=originalSchedule
     if(deleteSchedule&&previous!=null)Confirm("Удалить расписание?","Уже созданные операции останутся.",{deleteSchedule=false},{vm.change({l->
         require(l.schedules.find{it.id==previous.id}==previous){"Расписание изменилось. Откройте его снова."}
         l.copy(schedules=l.schedules.filterNot{it.id==previous.id})
     },close)},busy)
+}
+
+@Composable private fun EntryConversionDialog(ledger:Ledger,from:String,to:String,day:String,amount:String,manual:Boolean,rate:String,
+    changingAccount:Boolean,accountAvailable:Boolean,splitMode:Boolean,onCurrency:(String)->Unit,onAmount:(String)->Unit,
+    onManual:(Boolean)->Unit,onRate:(String)->Unit,onCancel:()->Unit,onReset:()->Unit,onApply:(Long)->Unit) {
+    val preview=remember(ledger,from,to,day,amount,manual,rate){entryConversionPreview(ledger,from,to,day,amount,manual,rate)}
+    val minor=preview.minor
+    val quote=preview.quote
+    val error=preview.error
+    AlertDialog(onDismissRequest=onCancel,title={Text("Пересчитать в $to")},
+        text={Column(Modifier.heightIn(max=420.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
+            if(changingAccount)Text("Исходная валюта: $from")
+            else CurrencyPicker("Исходная валюта",from,onCurrency)
+            Field("Исходная сумма ($from)",amount,onAmount,true)
+            if(from!=to){
+                Toggle("Ручной курс",manual,onManual)
+                if(manual)Field("$to за 1 $from",rate,onRate,true)
+                else if(quote!=null)Text("1 $from ≈ ${quote.toPlainString()} $to · $day")
+                else Warning("Нет сохранённого курса на эту дату.")
+            }
+            if(minor!=null)MoneyText(minor,to,modifier=Modifier.testTag("entry-convert-result"),large=true)
+            else if(amount.isNotBlank()&&error!=null)Warning(error)
+            Text("В операцию будет внесена сумма в валюте счёта. Курс конвертации не изменяет сохранённые курсы.",style=MaterialTheme.typography.bodySmall)
+            if(splitMode)Text("После пересчёта проверьте распределение по категориям.",style=MaterialTheme.typography.bodySmall)
+            if(accountAvailable)TextButton(onClick=onReset){Text("Сменить счёт и ввести сумму заново")}
+        }},
+        confirmButton={Button(onClick={if(minor!=null)onApply(minor)},enabled=minor!=null&&(!changingAccount||accountAvailable),
+            modifier=Modifier.testTag("entry-convert-apply")){Text("Применить сумму")}},
+        dismissButton={TextButton(onClick=onCancel,modifier=Modifier.testTag("entry-convert-cancel")){Text("Отмена")}})
 }
 
 @Composable private fun EntryAmountInput(label:String,amount:String,onChange:(String)->Unit,guidedHint:Boolean,modifier:Modifier=Modifier){
