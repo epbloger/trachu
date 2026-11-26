@@ -154,7 +154,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
                 val matches=options.filter{title(it).contains(query.trim(),ignoreCase=true)}.sortedBy{title(it)}
                 LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("category-list")) {
                     items(matches,key={it.id}) { category ->
-                        Row(Modifier.fillMaxWidth().clickable{onChoose(category.id);open=false}.semantics{selected=category.id==value}.padding(vertical=8.dp),
+                        Row(Modifier.fillMaxWidth().testTag("category-option:${category.id}").clickable{onChoose(category.id);open=false}.semantics{selected=category.id==value}.padding(vertical=8.dp),
                             verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                             CategoryDot(category)
                             Text(title(category),Modifier.weight(1f),style=MaterialTheme.typography.bodyLarge)

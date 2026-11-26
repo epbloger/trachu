@@ -24,6 +24,8 @@ jobs:
       - uses: actions/configure-pages@v5
       - name: Generate legal pages from canonical documents
         run: node site/build.cjs
+      - name: Verify pages, assets and synchronized legal documents
+        run: node site/check.cjs
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

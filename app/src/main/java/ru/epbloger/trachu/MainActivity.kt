@@ -167,7 +167,8 @@ private data class Editor(val type:String,val id:String?=null,val kind:Kind=Kind
     }
     fun choose(t:Tab){tab=t;if(t==Tab.MORE)more=MorePage.INDEX}
     BoxWithConstraints(Modifier.fillMaxSize()){
-        val rail=maxWidth>=680.dp
+        // Keep every navigation destination reachable on short landscape phones.
+        val rail=maxWidth>=680.dp && maxHeight>=460.dp
         val largeFont=LocalDensity.current.fontScale>=1.5f
         Row(Modifier.fillMaxSize()){
             if(rail)NavigationRail(modifier=Modifier.fillMaxHeight().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start+WindowInsetsSides.Top+WindowInsetsSides.Bottom)),

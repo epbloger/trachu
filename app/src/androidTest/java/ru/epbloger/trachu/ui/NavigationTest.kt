@@ -46,8 +46,8 @@ class NavigationTest {
         rule.onNodeWithTag("category-choice:Категория").performScrollTo().performClick()
         rule.onNodeWithTag("field:Поиск категории").performTextInput("Транспорт")
         rule.onNodeWithTag("field:Поиск категории").performImeAction()
-        rule.onNodeWithTag("category-list").performScrollToNode(hasText("Транспорт") or hasAnyDescendant(hasText("Транспорт")))
-        rule.onNodeWithText("Транспорт").performClick()
+        rule.onNodeWithTag("category-list").performScrollToNode(hasTestTag("category-option:transport"))
+        rule.onNodeWithTag("category-option:transport").assertTextContains("Транспорт").performClick()
         // The switch itself is the actionable node; its label is exposed as semantics.
         rule.onNodeWithTag("toggle:Разделить по категориям").performScrollTo().performClick()
         rule.onNodeWithTag("field:Часть суммы 1").performScrollTo().performTextReplacement("5")
