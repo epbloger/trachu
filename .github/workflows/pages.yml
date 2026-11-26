@@ -1,13 +1,5 @@
 name: Website
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'site/**'
-      - 'docs/PRIVACY_POLICY.md'
-      - 'docs/TERMS.md'
-      - 'docs/DEVELOPER.md'
-      - '.github/workflows/pages.yml'
   workflow_dispatch:
 permissions:
   contents: read

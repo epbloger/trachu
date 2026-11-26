@@ -56,8 +56,10 @@ private fun entryRateOrNull(ledger:Ledger,currency:String,day:Long?):String? =
 
 private fun entrySplitRemainder(amount:String,currency:String,parts:List<SplitDraft>):Long? = runCatching {
     val total=Money.parse(amount,currency)
-    val allocated=Money.sum(parts.map{part->
-        if(part.amount.isBlank())0L else Money.parse(part.amount,currency).also{require(it>=0)}
+    val allocated=Money.sum(parts.mapIndexed{index,part->
+        if(part.amount.isBlank())0L else Money.parse(part.amount,currency).also{
+            require(it>=0){"Часть суммы "+(index+1)+": сумма не может быть отрицательной"}
+        }
     })
     Money.sub(total,allocated)
 }.getOrNull()
@@ -94,6 +96,7 @@ private val commonCurrencies = listOf("RUB","USD","EUR","CNY","KZT","BYN","TRY",
 val allCurrencies = (commonCurrencies+currencies).distinct()
 
 @Composable fun AccountEditor(ledger: Ledger, current: Account?, busy: Boolean, vm: AppViewModel, close: ()->Unit, draft:EntryDraft) {
+    val original = draft.state("originalAccount"){current}.value
     var name by draft.state("name"){current?.name.orEmpty()}
     var type by draft.state("type"){current?.type ?: AccountType.CASH}
     var currency by draft.state("currency"){current?.currency ?: ledger.baseCurrency}
@@ -103,15 +106,24 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     var archived by draft.state("archived"){current?.archived ?: false}
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
-    val used=current!=null && (ledger.entries.any{it.accountId==current.id || it.targetAccountId==current.id} || ledger.debts.any{it.accountId==current.id} || ledger.schedules.any{it.template.accountId==current.id || it.template.targetAccountId==current.id})
-    Form(if(current==null)"Новый счёт" else "Настройки счёта",close,busy,validationError=error,onSave={
+    val used=original!=null && (ledger.entries.any{it.accountId==original?.id || it.targetAccountId==original?.id} || ledger.debts.any{it.accountId==original?.id} || ledger.schedules.any{it.template.accountId==original?.id || it.template.targetAccountId==original?.id})
+    // A non-zero opening balance is already denominated in this account's currency.
+    // Do not silently discard it or reinterpret it when changing the currency.
+    val currencyLocked=used || original?.openingMinor?.let{it!=0L}==true || current?.openingMinor?.let{it!=0L}==true
+    Form(if(original==null)"Новый счёт" else "Настройки счёта",close,busy,validationError=error,onSave={
         runCatching {
             requireEditorName(name,"Название счёта")
-            val a=Account(current?.id ?: newId(),name.trim(),currency,type,editorAmount(opening,currency,"Начальный остаток"),archived,included,statistics,current?.sortOrder ?: ((ledger.accounts.maxOfOrNull{it.sortOrder} ?: -1)+1))
+            val a=Account(original?.id ?: newId(),name.trim(),currency,type,editorAmount(opening,currency,"Начальный остаток"),archived,included,statistics,original?.sortOrder ?: ((ledger.accounts.maxOfOrNull{it.sortOrder} ?: -1)+1))
             vm.change({ l->
+                if(original!=null)require(l.accounts.find{it.id==original?.id}==original){"Счёт изменился. Откройте его снова."}
                 require(l.accounts.none{it.id!=a.id && it.name.equals(a.name,true)}){"Счёт с таким названием уже существует"}
-                if(current!=null && currency!=current.currency) require(l.entries.none{it.accountId==current.id || it.targetAccountId==current.id} && l.debts.none{it.accountId==current.id} && l.schedules.none{it.template.accountId==current.id || it.template.targetAccountId==current.id}){"Валюта: счёт уже используется, менять валюту нельзя"}
-                if(a.archived && current?.archived!=true) {
+                if(original!=null && currency!=original?.currency) require(
+                    l.accounts.find{it.id==original?.id}?.openingMinor==0L &&
+                    l.entries.none{it.accountId==original?.id || it.targetAccountId==original?.id} &&
+                    l.debts.none{it.accountId==original?.id} &&
+                    l.schedules.none{it.template.accountId==original?.id || it.template.targetAccountId==original?.id}
+                ){"Валюта: нельзя менять валюту счёта с начальным остатком или финансовой историей"}
+                if(a.archived && original?.archived!=true) {
                     require(l.schedules.none{it.enabled && (it.template.accountId==a.id || it.template.targetAccountId==a.id)}){"Сначала приостановите регулярные операции этого счёта"}
                     require(l.entries.none{it.status==EntryStatus.PLANNED && (it.accountId==a.id || it.targetAccountId==a.id)}){"Сначала обработайте запланированные операции"}
                     require(l.debts.none{it.accountId==a.id && Finance.debtRemaining(l,it)>0}){"Сначала погасите задолженность на этом счёте"}
@@ -122,23 +134,25 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     }) {
         Field("Название",name,{name=it;error=""})
         Choice("Тип",type,AccountType.entries,{it.label()}){type=it}
-        if(used)Text("Валюта: $currency. Её нельзя менять после появления операций.")
-        else CurrencyPicker("Валюта",currency){if(it!=currency){currency=it;opening="0";error=""}}
+        if(currencyLocked)Text("Валюта: $currency. Её нельзя менять, пока у счёта есть начальный остаток или операции.")
+        else CurrencyPicker("Валюта",currency){if(it!=currency){currency=it;error=""}}
         Field("Начальный остаток",opening,{opening=it;error=""},true,supporting="Не входит в доходы или расходы. Для кредитного счёта можно указать отрицательное значение.")
         Toggle("Включать в общий баланс",included,{included=it})
         Toggle("Включать в отчёты и бюджеты",statistics,{statistics=it},"Исключение не изменяет операции и остаток счёта.")
-        if(current!=null)Toggle("Архивировать",archived,{archived=it},"История и остаток сохраняются. Архивный счёт скрыт в формах новых операций.")
-        if(current!=null&&!used)TextButton(onClick={delete=true}){Text("Удалить счёт",color=MaterialTheme.colorScheme.error)}
+        if(original!=null)Toggle("Архивировать",archived,{archived=it},"История и остаток сохраняются. Архивный счёт скрыт в формах новых операций.")
+        if(original!=null&&!used)TextButton(onClick={delete=true}){Text("Удалить счёт",color=MaterialTheme.colorScheme.error)}
     }
-    if(delete&&current!=null)Confirm("Удалить счёт?","Начальный остаток будет удалён.",{delete=false},{vm.change({l->
-        require(l.entries.none{it.accountId==current.id||it.targetAccountId==current.id}&&
-            l.debts.none{it.accountId==current.id}&&l.schedules.none{it.template.accountId==current.id||it.template.targetAccountId==current.id}){"Счёт уже используется. Его можно архивировать."}
-        l.copy(accounts=l.accounts.filterNot{it.id==current.id})
+    if(delete&&original!=null)Confirm("Удалить счёт?","Начальный остаток будет удалён.",{delete=false},{delete=false;vm.change({l->
+        require(l.accounts.find{it.id==original?.id}==original){"Счёт изменился. Откройте его снова."}
+        require(l.entries.none{it.accountId==original?.id||it.targetAccountId==original?.id}&&
+            l.debts.none{it.accountId==original?.id}&&l.schedules.none{it.template.accountId==original?.id||it.template.targetAccountId==original?.id}){"Счёт уже используется. Его можно архивировать."}
+        l.copy(accounts=l.accounts.filterNot{it.id==original?.id})
     },close)},busy)
 }
 
 private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","☕","🎁","✈","📚","🎮","👕","🐾","💼","💳","🚗","💡","🍽","🏋")
 @Composable fun CategoryEditor(ledger: Ledger, current: Category?, busy: Boolean, vm: AppViewModel, close: ()->Unit, draft:EntryDraft) {
+    val original = draft.state("originalCategory"){current}.value
     var name by draft.state("name"){current?.name.orEmpty()}
     var income by draft.state("income"){current?.income ?: false}
     var parent by draft.state("parent"){current?.parentId.orEmpty()}
@@ -148,14 +162,15 @@ private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","�
     var archived by draft.state("archived"){current?.archived ?: false}
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
-    val used=current!=null && (ledger.entries.any{e->e.splits.any{it.categoryId==current.id}} || ledger.categories.any{it.parentId==current.id} || ledger.budgets.any{it.categoryId==current.id} || ledger.schedules.any{it.template.splits.any{sp->sp.categoryId==current.id}})
-    val parents=listOf("")+ledger.categories.filter{it.id!=current?.id && it.income==income && it.parentId==null && !it.archived}.map{it.id}
-    Form(if(current==null)"Новая категория" else "Изменить категорию",close,busy,validationError=error,onSave={
+    val used=original!=null && (ledger.entries.any{e->e.splits.any{it.categoryId==original?.id}} || ledger.categories.any{it.parentId==original?.id} || ledger.budgets.any{it.categoryId==original?.id} || ledger.schedules.any{it.template.splits.any{sp->sp.categoryId==original?.id}})
+    val parents=listOf("")+ledger.categories.filter{it.id!=original?.id && it.income==income && it.parentId==null && !it.archived}.map{it.id}
+    Form(if(original==null)"Новая категория" else "Изменить категорию",close,busy,validationError=error,onSave={
         runCatching {
             requireEditorName(name,"Название категории")
-            require(parent.isBlank()||parent in parents||parent==current?.parentId){"Выберите основную категорию"}
-            val c=Category(current?.id ?: newId(),name.trim(),income,parent.ifBlank{null},color,icon,archived)
+            require(parent.isBlank()||parent in parents||parent==original?.parentId){"Выберите основную категорию"}
+            val c=Category(original?.id ?: newId(),name.trim(),income,parent.ifBlank{null},color,icon,archived)
             vm.change({ l->
+                if(original!=null)require(l.categories.find{it.id==original?.id}==original){"Категория изменилась. Откройте её снова."}
                 if(c.parentId!=null)require(l.categories.any{it.id==c.parentId&&it.id!=c.id&&it.parentId==null&&it.income==c.income}){"Основная категория больше недоступна. Выберите другую."}
                 l.copy(categories=l.categories.filterNot{it.id==c.id}+c)
             },close)
@@ -164,7 +179,7 @@ private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","�
         Field("Название",name,{name=it;error=""})
         if(!used)Chips(listOf(false,true),income,{if(it)"Доход" else "Расход"}){income=it;parent="";error=""}
         else Text(if(income)"Категория доходов" else "Категория расходов")
-        if(current==null || ledger.categories.none{it.parentId==current.id})
+        if(original==null || ledger.categories.none{it.parentId==original.id})
             Choice("Родительская категория",parent,parents,{if(it.isEmpty())"Нет (основная)" else ledger.categoryName(it)}){parent=it;error=""}
         Choice("Значок",icon,categoryIcons,{it}){icon=it}
         Text("Цвет",style=MaterialTheme.typography.labelLarge)
@@ -176,13 +191,14 @@ private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","�
                 }
             }
         }
-        if(current!=null)Toggle("Архивировать",archived,{archived=it},"Старые операции сохранят категорию.")
-        if(current!=null&&!used)TextButton(onClick={delete=true}){Text("Удалить категорию",color=MaterialTheme.colorScheme.error)}
+        if(original!=null)Toggle("Архивировать",archived,{archived=it},"Старые операции сохранят категорию.")
+        if(original!=null&&!used)TextButton(onClick={delete=true}){Text("Удалить категорию",color=MaterialTheme.colorScheme.error)}
     }
-    if(delete&&current!=null)Confirm("Удалить категорию?","Категория не используется в операциях.",{delete=false},{vm.change({l->
-        require(l.entries.none{e->e.splits.any{it.categoryId==current.id}}&&l.categories.none{it.parentId==current.id}&&
-            l.budgets.none{it.categoryId==current.id}&&l.schedules.none{e->e.template.splits.any{it.categoryId==current.id}}){"Категория уже используется. Её можно архивировать."}
-        l.copy(categories=l.categories.filterNot{it.id==current.id})
+    if(delete&&original!=null)Confirm("Удалить категорию?","Категория не используется в операциях.",{delete=false},{delete=false;vm.change({l->
+        require(l.categories.find{it.id==original?.id}==original){"Категория изменилась. Откройте её снова."}
+        require(l.entries.none{e->e.splits.any{it.categoryId==original?.id}}&&l.categories.none{it.parentId==original?.id}&&
+            l.budgets.none{it.categoryId==original?.id}&&l.schedules.none{e->e.template.splits.any{it.categoryId==original?.id}}){"Категория уже используется. Её можно архивировать."}
+        l.copy(categories=l.categories.filterNot{it.id==original?.id})
     },close)},busy)
 }
 
@@ -234,8 +250,8 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
 @Composable fun EntryEditor(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, initialKind: Kind, current: Entry?=null, schedule: Schedule?=null, recurring: Boolean=false, close: ()->Unit, forcePlanned: Boolean=false, draft: EntryDraft, chooseReceipt: ()->Unit, initialDay:Long?=null) {
     val guidedHint=LocalGuidedEditorHint.current
     // Keep the snapshot from opening the draft, even if the ledger emits a newer entry.
-    val original by draft.state("originalEntry") { schedule?.template ?: current }
-    val originalSchedule by draft.state("originalSchedule"){schedule}
+    val original = draft.state("originalEntry") { schedule?.template ?: current }.value
+    val originalSchedule = draft.state("originalSchedule"){schedule}.value
     val active=ledger.accounts.filter{!it.archived || it.id==original?.accountId || it.id==original?.targetAccountId}.sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name})
     val defaultAccount=active.find{it.id==original?.accountId} ?: active.find{it.id==settings.lastAccount} ?: active.firstOrNull()
     var accountId by draft.state("accountId") { defaultAccount?.id.orEmpty() }

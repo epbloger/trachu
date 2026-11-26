@@ -110,23 +110,32 @@ private fun PlannerTab.group()=when(this){
                 items(ledger.debts,key={it.id}){d->
                     val a=ledger.accounts.first{it.id==d.accountId}
                     val left=Finance.debtRemaining(ledger,d)
+                    val unpaidInterest=debtUnpaidInterestEstimate(ledger,d)
+                    val canPay=debtHasOutstandingAmount(ledger,d)
                     Panel {
                         SectionTitle(d.person,if(d.owedByMe)"Я должен" else "Мне должны",action="Изменить"){editDebt(d)}
                         MoneyText(left,a.currency,large=true,color=if(d.owedByMe)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
                         Text("Исходная сумма: "+Money.format(d.principalMinor,a.currency))
                         Progress(d.principalMinor-left,d.principalMinor)
-                        if(d.annualPercent!="0") {
+                        if(plannerHasInterestRate(d)) {
                             Text("Годовая ставка: ${d.annualPercent}%")
                             runCatching{Finance.estimatedInterest(ledger,d,30)}.getOrNull()?.let{Text("Оценка процентов за 30 дней: "+Money.format(it,a.currency),style=MaterialTheme.typography.bodySmall)}
                             val accrued=runCatching{Finance.accruedInterest(ledger,d)}.getOrNull()
                             val paid=runCatching{Finance.paidInterest(ledger,d)}.getOrNull()
                             if(accrued!=null)Text("Начислено по оценке: "+Money.format(accrued,a.currency),style=MaterialTheme.typography.bodySmall)
                             if(paid!=null)Text("Фактически учтённые проценты: "+Money.format(paid,a.currency),style=MaterialTheme.typography.bodySmall)
+                            if(unpaidInterest>0)Text("Осталось процентов по оценке: "+Money.format(unpaidInterest,a.currency),style=MaterialTheme.typography.bodySmall)
+                            if(d.openedDay==null)Text("Дата начала не указана — фактические проценты можно записать вручную.",style=MaterialTheme.typography.bodySmall)
                             Text("Простая оценка Actual/365, без банковского графика и капитализации.",style=MaterialTheme.typography.bodySmall)
                         }
-                        d.dueDay?.let{Text("Срок: "+dayLabel(it),color=if(it<today()&&left>0)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)}
+                        d.dueDay?.let{Text("Срок: "+dayLabel(it),color=if(it<today()&&canPay)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)}
                         if(d.note.isNotBlank())Text(d.note)
-                        Button(onClick={payDebt(d)},enabled=left>0,modifier=Modifier.fillMaxWidth().testTag("debt-pay:${d.id}")){Text(if(d.owedByMe)"Погасить долг" else "Получить возврат")}
+                        Button(onClick={payDebt(d)},enabled=canPay,modifier=Modifier.fillMaxWidth().testTag("debt-pay:${d.id}")){
+                            Text(when {
+                                left>0 -> if(d.owedByMe)"Погасить долг" else "Получить возврат"
+                                else -> "Учесть проценты"
+                            })
+                        }
                     }
                 }
             }
@@ -169,7 +178,7 @@ private fun PlannerTab.group()=when(this){
                                     cells.chunked(7).forEach{week->
                                         Row(horizontalArrangement=Arrangement.spacedBy(2.dp)){
                                             (week+List(7-week.size){null}).forEach{d->
-                                                val count=calendar.count{it.day==d}+ledger.debts.count{it.dueDay==d && Finance.debtRemaining(ledger,it)>0}+ledger.goals.count{it.dueDay==d}
+                                                val count=calendar.count{it.day==d}+ledger.debts.count{it.dueDay==d && debtHasOutstandingAmount(ledger,it)}+ledger.goals.count{it.dueDay==d}
                                                 if(d==null)Spacer(Modifier.weight(1f))
                                                 else Column(Modifier.weight(1f).background(if(d==selectedDay)MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,MaterialTheme.shapes.small).clickable{selectedDay=d}.padding(vertical=8.dp),horizontalAlignment=Alignment.CenterHorizontally){
                                                     Text(LocalDate.ofEpochDay(d).dayOfMonth.toString(),style=MaterialTheme.typography.bodyMedium)
@@ -185,7 +194,7 @@ private fun PlannerTab.group()=when(this){
                 }
                 item{Text(dayLabel(selectedDay),style=MaterialTheme.typography.titleLarge)}
                 val selected=calendar.filter{it.day==selectedDay}.sortedBy{it.timeMinutes}
-                val obligations=ledger.debts.filter{it.dueDay==selectedDay&&Finance.debtRemaining(ledger,it)>0}
+                val obligations=ledger.debts.filter{it.dueDay==selectedDay&&debtHasOutstandingAmount(ledger,it)}
                 val goals=ledger.goals.filter{it.dueDay==selectedDay}
                 if(selected.isEmpty() && obligations.isEmpty() && goals.isEmpty())item{Text("Нет событий в этот день.")}
                 items(selected,key={it.id}){e->Panel {
@@ -223,6 +232,7 @@ private fun PlannerTab.group()=when(this){
 }
 
 @Composable fun BudgetEditor(ledger:Ledger,current:Budget?,vm:AppViewModel,busy:Boolean,close:()->Unit, draft:EntryDraft){
+    val original = draft.state("originalBudget"){current}.value
     var name by draft.state("name"){current?.name ?: "Бюджет месяца"}
     var category by draft.state("category"){current?.categoryId.orEmpty()}
     var amount by draft.state("amount"){current?.let{Money.input(it.monthlyMinor,ledger.baseCurrency)}.orEmpty()}
@@ -230,14 +240,15 @@ private fun PlannerTab.group()=when(this){
     var carry by draft.state("carry"){current?.rollover ?: false}
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
-    Form(if(current==null)"Новый бюджет" else "Редактировать бюджет",close,busy,validationError=error,onSave={
+    Form(if(original==null)"Новый бюджет" else "Редактировать бюджет",close,busy,validationError=error,onSave={
         runCatching{
             require(name.isNotBlank()){"Введите название бюджета"}
             val limit=plannerAmount(amount,ledger.baseCurrency,"Введите корректный месячный лимит")
             require(limit>0){"Месячный лимит должен быть больше нуля"}
-            val b=Budget(current?.id ?: newId(),name.trim(),category.ifBlank{null},limit,plannerDate(start),carry)
+            val b=Budget(original?.id ?: newId(),name.trim(),category.ifBlank{null},limit,plannerDate(start),carry)
             runCatching{Finance.budget(ledger,b,today()).remaining}.getOrElse{throw IllegalArgumentException("Слишком большой лимит или период бюджета")}
             vm.change({l->
+                if(original!=null)require(l.budgets.find{it.id==original?.id}==original){"Бюджет изменился. Откройте его снова."}
                 require(b.categoryId==null||l.categories.any{it.id==b.categoryId&&!it.income}){"Выберите категорию расходов"}
                 l.copy(budgets=l.budgets.filterNot{it.id==b.id}+b)
             },close)
@@ -249,13 +260,16 @@ private fun PlannerTab.group()=when(this){
         DateField("Начало",start,{start=it},supporting="ГГГГ-ММ-ДД (учитывается месяц)")
         Toggle("Переносить остаток",carry,{carry=it})
         Text("Предупреждения при 80%, 100% и превышении лимита.")
-        if(current!=null)TextButton(onClick={delete=true}){Text("Удалить бюджет",color=MaterialTheme.colorScheme.error)}
+        if(original!=null)TextButton(onClick={delete=true}){Text("Удалить бюджет",color=MaterialTheme.colorScheme.error)}
     }
-    if(delete && current!=null)Confirm("Удалить бюджет?","Операции не будут удалены.",{delete=false},{vm.change({l->l.copy(budgets=l.budgets.filterNot{it.id==current.id})},close)},busy)
+    if(delete && original!=null)Confirm("Удалить бюджет?","Операции не будут удалены.",{delete=false},{delete=false;vm.change({l->
+        require(l.budgets.find{it.id==original?.id}==original){"Бюджет изменился. Откройте его снова."}
+        l.copy(budgets=l.budgets.filterNot{it.id==original?.id})
+    },close)},busy)
 }
 
 @Composable fun GoalEditor(ledger:Ledger,current:Goal?,vm:AppViewModel,busy:Boolean,close:()->Unit, draft:EntryDraft){
-    val original by draft.state("originalGoal"){current}
+    val original = draft.state("originalGoal"){current}.value
     var name by draft.state("name"){current?.name.orEmpty()}
     var currency by draft.state("currency"){current?.currency ?: ledger.baseCurrency}
     var target by draft.state("target"){current?.let{Money.input(it.targetMinor,it.currency)}.orEmpty()}
@@ -263,7 +277,7 @@ private fun PlannerTab.group()=when(this){
     var due by draft.state("due"){current?.dueDay?.let(::iso).orEmpty()}
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
-    Form(if(current==null)"Новая цель" else "Редактировать цель",close,busy,validationError=error,onSave={
+    Form(if(original==null)"Новая цель" else "Редактировать цель",close,busy,validationError=error,onSave={
         runCatching{
             require(name.isNotBlank()){"Введите название цели"}
             val targetMinor=plannerAmount(target,currency,"Введите корректную целевую сумму")
@@ -273,7 +287,12 @@ private fun PlannerTab.group()=when(this){
             val dueDay=due.trim().takeIf{it.isNotEmpty()}?.let{plannerDate(it)}
             val g=Goal(original?.id ?: newId(),name.trim(),currency,targetMinor,savedMinor,dueDay,original?.adjustments.orEmpty())
             vm.change({l->
-                if(original!=null)require(l.goals.find{it.id==original?.id}==original){"Цель изменилась. Откройте её снова."}
+                if(original!=null){
+                    require(l.goals.find{it.id==original.id}==original){"Цель изменилась. Откройте её снова."}
+                    require(g.currency==original.currency||original.savedMinor==0L&&original.adjustments.isEmpty()){
+                        "Нельзя менять валюту цели с накоплениями или их историей"
+                    }
+                }
                 var balance=g.savedMinor
                 g.adjustments.forEach{
                     balance=runCatching{Money.add(balance,it.minor)}.getOrElse{throw IllegalArgumentException("Слишком большая сумма накоплений")}
@@ -284,28 +303,51 @@ private fun PlannerTab.group()=when(this){
         }.onFailure{error=it.message ?: "Проверьте данные"}
     }){
         Field("Название",name,{name=it})
-        if(current==null||current.adjustments.isEmpty())Choice("Валюта",currency,allCurrencies,{it}){currency=it}
-        else Text("Валюта: $currency")
+        if(original==null||original.savedMinor==0L&&original.adjustments.isEmpty())CurrencyPicker("Валюта",currency){currency=it;error=""}
+        else Text("Валюта: $currency. Её нельзя менять, пока есть накопления или их история.")
         Field("Целевая сумма",target,{target=it},true)
-        Field("Начальные накопления",saved,{saved=it},true,supporting=if(current!=null)"Сумма на момент создания цели" else null)
-        if(current!=null) {
-            Text("Текущий прогресс: "+Money.format(Finance.goalSaved(current),current.currency),style=MaterialTheme.typography.titleMedium)
-            if(current.adjustments.isNotEmpty())Text("Последние изменения",style=MaterialTheme.typography.titleSmall)
-            current.adjustments.takeLast(10).asReversed().forEach { a ->
-                Text(dayLabel(a.day)+" · "+Money.format(a.minor,current.currency)+" · "+a.note,style=MaterialTheme.typography.bodySmall)
+        Field("Начальные накопления",saved,{saved=it},true,supporting=if(original!=null)"Сумма на момент создания цели" else null)
+        if(original!=null) {
+            Text("Текущий прогресс: "+Money.format(Finance.goalSaved(original),original.currency),style=MaterialTheme.typography.titleMedium)
+            if(original.adjustments.isNotEmpty())Text("Последние изменения",style=MaterialTheme.typography.titleSmall)
+            original.adjustments.takeLast(10).asReversed().forEach { a ->
+                Text(dayLabel(a.day)+" · "+Money.format(a.minor,original.currency)+" · "+a.note,style=MaterialTheme.typography.bodySmall)
             }
         }
         DateField("Срок (необязательно)",due,{due=it})
         Text("Накопления в цели не меняют баланс счетов.",style=MaterialTheme.typography.bodySmall)
-        if(current!=null)TextButton(onClick={delete=true}){Text("Удалить цель",color=MaterialTheme.colorScheme.error)}
+        if(original!=null)TextButton(onClick={delete=true}){Text("Удалить цель",color=MaterialTheme.colorScheme.error)}
     }
-    if(delete&&current!=null)Confirm("Удалить цель?","Счета и операции не изменятся.",{delete=false},{vm.change({l->l.copy(goals=l.goals.filterNot{it.id==current.id})},close)},busy)
+    if(delete&&original!=null)Confirm("Удалить цель?","Счета и операции не изменятся.",{delete=false},{delete=false;vm.change({l->
+        require(l.goals.find{it.id==original?.id}==original){"Цель изменилась. Откройте её снова."}
+        l.copy(goals=l.goals.filterNot{it.id==original?.id})
+    },close)},busy)
 }
 
 private fun plannerAmount(value:String,currency:String,message:String):Long =
     runCatching{Money.parse(value,currency)}.getOrElse{throw IllegalArgumentException(message)}
 private fun plannerDate(value:String):Long =
     runCatching{parseDay(value)}.getOrElse{throw IllegalArgumentException("Введите дату в формате ГГГГ-ММ-ДД")}
+internal fun plannerRateOrNull(value:String,label:String):String? {
+    val clean=value.trim().replace(',','.')
+    if(clean.isEmpty())return null
+    val rate=runCatching{BigDecimal(clean)}.getOrElse{throw IllegalArgumentException(label+": введите корректный курс")}
+    require(rate.signum()>0){label+": курс должен быть больше нуля"}
+    require(rate.scale() in -12..24&&rate.precision()<=40&&rate<=BigDecimal("1000000000000")){
+        label+": курс слишком большой или содержит слишком много знаков"
+    }
+    return rate.toPlainString()
+}
+private fun plannerHasInterestRate(debt:Debt):Boolean =
+    runCatching{BigDecimal(debt.annualPercent).signum()>0}.getOrDefault(false)
+private fun debtUnpaidInterestEstimate(ledger:Ledger,debt:Debt):Long = runCatching{
+    val accrued=Finance.accruedInterest(ledger,debt) ?: return@runCatching 0L
+    val paid=Finance.paidInterest(ledger,debt)
+    if(accrued>paid)Money.sub(accrued,paid) else 0L
+}.getOrDefault(0L)
+private fun debtHasOutstandingAmount(ledger:Ledger,debt:Debt):Boolean =
+    Finance.debtRemaining(ledger,debt)>0 ||
+        (plannerHasInterestRate(debt)&&(debt.openedDay==null||debtUnpaidInterestEstimate(ledger,debt)>0))
 
 @Composable fun GoalFundingEditor(goal:Goal,vm:AppViewModel,busy:Boolean,close:()->Unit,draft:EntryDraft,withdraw:Boolean){
     val currency by draft.state("fundCurrency"){goal.currency}
@@ -342,6 +384,7 @@ private fun plannerDate(value:String):Long =
 }
 
 @Composable fun DebtEditor(ledger:Ledger,current:Debt?,vm:AppViewModel,busy:Boolean,close:()->Unit, draft:EntryDraft){
+    val original = draft.state("originalDebt"){current}.value
     var person by draft.state("person"){current?.person.orEmpty()}
     var owed by draft.state("owed"){current?.owedByMe ?: true}
     var accountId by draft.state("accountId"){current?.accountId ?: ledger.accounts.firstOrNull{!it.archived}?.id.orEmpty()}
@@ -352,11 +395,12 @@ private fun plannerDate(value:String):Long =
     var note by draft.state("note"){current?.note.orEmpty()}
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
-    val paid=current!=null && ledger.entries.any{it.debtId==current.id && it.kind in setOf(Kind.DEBT_IN,Kind.DEBT_OUT)}
+    val paid=original!=null && ledger.entries.any{it.debtId==original?.id && it.kind in setOf(Kind.DEBT_IN,Kind.DEBT_OUT)}
+    val hasOpeningEntry=original!=null && ledger.entries.any{it.debtId==original?.id && it.kind in setOf(Kind.LOAN_IN,Kind.LOAN_OUT)}
     var recordOpening by draft.state("recordOpening"){false}
     var opened by draft.state("opened"){iso(today())}
     var openingRate by draft.state("openingRate"){""}
-    Form(if(current==null)"Новый долг" else "Редактировать долг",close,busy,validationError=error,onSave={
+    Form(if(original==null)"Новый долг" else "Редактировать долг",close,busy,validationError=error,onSave={
         runCatching{
             require(person.isNotBlank()){"Укажите, кому вы должны или кто должен вам"}
             require(person.trim().length<=160){"Имя не должно быть длиннее 160 символов"}
@@ -366,35 +410,46 @@ private fun plannerDate(value:String):Long =
             require(percent >= BigDecimal.ZERO && percent <= BigDecimal("1000")){"Годовая ставка должна быть от 0 до 1000%"}
             val normalized=percent.stripTrailingZeros()
             require(normalized.scale() in -3..6){"Укажите годовую ставку с точностью до 6 знаков после запятой"}
-            val openedDay=current?.openedDay ?: if(current==null&&recordOpening)plannerDate(opened) else null
+            val openedDay=original?.openedDay ?: if(original==null&&recordOpening)plannerDate(opened) else null
             require(openedDay==null || openedDay<=today()){"Дата займа не может быть в будущем"}
             val principal=plannerAmount(amount,a.currency,"Введите корректную сумму долга")
             require(principal>0){"Сумма долга должна быть больше нуля"}
-            val d=Debt(current?.id ?: newId(),person.trim(),a.id,owed,principal,normalized.toPlainString(),
+            val openingRateValue=if(recordOpening&&a.currency!=ledger.baseCurrency)
+                plannerRateOrNull(openingRate,"Курс получения / выдачи") else null
+            val d=Debt(original?.id ?: newId(),person.trim(),a.id,owed,principal,normalized.toPlainString(),
                 due.trim().takeIf{it.isNotEmpty()}?.let(::plannerDate),note,openedDay)
             vm.change({l->
-                require(l.accounts.any{it.id==d.accountId}){"Выберите счёт"}
-                val updated=l.copy(debts=l.debts.filterNot{it.id==d.id}+d)
-                require(Finance.debtRemaining(updated,d)>=0){"Сумма долга меньше уже погашенной суммы"}
-                if(current==null && openedDay!=null) {
-                    val entry=Finance.makeEntry(updated,if(owed)Kind.LOAN_IN else Kind.LOAN_OUT,a.id,d.principalMinor,openedDay,
-                        note=note,explicitRate=openingRate.trim().replace(',','.').ifBlank{null},debtId=d.id,principalMinor=d.principalMinor)
+                val latestAccount=requireNotNull(l.accounts.find{it.id==d.accountId}){"Выберите счёт"}
+                require(latestAccount.currency==a.currency){"Валюта счёта изменилась. Откройте долг снова."}
+                if(original!=null) return@change Finance.editDebt(l,original,d)
+                require(!latestAccount.archived){"Выберите активный счёт"}
+                val updated=l.copy(debts=l.debts+d)
+                if(openedDay!=null) {
+                    require(latestAccount.currency==l.baseCurrency||openingRateValue!=null||
+                        Finance.rate(updated,latestAccount.currency,openedDay)!=null){
+                        "Курс получения / выдачи: укажите курс или добавьте его в разделе «Валюты»"
+                    }
+                    val entry=runCatching{
+                        Finance.makeEntry(updated,if(owed)Kind.LOAN_IN else Kind.LOAN_OUT,latestAccount.id,d.principalMinor,openedDay,
+                            note=note,explicitRate=openingRateValue,debtId=d.id,principalMinor=d.principalMinor)
+                    }.getOrElse{throw IllegalArgumentException("Не удалось пересчитать сумму займа по выбранному курсу")}
                     Finance.putEntry(updated,entry)
                 } else updated
             },close)
         }.onFailure{error=it.message ?: "Проверьте данные"}
     }){
         Field(if(owed)"Кому я должен" else "Кто должен мне",person,{person=it;error=""})
-        if(!paid && current?.openedDay==null){
+        if(!paid && original?.openedDay==null){
             Chips(listOf(true,false),owed,{if(it)"Я должен" else "Мне должны"}){owed=it}
             AccountChoice("Счёт погашения",accountId,ledger.accounts.filter{!it.archived||it.id==accountId}){accountId=it}
         }else Text((if(owed)"Я должен" else "Мне должны")+" · "+ledger.accountName(accountId))
-        if(current?.openedDay==null)Field("Сумма долга (${account?.currency ?: ledger.baseCurrency})",amount,{amount=it;error=""},true)
-        else Text("Основная сумма: "+Money.format(current.principalMinor,requireNotNull(account).currency))
+        if(original?.openedDay==null)Field("Сумма долга (${account?.currency ?: ledger.baseCurrency})",amount,{amount=it;error=""},true)
+        else if(account!=null)Text("Основная сумма: "+Money.format(original?.principalMinor ?: 0L,account.currency))
+        else Text("Счёт недоступен. Закройте форму и откройте долг снова.",color=MaterialTheme.colorScheme.error)
         Field("Годовая ставка, % (необязательно)",interest,{interest=it;error=""},true)
         DateField("Срок (необязательно)",due,{due=it})
         Field("Комментарий (необязательно)",note,{note=it},singleLine=false)
-        if(current==null) {
+        if(original==null) {
             Toggle("Записать получение или выдачу денег",recordOpening,{recordOpening=it},"Выключите для существующей задолженности, уже учтённой в начальном остатке.")
             if(recordOpening) {
                 DateField("Дата получения / выдачи",opened,{opened=it})
@@ -402,19 +457,25 @@ private fun plannerDate(value:String):Long =
             }
         }
         Text("Основной долг не считается доходом или расходом; проценты учитываются при погашении.")
-        if(current!=null&&!paid)TextButton(onClick={delete=true}){Text("Удалить долг",color=MaterialTheme.colorScheme.error)}
+        if(original!=null&&!paid)TextButton(onClick={delete=true}){Text("Удалить долг",color=MaterialTheme.colorScheme.error)}
     }
-    if(delete&&current!=null)Confirm("Удалить долг?","Запись задолженности будет удалена.",{delete=false},{vm.change({l->l.copy(debts=l.debts.filterNot{it.id==current.id},entries=l.entries.filterNot{it.debtId==current.id})},close)},busy)
+    if(delete&&original!=null)Confirm("Удалить долг?",
+        if(hasOpeningEntry)"Связанная запись получения или выдачи денег тоже будет удалена, и остаток счёта изменится."
+        else "Запись задолженности будет удалена.",
+        {delete=false},{delete=false;vm.change({l->
+            require(l.debts.find{it.id==original?.id}==original){"Долг изменился. Откройте его снова."}
+            Finance.deleteUnpaidDebt(l,requireNotNull(original?.id))
+        },close)},busy)
 }
 
 @Composable fun DebtPaymentEditor(ledger:Ledger,debt:Debt,vm:AppViewModel,busy:Boolean,close:()->Unit,current:Entry?=null, draft:EntryDraft){
-    val original by draft.state("originalPayment"){current}
-    val originalDebt by draft.state("originalDebt"){debt}
+    val original = draft.state("originalPayment"){current}.value
+    val originalDebt = draft.state("originalDebt"){debt}.value
     val a=ledger.accounts.first{it.id==debt.accountId}
     val remaining=Money.add(Finance.debtRemaining(ledger,debt),current?.principalMinor ?: 0)
     var principal by draft.state("principal"){Money.input(original?.principalMinor ?: remaining,a.currency)}
     var interest by draft.state("interest"){original?.let{Money.input(it.minor-it.principalMinor,a.currency)} ?: "0"}
-    var showInterest by draft.state("showInterest"){debt.annualPercent!="0" || (original?.let{it.minor>it.principalMinor}==true)}
+    var showInterest by draft.state("showInterest"){plannerHasInterestRate(debt) || (original?.let{it.minor>it.principalMinor}==true)}
     var day by draft.state("day"){iso(original?.day ?: today())}
     var note by draft.state("note"){original?.note.orEmpty()}
     var rate by draft.state("rate"){original?.rate.orEmpty()}
@@ -424,7 +485,8 @@ private fun plannerDate(value:String):Long =
     val total=runCatching{
         val p=Money.parse(principal,currency)
         val i=if(showInterest&&interest.isNotBlank())Money.parse(interest,currency) else 0L
-        require(p>=0&&i>=0)
+        require(p>=0){"Сумма погашения не может быть отрицательной"}
+        require(i>=0){"Проценты не могут быть отрицательными"}
         Money.add(p,i)
     }.getOrNull()
     Form(if(original!=null)"Изменить платёж" else if(debt.owedByMe)"Погасить долг" else "Получить возврат",close,busy,
@@ -441,17 +503,23 @@ private fun plannerDate(value:String):Long =
             require(date<=today()){"Дата платежа не может быть в будущем"}
             require(debt.openedDay==null||date>=debt.openedDay){"Дата платежа не может быть раньше даты займа"}
             require(note.trim().length<=8000){"Комментарий не должен быть длиннее 8000 символов"}
+            val explicitRate=if(currency!=ledger.baseCurrency)plannerRateOrNull(rate,"Курс погашения") else null
             vm.change({l->
                 val latest=requireNotNull(l.debts.find{it.id==debt.id}){"Долг удалён"}
                 require(latest==originalDebt){"Долг изменился. Откройте платёж снова."}
-                if(original!=null)require(l.entries.find{it.id==original?.id}==original){"Платёж изменился. Откройте его снова."}
+                if(original!=null)require(l.entries.find{it.id==original.id}==original){"Платёж изменился. Откройте его снова."}
                 val account=requireNotNull(l.accounts.find{it.id==latest.accountId}){"Счёт удалён"}
                 require(account.currency==currency){"Валюта счёта изменилась. Откройте платёж снова."}
                 require(!account.archived||original!=null){"Сначала восстановите счёт из архива"}
                 val available=Money.add(Finance.debtRemaining(l,latest),original?.principalMinor ?: 0)
                 require(p<=available){"Основной платёж больше остатка долга"}
-                val e=Finance.makeEntry(l,if(latest.owedByMe)Kind.DEBT_OUT else Kind.DEBT_IN,account.id,sum,date,note=note,
-                    explicitRate=rate.trim().replace(',','.').ifBlank{null},debtId=latest.id,principalMinor=p,id=original?.id ?: newId(),allowArchived=original!=null)
+                require(account.currency==l.baseCurrency||explicitRate!=null||Finance.rate(l,account.currency,date)!=null){
+                    "Курс погашения: укажите курс или добавьте его в разделе «Валюты»"
+                }
+                val e=runCatching{
+                    Finance.makeEntry(l,if(latest.owedByMe)Kind.DEBT_OUT else Kind.DEBT_IN,account.id,sum,date,note=note,
+                        explicitRate=explicitRate,debtId=latest.id,principalMinor=p,id=original?.id ?: newId(),allowArchived=original!=null)
+                }.getOrElse{throw IllegalArgumentException("Не удалось пересчитать платёж по выбранному курсу")}
                 Finance.putEntry(l,e)
             },close)
         }.onFailure{error=it.message ?: "Проверьте данные"}

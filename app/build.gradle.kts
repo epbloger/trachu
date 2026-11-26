@@ -7,12 +7,13 @@ plugins {
     id("androidx.room")
 }
 
-// A release build never serves ads until its own RSYA banner is configured explicitly.
-val trachuAdsEnabled = providers.gradleProperty("trachuAdsEnabled").orElse("false").get()
+// Production placement ID is an app identifier, not a signing key or API secret.
+// The debug build always uses Yandex's public demo block. Gradle properties can override release defaults.
+val trachuAdsEnabled = providers.gradleProperty("trachuAdsEnabled").orElse("true").get()
 require(trachuAdsEnabled == "true" || trachuAdsEnabled == "false") {
     "trachuAdsEnabled must be true or false"
 }
-val trachuBannerId = providers.gradleProperty("trachuBannerId").orElse("").get().trim()
+val trachuBannerId = providers.gradleProperty("trachuBannerId").orElse("R-M-20514950-1").get().trim()
 require(trachuBannerId.isEmpty() || Regex("R-M-[0-9]+-[0-9]+").matches(trachuBannerId)) {
     "trachuBannerId must be an RSYA banner ID (R-M-...-...)"
 }

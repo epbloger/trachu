@@ -24,7 +24,7 @@ private fun currencyTitle(code: String): String {
 }
 
 private fun converterDayOrNull(date:String):Long? = runCatching {
-    parseDay(date).also{require(it<=today())}
+    parseDay(date).also{require(it<=today()){"Дата курса не может быть в будущем"}}
 }.getOrNull()
 
 private fun converterQuote(ledger:Ledger,from:String,to:String,day:Long?):java.math.BigDecimal? =

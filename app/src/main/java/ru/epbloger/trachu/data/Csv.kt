@@ -125,6 +125,16 @@ object Csv {
         }
         return LedgerRecords.decode(records)
     }
+    /** Replace only a genuinely empty ledger; never discard goals, budgets, rates or custom categories. */
+    fun importFull(existing: Ledger, incoming: Ledger): Ledger {
+        val defaults=Ledger.initial().categories.sortedBy{it.id}
+        val hasUserData=existing.baseCurrency!=Ledger.initial().baseCurrency || existing.accounts.isNotEmpty() || existing.entries.isNotEmpty() ||
+            existing.budgets.isNotEmpty() || existing.debts.isNotEmpty() || existing.goals.isNotEmpty() ||
+            existing.schedules.isNotEmpty() || existing.rates.isNotEmpty() || existing.receipts.isNotEmpty() ||
+            existing.categories.sortedBy{it.id}!=defaults
+        return if(hasUserData)merge(existing,incoming) else incoming.validated()
+    }
+
     fun merge(existing: Ledger, incoming: Ledger): Ledger {
         require(existing.baseCurrency == incoming.baseCurrency) { "Основные валюты различаются" }
         fun <T> mergeList(kind: String, old: List<T>, new: List<T>, id: (T) -> String): List<T> {
