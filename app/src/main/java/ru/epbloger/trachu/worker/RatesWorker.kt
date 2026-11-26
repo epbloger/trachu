@@ -15,15 +15,18 @@ import java.util.concurrent.TimeUnit
 class RatesWorker(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
     override suspend fun doWork():Result = try {
         val preferences=Preferences(applicationContext)
-        if(preferences.current().automaticRates) {
+        if(preferences.current().let{it.automaticRates&&it.onboardingCompleted}) {
             val store=LedgerStore.get(applicationContext)
-            val base=store.current().baseCurrency
-            val published=withContext(Dispatchers.IO){ExchangeRates.fetch(base,today())}
-            if(preferences.current().automaticRates) {
-                store.change { current ->
-                    if(current.baseCurrency==base)Finance.mergePublishedRates(current,base,published) else current
+            val ledger=store.current()
+            if(ledger.accounts.isNotEmpty()) {
+                val base=ledger.baseCurrency
+                val published=withContext(Dispatchers.IO){ExchangeRates.fetch(base,today())}
+                if(preferences.current().automaticRates) {
+                    store.change { current ->
+                        if(current.baseCurrency==base&&current.accounts.isNotEmpty())Finance.mergePublishedRates(current,base,published) else current
+                    }
+                    refreshWidgets(applicationContext)
                 }
-                refreshWidgets(applicationContext)
             }
         }
         Result.success()

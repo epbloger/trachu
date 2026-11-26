@@ -27,8 +27,10 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
@@ -128,6 +130,9 @@ class MainActivity : FragmentActivity() {
             val busy by vm.busy.collectAsStateWithLifecycle()
             val loadingError by vm.loadingError.collectAsStateWithLifecycle()
             val unlocked by vm.unlocked.collectAsStateWithLifecycle()
+            // Only the tutorial step is saveable; no financial fields or passwords.
+            var tutorialStep by rememberSaveable{mutableStateOf<TutorialStep?>(null)}
+            LaunchedEffect(settings?.protected,unlocked){if(settings?.protected==true&&!unlocked)tutorialStep=null}
             SideEffect {
                 if(settings==null || settings?.protected == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -143,8 +148,10 @@ class MainActivity : FragmentActivity() {
                         if(error==null)CircularProgressIndicator()
                         else RecoveryScreen(error,canRestore=s!=null&&l==null,busy=busy,retry=vm::retryLoad,file=::launchFile)
                     }
-                    else if(!s.protected && needsOnboarding(l,s)) OnboardingScreen(l,vm,busy,::launchFile)
-                    else AppShell(l,s,vm,busy,biometricAvailable(),s.protected&&!unlocked,{done->authenticate(done)},::launchFile,::chooseReceipt)
+                    else if(!s.protected && needsOnboarding(l,s)) OnboardingScreen(l,vm,busy,::launchFile){start->
+                        tutorialStep=if(start)TutorialStep.EXPENSE else null
+                    }
+                    else AppShell(l,s,vm,busy,biometricAvailable(),s.protected&&!unlocked,{done->authenticate(done)},::launchFile,::chooseReceipt,tutorialStep){tutorialStep=it}
                     if(message!=null && (settings?.protected!=true || unlocked || message=="Неверный PIN" || message?.startsWith("Слишком много попыток")==true))AlertDialog(onDismissRequest=vm::clearMessage,title={Text("ТРАЧУ.")},text={Text(message.orEmpty())},
                         confirmButton={TextButton(onClick=vm::clearMessage){Text("OK")}})
                 }
@@ -224,14 +231,16 @@ private enum class Tab(val label:String,val icon:ImageVector) {
 }
 internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXPENSE,val initialDay:Long?=null,val draft:EntryDraft=EntryDraft())
 
-@Composable private fun AppShell(ledger:Ledger,settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,locked:Boolean,authenticate:((()->Unit)->Unit),file:(FileRequest)->Unit,chooseReceipt:()->Unit){
+@Composable private fun AppShell(ledger:Ledger,settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,locked:Boolean,authenticate:((()->Unit)->Unit),file:(FileRequest)->Unit,chooseReceipt:()->Unit,tutorialStep:TutorialStep?,onTutorialStep:(TutorialStep?)->Unit){
     var tab by rememberSaveable{mutableStateOf(Tab.HOME)}
     var more by rememberSaveable{mutableStateOf(MorePage.INDEX)}
     var plan by rememberSaveable{mutableStateOf(PlannerTab.BUDGET)}
     var editor by vm.editorState
+    var waitingForTutorialEditor by rememberSaveable{mutableStateOf(false)}
     val quick by vm.quick.collectAsStateWithLifecycle()
     LaunchedEffect(settings.adsConsent){updateAdsConsent(settings.adsConsent==true)}
-    fun openMore(page:MorePage){tab=Tab.MORE;more=page}
+    fun startTutorial(){tab=Tab.HOME;more=MorePage.INDEX;waitingForTutorialEditor=false;onTutorialStep(TutorialStep.EXPENSE)}
+    fun openMore(page:MorePage){if(page==MorePage.TUTORIAL)startTutorial() else {tab=Tab.MORE;more=page}}
     fun add(kind:Kind,planned:Boolean=false,initialDay:Long?=null){
         if(ledger.accounts.none{!it.archived}){openMore(MorePage.ACCOUNTS);editor=Editor("account")}
         else editor=Editor(if(planned)"planned" else "entry",kind=kind,initialDay=initialDay)
@@ -241,6 +250,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
         else editor=Editor("schedule",s?.id)
     }
     LaunchedEffect(quick,locked,busy){if(quick!=null&&!locked&&!busy){
+        onTutorialStep(null);waitingForTutorialEditor=false
         if(editor==null&&!vm.pickerPending()){
             if(tab==Tab.MORE&&more==MorePage.TUTORIAL){tab=Tab.HOME;more=MorePage.INDEX}
             add(requireNotNull(quick))
@@ -248,6 +258,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
         else vm.notice("Сначала завершите текущую операцию. Черновик сохранён.")
         vm.quick(null)
     }}
+    LaunchedEffect(locked){if(locked){onTutorialStep(null);waitingForTutorialEditor=false}}
     if(locked){
         LockScreen(settings,vm,busy,biometricAvailable,authenticate)
         return
@@ -255,13 +266,52 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
     fun choose(t:Tab){tab=t;if(t==Tab.MORE)more=MorePage.INDEX}
     val drawerState=rememberDrawerState(DrawerValue.Closed)
     val scope=rememberCoroutineScope()
+    val focus=LocalFocusManager.current
+    var anchor by remember(tutorialStep){mutableStateOf<Rect?>(null)}
+    var advanced by remember(tutorialStep){mutableStateOf(false)}
+    fun target(step:TutorialStep)=Modifier.tutorialAnchor(tutorialStep==step&&!waitingForTutorialEditor){anchor=it}
+    fun stopTutorial(){onTutorialStep(null);waitingForTutorialEditor=false;scope.launch{drawerState.close()}}
+    LaunchedEffect(tab,more){if(tab==Tab.MORE&&more==MorePage.TUTORIAL)startTutorial()}
+    LaunchedEffect(tutorialStep){if(tutorialStep!=null)focus.clearFocus()}
+    LaunchedEffect(editor,waitingForTutorialEditor,tutorialStep){
+        if(waitingForTutorialEditor && editor==null){tab=Tab.HOME;more=MorePage.INDEX;waitingForTutorialEditor=false}
+    }
+    LaunchedEffect(tutorialStep,busy,editor){
+        if(tutorialStep==TutorialStep.CONVERTER&&!busy&&editor==null)drawerState.open()
+    }
+    fun advanceTutorial(){
+        val step=tutorialStep ?: return
+        if(advanced||busy||editor!=null)return
+        advanced=true
+        when(step){
+            TutorialStep.EXPENSE, TutorialStep.INCOME->{
+                waitingForTutorialEditor=true
+                add(if(step==TutorialStep.EXPENSE)Kind.EXPENSE else Kind.INCOME)
+            }
+            TutorialStep.OPERATIONS->choose(Tab.OPERATIONS)
+            TutorialStep.PLAN->choose(Tab.PLAN)
+            TutorialStep.REPORTS->choose(Tab.REPORTS)
+            TutorialStep.MENU->Unit // The CONVERTER step opens the real drawer, also after rotation.
+            TutorialStep.CONVERTER->{openMore(MorePage.CONVERTER);scope.launch{drawerState.close()}}
+            TutorialStep.DONE->Unit
+        }
+        onTutorialStep(step.next)
+    }
+    val drawerOpen=drawerState.currentValue==DrawerValue.Open&&drawerState.targetValue==DrawerValue.Open
+    val drawerClosed=drawerState.currentValue==DrawerValue.Closed&&drawerState.targetValue==DrawerValue.Closed
+    val spotlight=tutorialStep!=null&&editor==null&&!busy&&!waitingForTutorialEditor&&quick==null&&
+        (if(tutorialStep==TutorialStep.CONVERTER)drawerOpen else drawerClosed)
     val mainTabs=Tab.entries.filter{it!=Tab.MORE}
     val drawerPages=listOf(MorePage.ACCOUNTS,MorePage.CATEGORIES,MorePage.CONVERTER,MorePage.RATES,
         MorePage.DATA,MorePage.SETTINGS,MorePage.TUTORIAL,MorePage.ABOUT,MorePage.INDEX)
     LaunchedEffect(editor){if(editor!=null && drawerState.targetValue!=DrawerValue.Closed)drawerState.close()}
+    Box(Modifier.fillMaxSize()){
+    // Keep real layouts composed for the spotlight. Hide their accessibility actions
+    // while the guide owns input; its target and Next provide the same action.
+    Box(Modifier.fillMaxSize().then(if(spotlight)Modifier.clearAndSetSemantics{} else Modifier)){
     ModalNavigationDrawer(
         drawerState=drawerState,
-        gesturesEnabled=editor==null && !busy,
+        gesturesEnabled=editor==null && !busy && tutorialStep==null,
         drawerContent={
             ModalDrawerSheet {
                 val visible=drawerState.currentValue==DrawerValue.Open || drawerState.targetValue==DrawerValue.Open
@@ -279,7 +329,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                     Text("Инструменты",style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(horizontal=16.dp,vertical=4.dp))
                     drawerPages.forEach{page->
                         NavigationDrawerItem(label={Text(if(page==MorePage.INDEX)"Все инструменты" else page.label)},selected=tab==Tab.MORE&&more==page,
-                            onClick={openMore(page);scope.launch{drawerState.close()}},modifier=Modifier.testTag("drawer-${page.name.lowercase()}"))
+                            onClick={openMore(page);scope.launch{drawerState.close()}},modifier=Modifier.testTag("drawer-${page.name.lowercase()}").then(if(page==MorePage.CONVERTER)target(TutorialStep.CONVERTER) else Modifier))
                     }
                     Spacer(Modifier.height(12.dp))
                 }
@@ -294,7 +344,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
         Row(Modifier.fillMaxSize()){
             if(rail)NavigationRail(modifier=Modifier.fillMaxHeight().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start+WindowInsetsSides.Top+WindowInsetsSides.Bottom)),
                 header={Text("Т.",style=MaterialTheme.typography.headlineSmall,color=MaterialTheme.colorScheme.primary,modifier=Modifier.padding(12.dp))}){
-                mainTabs.forEach{t->NavigationRailItem(selected=t==tab,onClick={choose(t)},modifier=Modifier.testTag("nav-${t.name.lowercase()}"),icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label)},alwaysShowLabel=!largeFont)}
+                mainTabs.forEach{t->NavigationRailItem(selected=t==tab,onClick={choose(t)},modifier=Modifier.testTag("nav-${t.name.lowercase()}").then(when(t){Tab.OPERATIONS->target(TutorialStep.OPERATIONS);Tab.PLAN->target(TutorialStep.PLAN);Tab.REPORTS->target(TutorialStep.REPORTS);else->Modifier}),icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label)},alwaysShowLabel=!largeFont)}
             }
             Scaffold(modifier=Modifier.weight(1f),containerColor=MaterialTheme.colorScheme.background,
                 contentWindowInsets=WindowInsets.safeDrawing,
@@ -302,7 +352,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                     Surface(color=MaterialTheme.colorScheme.background){
                         Row(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top+WindowInsetsSides.Horizontal))
                             .padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically){
-                            IconButton(onClick={scope.launch{drawerState.open()}},enabled=editor==null&&!busy,modifier=Modifier.testTag("nav-more")){
+                            IconButton(onClick={scope.launch{drawerState.open()}},enabled=editor==null&&!busy,modifier=Modifier.testTag("nav-more").then(target(TutorialStep.MENU))){
                                 Icon(Icons.Outlined.Menu,contentDescription="Открыть меню")
                             }
                             Text("ТРАЧУ.",style=MaterialTheme.typography.titleLarge,color=MaterialTheme.colorScheme.primary)
@@ -310,23 +360,24 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                     }
                 },
                 bottomBar={if(!rail)NavigationBar{
-                    mainTabs.forEach{t->NavigationBarItem(selected=t==tab,onClick={choose(t)},modifier=Modifier.testTag("nav-${t.name.lowercase()}"),icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label,maxLines=1)},alwaysShowLabel=!largeFont)}
+                    mainTabs.forEach{t->NavigationBarItem(selected=t==tab,onClick={choose(t)},modifier=Modifier.testTag("nav-${t.name.lowercase()}").then(when(t){Tab.OPERATIONS->target(TutorialStep.OPERATIONS);Tab.PLAN->target(TutorialStep.PLAN);Tab.REPORTS->target(TutorialStep.REPORTS);else->Modifier}),icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label,maxLines=1)},alwaysShowLabel=!largeFont)}
                 }},
                 floatingActionButton={if(tab==Tab.OPERATIONS)FloatingActionButton(onClick={add(Kind.EXPENSE)}){Text("+",style=MaterialTheme.typography.headlineSmall)}}){padding->
                 Column(Modifier.fillMaxSize().padding(padding)){
                     if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
                     Box(Modifier.weight(1f)){
                         when(tab){
-                            Tab.HOME->Dashboard(ledger,{add(it)},{editor=Editor("detail",it.id)},{openMore(MorePage.ACCOUNTS)},{tab=Tab.REPORTS},{tab=Tab.PLAN;plan=PlannerTab.BUDGET},{tab=Tab.OPERATIONS},{tab=Tab.PLAN;plan=PlannerTab.CALENDAR},settings.monthStart,
+                            Tab.HOME->key(tutorialStep==TutorialStep.EXPENSE||tutorialStep==TutorialStep.INCOME){Dashboard(ledger,{add(it)},{editor=Editor("detail",it.id)},{openMore(MorePage.ACCOUNTS)},{tab=Tab.REPORTS},{tab=Tab.PLAN;plan=PlannerTab.BUDGET},{tab=Tab.OPERATIONS},{tab=Tab.PLAN;plan=PlannerTab.CALENDAR},settings.monthStart,
                                 consentContent=if(!BuildConfig.DEBUG && BuildConfig.YANDEX_BANNER_ID.isNotEmpty() && settings.adsConsent==null)
-                                    {{AdConsentPanel { accepted->vm.perform{vm.preferences.adsConsent(accepted)} }}} else null)
+                                    {{AdConsentPanel { accepted->vm.perform{vm.preferences.adsConsent(accepted)} }}} else null,
+                                tutorialTarget={id->target(if(id=="expense")TutorialStep.EXPENSE else TutorialStep.INCOME)})}
                             Tab.OPERATIONS->Operations(ledger,{add(it)},{editor=Editor("detail",it.id)},settings.monthStart)
                             Tab.PLAN->Planner(ledger,plan,{editor=Editor("budget",it?.id)},{editor=Editor("goal",it?.id)},
                                 {if(ledger.accounts.isEmpty()){openMore(MorePage.ACCOUNTS);editor=Editor("account")}else editor=Editor("debt",it?.id)},
                                 {editor=Editor("payment",it.id)},::schedule,{editor=Editor("detail",it.id)},{day->add(Kind.EXPENSE,true,day)})
                             Tab.REPORTS->Reports(ledger,settings.monthStart){period,account->file(FileRequest("pdf",true,period=period,account=account))}
                             Tab.MORE->when(more){
-                                MorePage.INDEX->MoreIndex{more=it}
+                                MorePage.INDEX->MoreIndex{openMore(it)}
                                 MorePage.ACCOUNTS->Accounts(ledger,{editor=Editor("account",it?.id)},{add(Kind.TRANSFER)},{more=MorePage.INDEX}){id,delta->
                                     vm.change({ l->
                                         val sorted=l.accounts.sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name}).toMutableList()
@@ -341,16 +392,13 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                                 MorePage.SETTINGS->SettingsPage(settings,vm,busy,biometricAvailable,authenticate){more=MorePage.INDEX}
                                 MorePage.DATA->DataPage(ledger,file,busy){more=MorePage.INDEX}
                                 MorePage.ABOUT->AboutPage{more=MorePage.INDEX}
-                                MorePage.TUTORIAL->{
-                                    MoreIndex{more=it}
-                                    TutorialDialog{more=MorePage.INDEX}
-                                }
+                                MorePage.TUTORIAL->MoreIndex{openMore(it)}
                             }
                         }
                     }
                     // Only the overview may show an ad. Editors, details, quick entry,
                     // lock screen and financial actions remove it from composition.
-                    if(tab==Tab.HOME && editor==null && quick==null && !busy && allowBanner &&
+                    if(tab==Tab.HOME && editor==null && quick==null && !busy && allowBanner && tutorialStep==null &&
                         drawerState.currentValue==DrawerValue.Closed && drawerState.targetValue==DrawerValue.Closed) {
                         OverviewAdBanner(settings.adsConsent)
                     }
@@ -359,12 +407,16 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
         }
     }
     }
+    }
+    if(spotlight)TutorialSpotlight(requireNotNull(tutorialStep),anchor,::advanceTutorial,::stopTutorial)
+    }
     androidx.activity.compose.BackHandler(enabled=editor==null&&drawerState.currentValue==DrawerValue.Closed&&drawerState.targetValue==DrawerValue.Closed&&tab!=Tab.HOME){
         if(tab==Tab.MORE&&more!=MorePage.INDEX)more=MorePage.INDEX else tab=Tab.HOME
     }
     androidx.activity.compose.BackHandler(enabled=editor==null&&(drawerState.currentValue==DrawerValue.Open||drawerState.targetValue==DrawerValue.Open)){
         scope.launch{drawerState.close()}
     }
+    androidx.activity.compose.BackHandler(enabled=editor==null&&tutorialStep!=null){stopTutorial()}
     val current=editor
     if(current!=null){
         val close:()->Unit={if(vm.editor===current)vm.editor=null}
@@ -373,7 +425,9 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
             when(current.type){
                 "account"->AccountEditor(ledger,ledger.accounts.find{it.id==current.id},busy,vm,close,entryDraft)
                 "category"->CategoryEditor(ledger,ledger.categories.find{it.id==current.id},busy,vm,close,entryDraft)
-                "entry","planned"->EntryEditor(ledger,settings,vm,busy,current.kind,current=ledger.entries.find{it.id==current.id},close=close,forcePlanned=current.type=="planned",draft=entryDraft,chooseReceipt=chooseReceipt,initialDay=current.initialDay)
+                "entry","planned"->CompositionLocalProvider(LocalGuidedEditorHint provides (waitingForTutorialEditor&&tutorialStep!=null&&current.type=="entry")){
+                    EntryEditor(ledger,settings,vm,busy,current.kind,current=ledger.entries.find{it.id==current.id},close=close,forcePlanned=current.type=="planned",draft=entryDraft,chooseReceipt=chooseReceipt,initialDay=current.initialDay)
+                }
                 "schedule"->EntryEditor(ledger,settings,vm,busy,Kind.EXPENSE,schedule=ledger.schedules.find{it.id==current.id},recurring=true,close=close,draft=entryDraft,chooseReceipt=chooseReceipt)
                 "detail"->ledger.entries.find{it.id==current.id}?.let{e->EntryDetails(ledger,e,vm,busy,close,{
                     editor=when(e.kind){

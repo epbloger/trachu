@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -135,38 +136,70 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
     }
 }
 @OptIn(ExperimentalLayoutApi::class)
-@Composable fun CategoryChoice(label:String, value:String, options:List<Category>, ledger:Ledger, onCreate:(()->Unit)?=null, quick:Boolean=false, onChoose:(String)->Unit) {
+@Composable fun CategoryChoice(label:String, value:String, options:List<Category>, ledger:Ledger, onCreate:(()->Unit)?=null, quick:Boolean=false, highlight:Boolean=false, onChoose:(String)->Unit) {
     var open by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     fun title(c:Category)=c.parentId?.let{ledger.categoryName(it)+" / "+c.name} ?: c.name
     val current=options.find{it.id==value}
+    val currentColor=current?.let{Color(it.color)}
+    val currentTextColor=currentColor?.let{if(it.luminance()>0.18f)Color(0xFF111111) else Color.White}
     val commonIds=listOf("food","transport","home","health","leisure","other","salary","other-income")
     val quickCategories=if(quick)options.filter{!it.archived}
         .sortedWith(compareBy<Category>{it.parentId!=null}.thenBy{commonIds.indexOf(it.id).let{index->if(index<0)Int.MAX_VALUE else index}})
         .take(6) else emptyList()
-    Column(verticalArrangement=Arrangement.spacedBy(4.dp)) {
+    Column(Modifier.fillMaxWidth().then(if(highlight)Modifier.border(2.dp,MaterialTheme.colorScheme.primary,MaterialTheme.shapes.large).padding(6.dp) else Modifier),
+        verticalArrangement=Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
             Text(label,Modifier.weight(1f),style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
             if(onCreate!=null)TextButton(onClick=onCreate,modifier=Modifier.testTag("category-create:$label")) { Text("+ Новая категория") }
         }
+        Surface(
+            modifier=Modifier.fillMaxWidth().testTag("category-selected:$label").semantics(mergeDescendants=true){selected=current!=null},
+            shape=MaterialTheme.shapes.medium,
+            color=currentColor ?: MaterialTheme.colorScheme.surfaceVariant,
+            contentColor=currentTextColor ?: MaterialTheme.colorScheme.onSurfaceVariant
+        ) {
+            Row(Modifier.padding(horizontal=14.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically,
+                horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(46.dp).background(
+                    (currentTextColor ?: MaterialTheme.colorScheme.onSurfaceVariant).copy(alpha=.14f),CircleShape
+                ),contentAlignment=Alignment.Center) {
+                    Text(current?.icon ?: "?",style=MaterialTheme.typography.titleLarge)
+                }
+                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(2.dp)) {
+                    Text(if(current!=null)"ВЫБРАНА КАТЕГОРИЯ" else "КАТЕГОРИЯ НЕ ВЫБРАНА",
+                        style=MaterialTheme.typography.labelMedium,fontWeight=FontWeight.Bold)
+                    Text(current?.let(::title) ?: "Выберите категорию ниже",
+                        style=MaterialTheme.typography.titleLarge)
+                }
+                Text(if(current!=null)"✓" else "!",
+                    style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)
+            }
+        }
         if(quickCategories.isNotEmpty()) {
-            FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalArrangement=Arrangement.spacedBy(0.dp)) {
+            FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
                 quickCategories.forEach { category->
+                    val selected=category.id==value
+                    val categoryColor=Color(category.color)
+                    val selectedTextColor=if(categoryColor.luminance()>0.18f)Color(0xFF111111) else Color.White
                     FilterChip(
-                        selected=category.id==value,onClick={onChoose(category.id)},
-                        label={Text(title(category),maxLines=1,overflow=TextOverflow.Ellipsis)},
+                        selected=selected,onClick={onChoose(category.id)},
+                        label={Text(title(category),style=MaterialTheme.typography.bodyMedium,maxLines=2,overflow=TextOverflow.Ellipsis)},
+                        leadingIcon={Box(Modifier.size(11.dp).background(if(selected)selectedTextColor else categoryColor,CircleShape))},
+                        colors=FilterChipDefaults.filterChipColors(
+                            labelColor=MaterialTheme.colorScheme.onSurface,
+                            selectedContainerColor=categoryColor,
+                            selectedLabelColor=selectedTextColor,
+                            selectedLeadingIconColor=selectedTextColor
+                        ),
                         modifier=Modifier.testTag("category-quick:${category.id}")
                     )
                 }
                 AssistChip(onClick={query="";open=true},label={Text("Все категории ⌄")},modifier=Modifier.testTag("category-choice:$label"))
             }
-            if(current!=null&&quickCategories.none{it.id==value}) {
-                Text("Выбрано: "+title(current),style=MaterialTheme.typography.bodyMedium,modifier=Modifier.testTag("category-selected:$label"))
-            }
         } else {
             OutlinedButton(onClick={query="";open=true},enabled=options.isNotEmpty()||onCreate!=null,modifier=Modifier.fillMaxWidth().testTag("category-choice:$label")) {
-                if(current!=null)CategoryDot(current,Modifier.padding(end=4.dp))
-                Text(current?.let(::title) ?: "Выбрать категорию",Modifier.weight(1f))
+                Text(if(current==null)"Выбрать категорию" else "Изменить категорию",Modifier.weight(1f))
                 Text("⌄")
             }
         }
@@ -209,9 +242,10 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
         }
     }
 }
-@Composable fun <T> Chips(options: List<T>, selected: T, title: (T)->String, onChoose: (T)->Unit) {
+@Composable fun <T> Chips(options: List<T>, selected: T, title: (T)->String, tagPrefix:String?=null, onChoose: (T)->Unit) {
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-        options.forEach { item -> FilterChip(selected=item==selected,onClick={onChoose(item)},label={Text(title(item))}) }
+        options.forEach { item -> FilterChip(selected=item==selected,onClick={onChoose(item)},label={Text(title(item))},
+            modifier=if(tagPrefix==null)Modifier else Modifier.testTag("$tagPrefix:${title(item)}")) }
     }
 }
 @Composable fun Toggle(label: String, checked: Boolean, onChange: (Boolean)->Unit, detail: String?=null) {
@@ -281,10 +315,13 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
 @Composable fun EntryRow(ledger: Ledger, entry: Entry, onClick: ()->Unit) {
     val a=ledger.accounts.first { it.id==entry.accountId }
     val category=ledger.categories.find { it.id==entry.splits.firstOrNull()?.categoryId }
-    val incoming=entry.kind in listOf(Kind.INCOME,Kind.REFUND,Kind.DEBT_IN,Kind.LOAN_IN)
     val sign=when(entry.kind) { Kind.INCOME,Kind.REFUND,Kind.DEBT_IN,Kind.LOAN_IN->"+"; Kind.EXPENSE,Kind.DEBT_OUT,Kind.LOAN_OUT->"−"; Kind.TRANSFER->"" }
     val amount=sign+Money.format(entry.minor,a.currency)
-    val amountColor=if(incoming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+    val amountColor=when(entry.kind) {
+        Kind.INCOME,Kind.REFUND,Kind.DEBT_IN,Kind.LOAN_IN->incomeColor()
+        Kind.EXPENSE,Kind.DEBT_OUT,Kind.LOAN_OUT->MaterialTheme.colorScheme.error
+        else->MaterialTheme.colorScheme.onSurface
+    }
     BoxWithConstraints(Modifier.fillMaxWidth().testTag("operation-row").clickable(onClick=onClick).padding(vertical=10.dp)) {
         val stack=maxWidth<320.dp || LocalDensity.current.fontScale>=1.3f || amount.length>15
         Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {

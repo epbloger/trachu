@@ -25,7 +25,7 @@ import java.time.YearMonth
 import java.time.DayOfWeek
 import java.time.temporal.TemporalAdjusters
 
-@Composable fun Dashboard(ledger: Ledger, add: (Kind)->Unit, openEntry: (Entry)->Unit, accounts: ()->Unit, reports: ()->Unit, plans: ()->Unit, operations: ()->Unit, calendar: ()->Unit, monthStart: Int=1, consentContent:(@Composable ()->Unit)?=null) {
+@Composable fun Dashboard(ledger: Ledger, add: (Kind)->Unit, openEntry: (Entry)->Unit, accounts: ()->Unit, reports: ()->Unit, plans: ()->Unit, operations: ()->Unit, calendar: ()->Unit, monthStart: Int=1, consentContent:(@Composable ()->Unit)?=null, tutorialTarget:(String)->Modifier={Modifier}) {
     val day=today()
     var periodType by rememberSaveable{mutableStateOf(PeriodType.MONTH)}
     var p by rememberSaveable(monthStart,stateSaver=PeriodSaver){mutableStateOf(Period.month(day,monthStart))}
@@ -55,10 +55,10 @@ import java.time.temporal.TemporalAdjusters
                             MoneyText(totals.net,ledger.baseCurrency,color=Color.White)
                             BoxWithConstraints(Modifier.fillMaxWidth()) {
                                 @Composable fun Expense(modifier:Modifier) {
-                                    Button(onClick={add(Kind.EXPENSE)},modifier=modifier.heightIn(min=52.dp).testTag("add-expense"),colors=ButtonDefaults.buttonColors(containerColor=Lavender,contentColor=Graphite)) { Text("− Расход") }
+                                    Button(onClick={add(Kind.EXPENSE)},modifier=modifier.heightIn(min=52.dp).testTag("add-expense").then(tutorialTarget("expense")),colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFFFE2E5),contentColor=Color(0xFF8F243B))) { Text("− Расход") }
                                 }
                                 @Composable fun Income(modifier:Modifier) {
-                                    OutlinedButton(onClick={add(Kind.INCOME)},modifier=modifier.heightIn(min=52.dp).testTag("add-income"),colors=ButtonDefaults.outlinedButtonColors(contentColor=Color.White)) { Text("+ Доход") }
+                                    Button(onClick={add(Kind.INCOME)},modifier=modifier.heightIn(min=52.dp).testTag("add-income").then(tutorialTarget("income")),colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFDDF4E5),contentColor=Color(0xFF145C37))) { Text("+ Доход") }
                                 }
                                 if(maxWidth<260.dp||LocalDensity.current.fontScale>=1.3f)Column(verticalArrangement=Arrangement.spacedBy(8.dp)){Expense(Modifier.fillMaxWidth());Income(Modifier.fillMaxWidth())}
                                 else Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Expense(Modifier.weight(1f));Income(Modifier.weight(1f))}
@@ -80,11 +80,11 @@ import java.time.temporal.TemporalAdjusters
                             }
                             if(maxWidth>=270.dp&&LocalDensity.current.fontScale<1.3f) {
                                 Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
-                                    Total("Доходы",totals.income,MaterialTheme.colorScheme.primary,Modifier.weight(1f))
+                                    Total("Доходы",totals.income,incomeColor(),Modifier.weight(1f))
                                     Total("Расходы",totals.expense,MaterialTheme.colorScheme.error,Modifier.weight(1f))
                                 }
                             } else Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                                Total("Доходы",totals.income,MaterialTheme.colorScheme.primary,Modifier.fillMaxWidth())
+                                Total("Доходы",totals.income,incomeColor(),Modifier.fillMaxWidth())
                                 HorizontalDivider()
                                 Total("Расходы",totals.expense,MaterialTheme.colorScheme.error,Modifier.fillMaxWidth())
                             }
@@ -117,6 +117,12 @@ import java.time.temporal.TemporalAdjusters
             }
             item {
                 @Composable fun Spending() { CategoryReport(ledger,p) }
+                @Composable fun Earnings() { CategoryReport(ledger,p,income=true) }
+                if(wide) Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
+                    Box(Modifier.weight(1f)){Spending()}; Box(Modifier.weight(1f)){Earnings()}
+                } else Column(verticalArrangement=Arrangement.spacedBy(16.dp)){Spending();Earnings()}
+            }
+            item {
                 @Composable fun BudgetSummary() {
                     Panel {
                         SectionTitle("Бюджет",action="План",onAction=plans)
@@ -134,8 +140,7 @@ import java.time.temporal.TemporalAdjusters
                         }
                     }
                 }
-                if(wide) Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) { Box(Modifier.weight(1f)){Spending()};Box(Modifier.weight(1f)){BudgetSummary()} }
-                else Column(verticalArrangement=Arrangement.spacedBy(16.dp)){Spending();BudgetSummary()}
+                BudgetSummary()
             }
             item {
                 Panel {
@@ -154,27 +159,32 @@ import java.time.temporal.TemporalAdjusters
     val total=Money.sum(categories.map{it.second})
     val positive=categories.filter{it.second>0}
     val positiveTotal=Money.sum(positive.map{it.second})
-    Panel {
+    val chartColors=remember(ledger.categories,categories,income){
+        val known=ledger.categories.filter{it.income==income}
+        CategoryColors.chart(known+categories.filter{(id,_)->known.none{it.id==id}}.map{(id,_)->
+            Category(id=id,name=Finance.categoryLabel(ledger,id),color=if(income)0xFF16845B else 0xFFCF7330)})
+    }
+    Panel(Modifier.testTag(if(income)"income-structure" else "expense-structure")) {
         SectionTitle(if(income)"Структура доходов" else "Структура расходов")
         if(categories.isEmpty()) Text("Нет операций за выбранный период.",color=MaterialTheme.colorScheme.onSurfaceVariant)
         else {
             Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(6.dp)) {
-                Donut(positive.map{(id,v)->Color(ledger.categories.find{it.id==id}?.color ?: 0xFF6143CC) to v},"Диаграмма категорий")
-                Text("Итого",style=MaterialTheme.typography.labelSmall)
+                Donut(positive.map{(id,v)->Color(chartColors.getValue(id)) to v},if(income)"Диаграмма доходов" else "Диаграмма расходов")
+                Text("Итого",style=MaterialTheme.typography.bodyLarge)
                 MoneyText(total,ledger.baseCurrency,large=true)
             }
             if(categories.any{it.second<0})Text("Диаграмма показывает положительные суммы. Отрицательные значения означают превышение возвратов над расходами категории.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             categories.forEach { (id,v)->
                 val category=ledger.categories.find{it.id==id}
                 Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                    CategoryDot(category)
+                    CategoryDot(category?.copy(color=chartColors.getValue(id)) ?: Category(id=id,name=ledger.categoryName(id),color=chartColors.getValue(id)))
                     Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
                         Text(ledger.categoryName(id),style=MaterialTheme.typography.titleMedium)
                         MoneyText(v,ledger.baseCurrency)
                         if(v>0&&positiveTotal>0) {
                             val share=(v.toDouble()/positiveTotal.toDouble()*100).coerceIn(0.0,100.0)
-                            Text(String.format(java.util.Locale("ru"),"%.1f%% положительных сумм",share),style=MaterialTheme.typography.labelSmall)
-                            Progress(v,positiveTotal,Color(category?.color ?: 0xFF6143CC))
+                            Text(String.format(java.util.Locale("ru"),"%.1f%%",share),style=MaterialTheme.typography.bodyMedium)
+                            Progress(v,positiveTotal,Color(chartColors.getValue(id)))
                         }
                     }
                 }
@@ -220,7 +230,6 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
 @Composable fun Reports(ledger: Ledger, monthStart:Int=1, exportPdf: (Period,String)->Unit) {
     var type by rememberSaveable { mutableStateOf(PeriodType.MONTH) }
     var period by rememberSaveable(monthStart,stateSaver=PeriodSaver) { mutableStateOf(Period.month(startDay=monthStart)) }
-    var income by rememberSaveable { mutableStateOf(false) }
     var selectedAccount by rememberSaveable{mutableStateOf("")}
     val reportLedger=remember(ledger,selectedAccount){
         if(selectedAccount.isEmpty())ledger else ledger.copy(accounts=ledger.accounts.map{it.copy(includeInStats=it.id==selectedAccount && it.includeInStats)})
@@ -251,7 +260,7 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
     } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide=maxWidth>=840.dp && LocalDensity.current.fontScale<1.5f
-        LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
+        LazyColumn(modifier=Modifier.testTag("analytics-list"),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
             item { SectionTitle("Аналитика",action="PDF"){exportPdf(period,selectedAccount)} }
             item { Panel {
                 PeriodControls(type,{type=it},period,{period=it},monthStart)
@@ -262,8 +271,8 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
                 Panel {
                     Text("Финансовый результат",style=MaterialTheme.typography.titleMedium)
                     MoneyText(totals.net,ledger.baseCurrency,large=true,color=if(totals.net>=0)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-                    Text("Доходы: "+Money.format(totals.income,ledger.baseCurrency))
-                    Text("Расходы: "+Money.format(totals.expense,ledger.baseCurrency))
+                    Text("Доходы: "+Money.format(totals.income,ledger.baseCurrency),color=incomeColor(),style=MaterialTheme.typography.titleMedium)
+                    Text("Расходы: "+Money.format(totals.expense,ledger.baseCurrency),color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.titleMedium)
                     Text("Средние расходы в день: "+Money.format(totals.expense/length,ledger.baseCurrency))
                     val expenseEntries=reportLedger.entries.filter{it.status==EntryStatus.POSTED && it.day in period && it.kind in setOf(Kind.EXPENSE,Kind.REFUND) && reportLedger.accounts.any{a->a.id==it.accountId&&a.includeInStats}}
                     val essential=Money.sum(expenseEntries.filter{it.essential}.map{if(it.kind==Kind.REFUND)-it.baseMinor else it.baseMinor})
@@ -279,7 +288,15 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
                 }
             }
             item {
-                @Composable fun Cats(){ Column(verticalArrangement=Arrangement.spacedBy(8.dp)) { Chips(listOf(false,true),income,{if(it)"Доходы" else "Расходы"}){income=it};CategoryReport(reportLedger,period,income) } }
+                if(wide)Row(horizontalArrangement=Arrangement.spacedBy(16.dp)){
+                    Box(Modifier.weight(1f)){CategoryReport(reportLedger,period)}
+                    Box(Modifier.weight(1f)){CategoryReport(reportLedger,period,income=true)}
+                } else Column(verticalArrangement=Arrangement.spacedBy(16.dp)){
+                    CategoryReport(reportLedger,period)
+                    CategoryReport(reportLedger,period,income=true)
+                }
+            }
+            item {
                 @Composable fun Tags(){ Panel {
                     SectionTitle("Расходы по тегам")
                     val tags=Finance.byTag(reportLedger,period).toList().sortedByDescending{it.second}
@@ -287,8 +304,7 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
                     else tags.forEach { (tag,value)->Row(horizontalArrangement=Arrangement.SpaceBetween,modifier=Modifier.fillMaxWidth()){Text("#$tag",Modifier.weight(1f));MoneyText(value,ledger.baseCurrency)} }
                     if(tags.isNotEmpty())Text("Одна операция может входить в несколько тегов.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 } }
-                if(wide)Row(horizontalArrangement=Arrangement.spacedBy(16.dp)){Box(Modifier.weight(1f)){Cats()};Box(Modifier.weight(1f)){Tags()}}
-                else Column(verticalArrangement=Arrangement.spacedBy(16.dp)){Cats();Tags()}
+                Tags()
             }
             item {
                 Panel {
@@ -297,7 +313,7 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
                     if(groups.isEmpty())Text("Нет данных для графика.")
                     groups.forEach { (label,t)->
                         Text(label,style=MaterialTheme.typography.labelMedium)
-                        Text("Доходы: "+Money.format(t.income,ledger.baseCurrency),style=MaterialTheme.typography.bodySmall);Progress(t.income,max)
+                        Text("Доходы: "+Money.format(t.income,ledger.baseCurrency),style=MaterialTheme.typography.bodyMedium);Progress(t.income,max,incomeColor())
                         Text("Расходы за вычетом возвратов: "+Money.format(t.expense,ledger.baseCurrency),style=MaterialTheme.typography.bodySmall)
                         if(t.expense>=0)Progress(t.expense,max,MaterialTheme.colorScheme.error)
                         else Text("Возвраты превышают расходы",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary)

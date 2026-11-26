@@ -27,6 +27,8 @@ internal sealed interface PickedResult {
 }
 internal fun PickedResult.isBackupRestore():Boolean = this is PickedResult.File && !request.save && request.mode=="backup"
 
+internal data class ConverterRateStatus(val base:String,val day:Long,val loading:Boolean,val error:String?=null)
+
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     // Activity recreation retains this state without serializing financial drafts,
     // backup passwords or receipt bytes into Android's saved-instance state.
@@ -76,6 +78,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val message=_message.asStateFlow()
     private val _busy=MutableStateFlow(false)
     val busy=_busy.asStateFlow()
+    private val _converterRateStatus=MutableStateFlow<ConverterRateStatus?>(null)
+    internal val converterRateStatus=_converterRateStatus.asStateFlow()
+    private var converterRateJob:Job?=null
+    private val rateAttempts=mutableMapOf<Pair<String,Long>,Pair<Long,Boolean>>()
+    // A replaceable transport makes the real UI refresh path deterministic in
+    // instrumentation without relying on an external service or emulator network.
+    internal var converterRateFetcher:(String,Long)->List<FxRate> = ExchangeRates::fetch
     private val _unlocked=MutableStateFlow(false)
     val unlocked=_unlocked.asStateFlow()
     private val _quick=MutableStateFlow<Kind?>(null)
@@ -185,6 +194,40 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setAutomaticRates(enabled:Boolean) = perform {
         preferences.automaticRates(enabled)
         RatesWorker.configure(getApplication(),enabled,immediate=enabled)
+        if(!enabled){converterRateJob?.cancel();_converterRateStatus.value=null}
+    }
+    /** Independent of financial-form busy state: cached/manual conversion and
+     * editing keep working while an official quote is being downloaded. */
+    internal fun refreshConverterRates(day:Long, force:Boolean=false) {
+        val base=_ledger.value?.baseCurrency ?: return
+        val settings=_settings.value ?: return
+        if(day>today() || !settings.onboardingCompleted || settings.protected&&!_unlocked.value)return
+        if(!force&&!settings.automaticRates)return
+        val key=base to day
+        if(converterRateJob?.isActive==true && _converterRateStatus.value?.let{it.base==base&&it.day==day}==true)return
+        val now=android.os.SystemClock.elapsedRealtime()
+        if(!force&&rateAttempts[key]?.let{(time,success)->now-time < if(success) 30*60_000L else 60_000L}==true)return
+        converterRateJob?.cancel()
+        _converterRateStatus.value=ConverterRateStatus(base,day,true)
+        converterRateJob=viewModelScope.launch {
+            try {
+                val rates=withContext(Dispatchers.IO){converterRateFetcher(base,day)}
+                require(rates.isNotEmpty()&&rates.all{it.day<=day}){"ЦБ РФ не вернул курсы на эту дату"}
+                if(!force&&!preferences.current().automaticRates)return@launch
+                store.change { l -> if(l.baseCurrency==base)Finance.mergePublishedRates(l,base,rates) else l }
+                rateAttempts[key]=android.os.SystemClock.elapsedRealtime() to true
+                _converterRateStatus.value=ConverterRateStatus(base,day,false)
+            } catch(e:kotlinx.coroutines.CancellationException){throw e}
+            catch(_:Exception){
+                rateAttempts[key]=android.os.SystemClock.elapsedRealtime() to false
+                _converterRateStatus.value=ConverterRateStatus(base,day,false,"Не удалось обновить курс. Доступны сохранённые и ручные курсы.")
+            }
+            finally {
+                if(_converterRateStatus.value==ConverterRateStatus(base,day,true))
+                    _converterRateStatus.value=null
+            }
+        }
+        if(rateAttempts.size>128)rateAttempts.entries.removeAll{now-it.value.first>30*60_000L}
     }
     fun fetchRates(day: Long) = perform {
         val base=store.current().baseCurrency

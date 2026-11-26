@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.selected
@@ -12,6 +13,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.AppViewModel
 import ru.epbloger.trachu.core.*
+import kotlinx.coroutines.delay
 import java.util.Currency
 import java.util.Locale
 
@@ -64,13 +66,23 @@ fun CurrencyPicker(label: String, value: String, onChange: (String) -> Unit) {
 
 @Composable
 fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () -> Unit, rates: () -> Unit) {
-    var from by remember(ledger.baseCurrency) { mutableStateOf(ledger.baseCurrency) }
-    var to by remember(ledger.baseCurrency) { mutableStateOf(if (ledger.baseCurrency == "USD") "RUB" else "USD") }
-    var amount by remember { mutableStateOf("1") }
-    var manual by remember { mutableStateOf(false) }
-    var rateText by remember { mutableStateOf("") }
-    var date by remember { mutableStateOf(iso(today())) }
+    var from by rememberSaveable(ledger.baseCurrency) { mutableStateOf(ledger.baseCurrency) }
+    var to by rememberSaveable(ledger.baseCurrency) { mutableStateOf(if (ledger.baseCurrency == "USD") "RUB" else "USD") }
+    var amount by rememberSaveable { mutableStateOf("1") }
+    var manual by rememberSaveable { mutableStateOf(false) }
+    var rateText by rememberSaveable { mutableStateOf("") }
+    var date by rememberSaveable { mutableStateOf(iso(today())) }
+    val settings by vm.settings.collectAsState()
+    val automatic=settings?.automaticRates==true
+    val status by vm.converterRateStatus.collectAsState()
     val day = runCatching { parseDay(date).also { require(it <= today()) } }.getOrNull()
+    val currentStatus=status?.takeIf{it.base==ledger.baseCurrency&&it.day==day}
+    LaunchedEffect(ledger.baseCurrency,day,automatic,manual,from==to) {
+        if(automatic&&!manual&&from!=to&&day!=null){
+            delay(350)
+            vm.refreshConverterRates(day)
+        }
+    }
     val saved = remember(ledger, from, to, day) { day?.let { selectedDay ->
         runCatching { CurrencyConversion.quote(ledger, from, to, selectedDay) }.getOrNull()
     } }
@@ -107,13 +119,23 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
                     Text("⇅ Поменять валюты местами")
                 }
                 CurrencyPicker("В валюту", to) { to = it; rateText = "" }
+                HorizontalDivider()
+                Text("Результат", style = MaterialTheme.typography.titleMedium)
+                result.onSuccess { MoneyText(it, to, large = true) }
+                    .onFailure {
+                        if(!manual&&from!=to&&saved==null&&currentStatus?.loading==true)
+                            Text("Получаем курс ЦБ РФ…",style=MaterialTheme.typography.bodyLarge)
+                        else Warning(it.message ?: "Проверьте сумму и курс")
+                    }
+                if(!manual&&from!=to&&currentStatus?.loading==true){
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    if(saved!=null)Text("Обновляем курс. Пока показан сохранённый.",style=MaterialTheme.typography.bodyMedium)
+                }
+                if(!manual&&from!=to)currentStatus?.error?.let{Text(it,style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}
             }
         }
         item {
             Panel {
-                Text("Результат", style = MaterialTheme.typography.titleMedium)
-                result.onSuccess { MoneyText(it, to, large = true) }
-                    .onFailure { Warning(it.message ?: "Проверьте сумму и курс") }
                 if (from != to) {
                     Toggle("Ввести курс вручную", manual, { manual = it })
                     if (manual) {
@@ -135,7 +157,8 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
         }
         item {
             Panel {
-                Button(onClick = { day?.let(vm::fetchRates) }, enabled = !busy && day != null, modifier = Modifier.fillMaxWidth()) { Text("Обновить курсы ЦБ РФ") }
+                OutlinedButton(onClick = { day?.let{vm.refreshConverterRates(it,force=true)} }, enabled = !busy && day != null && currentStatus?.loading!=true, modifier = Modifier.fillMaxWidth()) { Text("Обновить курс сейчас") }
+                Text(if(automatic)"Курсы обновляются автоматически при открытии конвертера." else "Автообновление отключено в настройках курсов.",style=MaterialTheme.typography.bodyMedium)
                 OutlinedButton(onClick = rates, modifier = Modifier.fillMaxWidth()) { Text("История и ручные курсы") }
                 Text("Без интернета доступны сохранённые и ручные курсы.", style = MaterialTheme.typography.bodySmall)
             }

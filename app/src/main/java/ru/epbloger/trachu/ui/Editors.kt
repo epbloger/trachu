@@ -3,6 +3,7 @@ package ru.epbloger.trachu.ui
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -40,6 +41,7 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     var archived by draft.state("archived"){current?.archived ?: false}
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
+    val colorOptions=(CategoryColors.palette+listOfNotNull(current?.color)).distinct()
     val used=current!=null && (ledger.entries.any{it.accountId==current.id || it.targetAccountId==current.id} || ledger.debts.any{it.accountId==current.id} || ledger.schedules.any{it.template.accountId==current.id || it.template.targetAccountId==current.id})
     Form(if(current==null)"Новый счёт" else "Настройки счёта",close,busy,onSave={
         runCatching {
@@ -71,17 +73,13 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     if(delete&&current!=null)Confirm("Удалить счёт?","Начальный остаток будет удалён.",{delete=false},{vm.change({l->l.copy(accounts=l.accounts.filterNot{it.id==current.id})},close)},busy)
 }
 
-// UI default for newly created categories only. The serialized model retains its
-// historical default for old backups that omit the color field.
-private const val newCategoryColor=0xFF6143CCL
-private val categoryColors=listOf(newCategoryColor,0xFF218C75L,0xFF4677BDL,0xFF9469B6L,0xFFBF646CL,0xFFB98B40L,0xFF657984L,0xFF54864DL,0xFFB25C32L)
 private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","☕","🎁","✈","📚","🎮","👕","🐾","💼","💳","🚗","💡","🍽","🏋")
 @Composable fun CategoryEditor(ledger: Ledger, current: Category?, busy: Boolean, vm: AppViewModel, close: ()->Unit, draft:EntryDraft) {
     var name by draft.state("name"){current?.name.orEmpty()}
     var income by draft.state("income"){current?.income ?: false}
     var parent by draft.state("parent"){current?.parentId.orEmpty()}
     var icon by draft.state("icon"){current?.icon ?: "•"}
-    var color by draft.state("color"){current?.color ?: newCategoryColor}
+    var color by draft.state("color"){current?.color ?: CategoryColors.next(ledger.categories)}
     var archived by draft.state("archived"){current?.archived ?: false}
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
@@ -101,10 +99,11 @@ private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","�
             Choice("Родительская категория",parent,parents,{if(it.isEmpty())"Нет (основная)" else ledger.categoryName(it)}){parent=it}
         Choice("Значок",icon,categoryIcons,{it}){icon=it}
         Text("Цвет",style=MaterialTheme.typography.labelLarge)
-        categoryColors.chunked(3).forEach { row->
+        colorOptions.chunked(3).forEach { row->
             Row(horizontalArrangement=Arrangement.spacedBy(4.dp)) {
                 row.forEach { c->
-                    FilterChip(selected=color==c,onClick={color=c},label={Text("●",color=Color(c))},modifier=Modifier.weight(1f))
+                    FilterChip(selected=color==c,onClick={color=c},label={Text("●",color=Color(c))},
+                        modifier=Modifier.weight(1f).testTag("category-color:$c"))
                 }
             }
         }
@@ -160,6 +159,7 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
     }
 }
 @Composable fun EntryEditor(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, initialKind: Kind, current: Entry?=null, schedule: Schedule?=null, recurring: Boolean=false, close: ()->Unit, forcePlanned: Boolean=false, draft: EntryDraft, chooseReceipt: ()->Unit, initialDay:Long?=null) {
+    val guidedHint=LocalGuidedEditorHint.current
     // Keep the snapshot from opening the draft, even if the ledger emits a newer entry.
     val original by draft.state("originalEntry") { schedule?.template ?: current }
     val originalSchedule by draft.state("originalSchedule"){schedule}
@@ -179,9 +179,8 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
     var targetAmount by draft.state("targetAmount") { original?.let{e->e.targetMinor?.let{m->Money.input(m,ledger.accounts.first{a->a.id==e.targetAccountId}.currency)}}.orEmpty() }
     var explicitRate by draft.state("explicitRate") { original?.rate.orEmpty() }
     var splitMode by draft.state("splitMode") { (original?.splits?.size ?: 0)>1 }
-    val initialCategory=ledger.categories.firstOrNull{it.income==(kind==Kind.INCOME) && !it.archived}?.id.orEmpty()
     var splitDrafts by draft.state("splitDrafts") { original?.splits?.map{SplitDraft(it.categoryId,Money.input(it.minor,defaultAccount?.currency ?: ledger.baseCurrency))}
-        ?.takeIf{it.isNotEmpty()} ?: listOf(SplitDraft(initialCategory,"")) }
+        ?.takeIf{it.isNotEmpty()} ?: listOf(SplitDraft("","")) }
     var frequency by draft.state("frequency") { originalSchedule?.frequency ?: Frequency.MONTHLY }
     var interval by draft.state("interval") { originalSchedule?.interval?.toString() ?: "1" }
     var weekdays by draft.state("weekdays") { originalSchedule?.weekdays.orEmpty().toSet() }
@@ -237,6 +236,12 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         runCatching {
             val a=requireNotNull(account){"Сначала создайте счёт"}
             val minor=Money.parse(amount,a.currency);require(minor>0){"Сумма должна быть положительной"}
+            if(kind!=Kind.TRANSFER) {
+                val selected=if(splitMode)splitDrafts else splitDrafts.take(1)
+                require(selected.isNotEmpty()&&selected.all{draft->cats.any{it.id==draft.category}}) {
+                    "Выберите категорию операции"
+                }
+            }
             val date=parseDay(day)
             val t=LocalTime.parse(time)
             val split=if(kind==Kind.TRANSFER)emptyList() else if(splitMode)splitDrafts.map{it.category to Money.parse(it.amount,a.currency)} else listOf(splitDrafts.first().category to minor)
@@ -275,8 +280,12 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         }.onFailure{error=it.message ?: "Проверьте данные"}
     }) {
         if(active.isEmpty())Warning("Создайте хотя бы один счёт в разделе «Счета».")
-        Chips(listOf(Kind.EXPENSE,Kind.INCOME,Kind.TRANSFER),kind,{it.label()}){ k->
-            if(k!=kind){kind=k;splitDrafts=listOf(SplitDraft(ledger.categories.firstOrNull{it.income==(k==Kind.INCOME)&&!it.archived}?.id.orEmpty(),""));splitMode=false}
+        Chips(listOf(Kind.EXPENSE,Kind.INCOME,Kind.TRANSFER),kind,{it.label()},tagPrefix="entry-kind"){ k->
+            if(k!=kind){kind=k;splitDrafts=listOf(SplitDraft("",""));splitMode=false;error=""}
+        }
+        if(guidedHint)Surface(color=MaterialTheme.colorScheme.primaryContainer,shape=MaterialTheme.shapes.medium) {
+            Text("Для примера введите сумму и выберите категорию. Без категории операцию сохранить нельзя.",
+                Modifier.padding(horizontal=12.dp,vertical=10.dp),style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onPrimaryContainer)
         }
         Choice("Счёт",accountId,active.map{it.id},{id->active.find{it.id==id}?.let{"${it.name} · ${it.currency}"} ?: "Выбрать счёт"},compact=true){id->
             if(id!=accountId){
@@ -289,7 +298,8 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             @Composable fun AmountInput(modifier:Modifier=Modifier) {
-                Field("Сумма (${account?.currency ?: ledger.baseCurrency})",amount,{amount=it;error=""},true,modifier=modifier)
+                val emphasis=if(guidedHint)Modifier.border(2.dp,MaterialTheme.colorScheme.primary,MaterialTheme.shapes.medium).padding(2.dp) else Modifier
+                Field("Сумма (${account?.currency ?: ledger.baseCurrency})",amount,{amount=it;error=""},true,modifier=modifier.then(emphasis))
             }
             @Composable fun ConvertButton() {
                 if(account!=null)TextButton(onClick={
@@ -325,15 +335,17 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             }
             splitDrafts.forEachIndexed { i,draft->
                 CategoryChoice(if(splitMode)"Категория ${i+1}" else "Категория",draft.category,cats.filter{c->c.id==draft.category || (!c.archived && splitDrafts.none{it.category==c.id})},ledger,
-                    onCreate=if(busy)null else ({categoryCreationIndex=i;categoryCreationName=""}),quick=!splitMode){id->
-                    splitDrafts=splitDrafts.mapIndexed{j,d->if(j==i)d.copy(category=id) else d}}
+                    onCreate=if(busy)null else ({categoryCreationIndex=i;categoryCreationName=""}),quick=!splitMode,highlight=guidedHint){id->
+                    splitDrafts=splitDrafts.mapIndexed{j,d->if(j==i)d.copy(category=id) else d}
+                    error=""
+                }
                 if(splitMode) {
                     Field("Часть суммы ${i+1}",draft.amount,{v->splitDrafts=splitDrafts.mapIndexed{j,d->if(i==j)d.copy(amount=v) else d}},true)
                     if(remainder!=null&&remainder>0&&draft.amount.isBlank())TextButton(onClick={splitDrafts=splitDrafts.mapIndexed{j,d->if(i==j)d.copy(amount=Money.input(remainder,currency)) else d}}){Text("Заполнить остатком")}
                     if(splitDrafts.size>1)TextButton(onClick={splitDrafts=splitDrafts.filterIndexed{j,_->j!=i}}){Text("Удалить часть")}
                 }
             }
-            if(splitMode)OutlinedButton(onClick={splitDrafts=splitDrafts+SplitDraft(cats.firstOrNull{c->!c.archived&&splitDrafts.none{it.category==c.id}}?.id.orEmpty(),"")},enabled=splitDrafts.none{it.category.isBlank()}){Text("Добавить часть")}
+            if(splitMode)OutlinedButton(onClick={splitDrafts=splitDrafts+SplitDraft("","")},enabled=splitDrafts.none{it.category.isBlank()}){Text("Добавить часть")}
             Toggle("Разделить по категориям",splitMode,{value->
                 splitMode=value
                 splitDrafts=if(value)listOf(splitDrafts.first().copy(amount=amount)) else listOf(splitDrafts.first().copy(amount=""))
@@ -391,12 +403,17 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
                 else Text("Категория появится в списке и будет выбрана в этой операции.")
             }},
             confirmButton={Button(onClick={
-                val category=Category(name=name,income=income,color=newCategoryColor)
+                var createdCategory:Category?=null
                 vm.change({old->
                     require(old.categories.none{it.income==income&&it.parentId==null&&it.name.equals(name,true)}){"Категория с таким названием уже существует"}
+                    val category=Category(name=name,income=income,color=CategoryColors.next(old.categories))
+                    createdCategory=category
                     old.copy(categories=old.categories+category)
                 }){
-                    splitDrafts=splitDrafts.mapIndexed{j,d->if(j==index)d.copy(category=category.id) else d}
+                    createdCategory?.let{category->
+                        splitDrafts=splitDrafts.mapIndexed{j,d->if(j==index)d.copy(category=category.id) else d}
+                    }
+                    error=""
                     categoryCreationIndex=-1
                     categoryCreationName=""
                 }

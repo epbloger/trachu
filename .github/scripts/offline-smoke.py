@@ -115,6 +115,9 @@ try:
     start(quick=True)
     text('Новая операция')
     enter('42.50')
+    if not legacy_apk:
+        # A new operation deliberately has no preselected category.
+        tap(text('Продукты'))
     tap(text('Сохранить'))
     wait_closed('Новая операция')
     adb('shell', 'am', 'force-stop', package)

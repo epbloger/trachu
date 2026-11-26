@@ -17,7 +17,7 @@ data class Settings(
     val lastAccount: String = "",
     val showWidgetBalance: Boolean = false,
     val failedAttempts: Int = 0,
-    val lockedUntil: Long = 0L, val monthStart: Int = 1, val automaticRates:Boolean=false,
+    val lockedUntil: Long = 0L, val monthStart: Int = 1, val automaticRates:Boolean=true,
     val adsConsent:Boolean?=null,
     val onboardingCompleted:Boolean=false
 ) { val protected get() = credential.isNotEmpty() }
@@ -41,7 +41,7 @@ class Preferences(context: Context) {
     val settings: Flow<Settings> = store.data.map { p ->
         Settings(p[K.theme] ?: "system",p[K.pin] ?: "",p[K.biometric] ?: false,
             p[K.timeout] ?: 30,p[K.account] ?: "",p[K.widget] ?: false,
-            p[K.failures] ?: 0,p[K.until] ?: 0,p[K.monthStart] ?: 1,p[K.automaticRates] ?: false,p[K.adsConsent],
+            p[K.failures] ?: 0,p[K.until] ?: 0,p[K.monthStart] ?: 1,p[K.automaticRates] ?: true,p[K.adsConsent],
             // Older installations with preferences already configured must not be sent through setup.
             p[K.onboardingCompleted] ?: p.asMap().isNotEmpty())
     }

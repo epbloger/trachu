@@ -39,7 +39,7 @@ internal fun firstAccountLedger(ledger: Ledger, currency: String, name: String, 
 }
 
 @Composable
-internal fun OnboardingScreen(ledger: Ledger, vm: AppViewModel, busy: Boolean, file: (FileRequest) -> Unit) {
+internal fun OnboardingScreen(ledger: Ledger, vm: AppViewModel, busy: Boolean, file: (FileRequest) -> Unit, requestTutorial: (Boolean) -> Unit) {
     val draft = vm.onboardingDraft
     var currency by draft.state("currency") { ledger.baseCurrency }
     var name by draft.state("name") { "" }
@@ -68,11 +68,15 @@ internal fun OnboardingScreen(ledger: Ledger, vm: AppViewModel, busy: Boolean, f
                     .onSuccess { error = ""; tutorial = true }
                     .onFailure { error = it.message ?: "Проверьте данные" }
             }, enabled = !busy, modifier = Modifier.fillMaxWidth().testTag("onboarding-next")) { Text("Далее") }
-            TextButton(onClick = { focus.clearFocus(); restoring = true }, enabled = !busy,
+            TextButton(onClick = { focus.clearFocus(); requestTutorial(false); restoring = true }, enabled = !busy,
                 modifier = Modifier.fillMaxWidth().testTag("onboarding-restore")) { Text("Восстановить из копии") }
         }
     }
-    if (tutorial) TutorialDialog(onClose = { if (!busy) tutorial = false }, onStart = {
+    if (tutorial) TutorialIntro(onClose = { if (!busy) { tutorial = false; requestTutorial(false) } }, onStart = {
+        requestTutorial(true)
+        vm.finishOnboarding(currency, name, type, opening)
+    }, onSkip = {
+        requestTutorial(false)
         vm.finishOnboarding(currency, name, type, opening)
     }, busy = busy)
     if (restoring) {
@@ -89,23 +93,10 @@ internal fun OnboardingScreen(ledger: Ledger, vm: AppViewModel, busy: Boolean, f
 }
 
 @Composable
-internal fun TutorialDialog(onStart: (() -> Unit)? = null, busy: Boolean = false, onClose: () -> Unit) {
-    Form("Как пользоваться ТРАЧУ.", onClose, busy, if (onStart == null) "Готово" else "Начать", onStart ?: onClose) {
-        if (onStart != null) TextButton(onClick = onStart, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Пропустить обучение") }
-        TutorialItem("01", "Записывайте покупки и доходы", "На обзоре добавьте расход или доход, выберите счёт и категорию. Перевод между своими счетами не считается расходом.")
-        TutorialItem("02", "Планируйте заранее", "В разделе «План» создавайте бюджеты, цели, долги и запланированные или регулярные платежи.")
-        TutorialItem("03", "Смотрите, куда уходят деньги", "В аналитике сравнивайте доходы и расходы, а в операциях ищите и исправляйте записи.")
-        TutorialItem("04", "Защитите свои данные", "В боковом меню можно настроить PIN, открыть конвертер валют и сохранить зашифрованную резервную копию. Интернет для учёта не нужен.")
-    }
-}
-
-@Composable
-private fun TutorialItem(number: String, title: String, description: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(number, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium)
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+internal fun TutorialIntro(onStart: () -> Unit, onSkip: () -> Unit, busy: Boolean = false, onClose: () -> Unit) {
+    Form("Как пользоваться ТРАЧУ.", onClose, busy, "Начать", onStart) {
+        TextButton(onClick = onSkip, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Пропустить обучение") }
+        Text("Покажем основные кнопки прямо в приложении. Нажимайте подсвеченные элементы, чтобы открыть нужный экран.")
+        Text("Обучение не создаёт пробных операций. Его можно прервать и запустить заново из меню.", style = MaterialTheme.typography.bodyMedium)
     }
 }

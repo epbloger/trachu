@@ -94,6 +94,7 @@ class EditorRecreationTest {
             withVm{assertSame(editor,it.editor);assertSame(editor.draft,it.receiptRequest);it.receiptRequest=null}
             rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains("1234")
             rule.onNodeWithTag("field:Часть суммы 1").performScrollTo().assertTextContains("1234")
+            rule.onNodeWithTag("category-selected:Категория 1").performScrollTo().assertIsNotSelected()
             rule.onNodeWithTag("field:Комментарий").performScrollTo().assertTextContains("Несохранённая покупка")
             rule.onNodeWithTag("field:Теги").performScrollTo().assertTextContains("черновик")
             rule.onNodeWithTag("toggle:Запланировать").performScrollTo().assertIsOn()
@@ -120,9 +121,22 @@ class EditorRecreationTest {
             val amountTag="field:Сумма (${account.currency})"
             awaitTag(amountTag)
             enter(amountTag,"12")
+            rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsNotSelected()
+                .assertTextContains("Выберите категорию ниже")
+            rule.onNodeWithTag("form_save").performScrollTo().performClick()
+            rule.onNodeWithText("Выберите категорию операции").assertExists()
+            rule.onNodeWithTag("entry-kind:Доход").performScrollTo().performClick()
+            rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsNotSelected()
+            rule.onNodeWithTag("category-quick:salary").assertIsNotSelected()
+            rule.onNodeWithTag("form_save").performScrollTo().performClick()
+            rule.onNodeWithText("Выберите категорию операции").assertExists()
+            rule.onNodeWithTag("entry-kind:Расход").performScrollTo().performClick()
+            rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsNotSelected()
             rule.onNodeWithTag("category-quick:food").performScrollTo().performClick().assertIsSelected()
+            rule.onNodeWithTag("category-selected:Категория").assertIsSelected().assertTextContains("Продукты")
             rule.onNodeWithTag("category-quick:transport").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithTag("category-quick:food").assertIsNotSelected()
+            rule.onNodeWithTag("category-selected:Категория").assertIsSelected().assertTextContains("Транспорт")
             rule.onNodeWithTag("field:Поиск категории").assertDoesNotExist()
             rule.onNodeWithText("Сегодня").performScrollTo().assertIsSelected()
             rule.onNodeWithText("Вчера").performScrollTo().performClick().assertIsSelected()
@@ -141,9 +155,9 @@ class EditorRecreationTest {
             rule.onNodeWithTag("category-create-confirm").performClick()
             rule.waitUntil(20_000){vm.ledger.value?.categories?.any{it.name==name}==true}
             val category=runBlocking{store.current().categories.single{it.name==name}}
-            assertEquals(0xFF6143CCL,category.color)
+            assertEquals(CategoryColors.next(initial.categories),category.color)
             rule.waitUntil(20_000){rule.onAllNodesWithTag("category-create-confirm").fetchSemanticsNodes().isEmpty()}
-            rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertTextContains(name,substring=true)
+            rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsSelected().assertTextContains(name,substring=true)
             rule.onNodeWithTag("category-quick:transport").assertIsNotSelected()
             rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains("12")
             rule.onNodeWithTag("field:Комментарий").performScrollTo().assertTextContains("Комментарий до создания")
@@ -158,6 +172,109 @@ class EditorRecreationTest {
         }finally{
             withVm{it.editor=null}
             runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id},entries=it.entries.filterNot{e->e.accountId==account.id},categories=it.categories.filterNot{c->c.name==name})}}
+        }
+    }
+
+    @Test fun newCategoryEditorUsesDistinctPaletteColor(){
+        val store=LedgerStore.get(context)
+        val initial=runBlocking{store.current()}
+        val name="Цвет категории ${newId()}"
+        val expected=CategoryColors.next(initial.categories)
+        try{
+            awaitTag("nav-home")
+            lateinit var vm:AppViewModel
+            withVm{vm=it;it.editor=Editor("category")}
+            awaitTag("field:Название")
+            enter("field:Название",name)
+            rule.onNodeWithTag("category-color:$expected").performScrollTo().assertIsSelected()
+            rule.onNodeWithTag("form_save").performClick()
+            rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+            val saved=runBlocking{store.current().categories.single{it.name==name}}
+            assertEquals(expected,saved.color)
+        }finally{
+            withVm{it.editor=null}
+            runBlocking{store.change{it.copy(categories=it.categories.filterNot{c->c.name==name})}}
+        }
+    }
+
+    @Test fun categoryEditorPreservesAnExistingCustomColor(){
+        val store=LedgerStore.get(context)
+        val customColor=0xFF123456L
+        val category=Category(name="Свой цвет ${newId()}",color=customColor)
+        runBlocking{store.change{it.copy(categories=it.categories+category)}}
+        try{
+            awaitTag("nav-home")
+            withVm{it.editor=Editor("category",category.id)}
+            awaitTag("field:Название")
+            rule.onNodeWithTag("category-color:$customColor").performScrollTo().assertIsSelected()
+            rule.onNodeWithTag("form_save").performClick()
+            rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+            assertEquals(customColor,runBlocking{store.current().categories.single{it.id==category.id}.color})
+        }finally{
+            withVm{it.editor=null}
+            runBlocking{store.change{it.copy(categories=it.categories.filterNot{c->c.id==category.id})}}
+        }
+    }
+
+    @Test fun eachNewSplitPartRequiresItsOwnCategory(){
+        val store=LedgerStore.get(context)
+        val initial=runBlocking{store.current()}
+        val account=Account(name="Части ${newId()}",currency=initial.baseCurrency)
+        runBlocking{store.change{it.copy(accounts=it.accounts+account)}}
+        try{
+            awaitTag("nav-home")
+            lateinit var vm:AppViewModel
+            withVm{vm=it}
+            rule.waitUntil(20_000){vm.ledger.value?.accounts?.any{it.id==account.id}==true}
+            withVm{it.editor=Editor("entry",draft=EntryDraft().apply{state("accountId"){account.id}})}
+            awaitTag("field:Сумма (${account.currency})")
+            enter("field:Сумма (${account.currency})","12")
+            rule.onNodeWithTag("category-selected:Категория").assertIsNotSelected()
+            rule.onNodeWithTag("category-quick:transport").performScrollTo().performClick().assertIsSelected()
+            rule.onNodeWithTag("toggle:Разделить по категориям").performScrollTo().performClick()
+            enter("field:Часть суммы 1","5")
+            rule.onNodeWithText("Добавить часть").performScrollTo().performClick()
+            rule.onNodeWithTag("category-selected:Категория 2").performScrollTo().assertIsNotSelected()
+            enter("field:Часть суммы 2","7")
+            rule.onNodeWithTag("form_save").performClick()
+            rule.onNodeWithText("Выберите категорию операции").assertExists()
+            rule.onNodeWithTag("category-choice:Категория 2").performScrollTo().performClick()
+            rule.onNodeWithTag("category-option:food").performScrollTo().performClick()
+            rule.onNodeWithTag("category-selected:Категория 2").assertIsSelected().assertTextContains("Продукты")
+            rule.onNodeWithTag("form_save").performClick()
+            rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+            val saved=runBlocking{store.current().entries.single{it.accountId==account.id}}
+            assertEquals(listOf("transport","food"),saved.splits.map{it.categoryId})
+            assertEquals(listOf(Money.parse("5",account.currency),Money.parse("7",account.currency)),saved.splits.map{it.minor})
+        }finally{
+            withVm{it.editor=null}
+            runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id},entries=it.entries.filterNot{e->e.accountId==account.id})}}
+        }
+    }
+
+    @Test fun editingEntryKeepsItsOriginalCategorySelected(){
+        val store=LedgerStore.get(context)
+        val initial=runBlocking{store.current()}
+        val account=Account(name="Редактирование ${newId()}",currency=initial.baseCurrency)
+        val category=initial.categories.first{!it.income&&!it.archived}
+        val prepared=initial.copy(accounts=initial.accounts+account)
+        val original=Finance.makeEntry(prepared,Kind.EXPENSE,account.id,1234,today()-1,listOf(category.id to 1234L))
+        runBlocking{store.change{it.copy(accounts=it.accounts+account,entries=it.entries+original)}}
+        try{
+            awaitTag("nav-home")
+            lateinit var vm:AppViewModel
+            withVm{vm=it}
+            rule.waitUntil(20_000){vm.ledger.value?.entries?.any{it.id==original.id}==true}
+            withVm{it.editor=Editor("entry",original.id,Kind.EXPENSE)}
+            awaitTag("category-selected:Категория")
+            rule.onNodeWithTag("category-selected:Категория").performScrollTo()
+                .assertIsSelected().assertTextContains(category.name)
+            rule.onNodeWithTag("form_save").performClick()
+            rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
+            assertEquals(original,runBlocking{store.current().entries.single{it.id==original.id}})
+        }finally{
+            withVm{it.editor=null}
+            runBlocking{store.change{it.copy(accounts=it.accounts.filterNot{a->a.id==account.id},entries=it.entries.filterNot{e->e.id==original.id})}}
         }
     }
 
@@ -318,6 +435,7 @@ class EditorRecreationTest {
             val amountTag="field:Сумма (${account.currency})"
             awaitTag(amountTag)
             rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(1234,account.currency))
+            rule.onNodeWithTag("category-selected:Категория").performScrollTo().assertIsSelected().assertTextContains(category.name)
             rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(today()))
             rule.onNodeWithTag("field:Комментарий").performScrollTo().assertTextContains(original.note)
             assertEquals(listOf(original),runBlocking{store.current().entries.filter{it.accountId==account.id}})

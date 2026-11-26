@@ -108,7 +108,7 @@ enum class MorePage(val label:String) { INDEX("Инструменты"), ACCOUNT
                 }.onFailure{error=it.message ?: "Проверьте курс и дату"}
             },enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Сохранить вручную")}
             OutlinedButton(onClick={runCatching{parseDay(date).also{require(it<=today())}}.onSuccess{vm.fetchRates(it);error=""}.onFailure{error="Проверьте дату"}},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Получить официальные курсы ЦБ РФ")}
-            Toggle("Автоматически обновлять курсы",settings.automaticRates,{if(!busy)vm.setAutomaticRates(it)},"Раз в сутки при наличии интернета. Выключено по умолчанию.")
+            Toggle("Автоматически обновлять курсы",settings.automaticRates,{if(!busy)vm.setAutomaticRates(it)},"При открытии конвертера и примерно раз в сутки при наличии интернета.")
             Text("Запрос к cbr.ru содержит только дату. Операции, остатки и названия счетов не передаются. Ручные курсы и исторические курсы записанных операций сохраняются.",style=MaterialTheme.typography.bodySmall)
             if(error.isNotEmpty())Warning(error)
         }}
