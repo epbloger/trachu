@@ -167,9 +167,12 @@ class PlannerUxTest {
             rule.onNodeWithText("Удалить долг").performScrollTo().performClick()
             rule.onNodeWithText("Связанная запись получения или выдачи денег тоже будет удалена, и остаток счёта изменится.")
                 .assertIsDisplayed()
-            rule.onNodeWithText("Отмена").performClick()
-            assertEquals(before,runBlocking{store.current()})
-            assertEquals(60000L,Finance.balance(runBlocking{store.current()},account.id))
+            rule.onNodeWithText("Подтвердить").performClick()
+            awaitLedger{l->l.debts.none{it.id==debt.id}&&l.entries.none{it.debtId==debt.id}}
+            val after=runBlocking{store.current()}
+            assertFalse(after.debts.any{it.id==debt.id})
+            assertFalse(after.entries.any{it.debtId==debt.id})
+            assertEquals(50000L,Finance.balance(after,account.id))
         }finally{
             rule.activityRule.scenario.onActivity{ViewModelProvider(it)[AppViewModel::class.java].editor=null}
             runBlocking{store.change{it.copy(entries=it.entries.filterNot{e->e.debtId==debt.id},debts=it.debts.filterNot{d->d.id==debt.id},accounts=it.accounts.filterNot{a->a.id==account.id})}}
