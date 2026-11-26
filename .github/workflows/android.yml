@@ -169,7 +169,7 @@ jobs:
           git -C "$baseline" rev-parse HEAD > qa/upgrade-baseline-commit.txt
           sha256sum "$old" > qa/upgrade-baseline-sha256.txt
           baseline11="$RUNNER_TEMP/trachu-v11"
-          git worktree add --detach "$baseline11" b58080ef4b755130ad45f62a6aab75e7617ea920
+          git worktree add --detach "$baseline11" 7e75bea159803e06d7473d8c4203e72f0b823bea
           gradle --project-dir "$baseline11" --no-daemon assembleDebug
           old11="$baseline11/app/build/outputs/apk/debug/app-debug.apk"
           "$signer" verify --print-certs "$old11" > qa/upgrade-v11-baseline-cert.txt
@@ -184,7 +184,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Instrumented phone and tablet tests
+      - name: Instrumented phone, tablet and planner UX tests
         if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -193,7 +193,7 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh
-      - name: Android 8 compatibility smoke tests
+      - name: Android 8 compatibility and planner UX tests
         if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -202,7 +202,7 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh api26
-      - name: Android 13 compatibility and editor tests
+      - name: Android 13 compatibility, editor and planner UX tests
         if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -215,9 +215,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 store/rustore/verify-evidence.py release --qa . --apk . --aab . --commit "$(git rev-parse HEAD)" --require-guided-v11 | tee qa/current-evidence.txt
-          grep -F 'PASS: 1.0.0 -> 1.1.0, no clear or onboarding' qa/upgrade/result.txt
-          grep -F 'PASS: 1.1.0 -> 1.1.0, no clear or onboarding' qa/upgrade-v11/result.txt
+          python3 store/rustore/verify-evidence.py release --qa . --apk . --aab . --commit "$(git rev-parse HEAD)" --require-ux-v12 | tee qa/current-evidence.txt
+          grep -F 'PASS: 1.0.0 -> 1.2.0, no clear or onboarding' qa/upgrade/result.txt
+          grep -F 'PASS: 1.1.0 -> 1.2.0, no clear or onboarding' qa/upgrade-v11/result.txt
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/release/*.apk | tee qa/zipalign.txt
       - name: Upload APK
         if: always()

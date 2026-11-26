@@ -95,7 +95,8 @@ class GuidedTutorialTest {
     private fun replay() {
         awaitTag("nav-more")
         rule.onNodeWithTag("nav-more").performClick()
-        rule.onNodeWithTag("drawer-tutorial").performScrollTo().performClick()
+        rule.onNodeWithTag("drawer-about").performScrollTo().performClick()
+        rule.onNodeWithTag("help-tutorial").performScrollTo().performClick()
         awaitTag("tutorial-target-expense")
     }
     private fun assertEditor(scenario: ActivityScenario<MainActivity>, kind: Kind) {
@@ -116,6 +117,9 @@ class GuidedTutorialTest {
     @Test fun onboardingStartsRealWalkthroughAndReplayCanBeSkippedWithoutEntries() = isolated {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             awaitTag("onboarding-next")
+            awaitTag("onboarding-notifications-skip")
+            rule.onNodeWithTag("onboarding-notifications-skip").performClick()
+            rule.waitUntil(10_000){rule.onAllNodesWithTag("onboarding-notifications-skip").fetchSemanticsNodes().isEmpty()}
             rule.onNodeWithTag("field:Название счёта").performScrollTo().performTextInput("Счёт обучения")
             rule.onNodeWithTag("field:Название счёта").performImeAction()
             rule.onNodeWithTag("onboarding-next").performClick()

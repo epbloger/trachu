@@ -27,10 +27,11 @@ class FinanceWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         val prefs=Preferences(applicationContext)
         val manager=applicationContext.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("finance","Финансовые напоминания",NotificationManager.IMPORTANCE_DEFAULT))
-        if (manager.areNotificationsEnabled() && manager.getNotificationChannel("finance")?.importance!=NotificationManager.IMPORTANCE_NONE &&
+        if (prefs.current().notificationsEnabled!=false && manager.areNotificationsEnabled() && manager.getNotificationChannel("finance")?.importance!=NotificationManager.IMPORTANCE_NONE &&
             (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(applicationContext,Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED)) {
             val pending=PendingIntent.getActivity(applicationContext,0,Intent(applicationContext,MainActivity::class.java),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-            fun show(id: Int, message: String) {
+            suspend fun show(id: Int, message: String) {
+                if(prefs.current().notificationsEnabled==false)return
                 manager.notify(id,NotificationCompat.Builder(applicationContext,"finance")
                     .setSmallIcon(R.drawable.ic_notification).setContentTitle("ТРАЧУ.")
                     .setContentText(message).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
@@ -49,12 +50,17 @@ class FinanceWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                     show(1000+budget.id.hashCode().and(0x3fffffff),when(level){1->"Бюджет использован на 80%.";2->"Достигнут лимит бюджета.";else->"Лимит бюджета превышен."})
             }
         }
+        if(prefs.current().notificationsEnabled==false)cancelReminders(applicationContext)
         refreshWidgets(applicationContext)
         Result.success()
     } catch (e: kotlinx.coroutines.CancellationException) { throw e }
     catch (_: Exception) { if(runAttemptCount<3) Result.retry() else Result.failure() }
 
     companion object {
+        fun cancelReminders(context: Context) {
+            val manager=context.getSystemService(NotificationManager::class.java)
+            manager.activeNotifications.filter{it.notification.channelId=="finance"}.forEach{manager.cancel(it.tag,it.id)}
+        }
         fun schedule(context: Context) {
             WorkManager.getInstance(context).enqueueUniquePeriodicWork("finance-periodic",ExistingPeriodicWorkPolicy.KEEP,
                 PeriodicWorkRequestBuilder<FinanceWorker>(1,TimeUnit.HOURS).build())

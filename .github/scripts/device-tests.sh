@@ -5,6 +5,7 @@ if [[ "${1:-}" == "api26" || "${1:-}" == "api33" ]]; then
   status=0
   classes=ru.epbloger.trachu.data.LedgerStoreTest,ru.epbloger.trachu.security.DeviceSecurityTest,ru.epbloger.trachu.data.PdfReportTest
   classes+=,ru.epbloger.trachu.ui.NavigationTest,ru.epbloger.trachu.ui.OnboardingDeviceTest,ru.epbloger.trachu.ui.ConverterRefreshTest,ru.epbloger.trachu.ui.GuidedTutorialTest
+  classes+=,ru.epbloger.trachu.ui.PlannerUxTest
   if [[ "$1" == "api33" ]]; then classes+=,ru.epbloger.trachu.ui.EditorRecreationTest; fi
   gradle --no-daemon --stacktrace connectedDebugAndroidTest "-Pandroid.testInstrumentationRunnerArguments.class=$classes" || status=1
   cp -a app/build/outputs/androidTest-results "qa/$1/" || true
@@ -12,6 +13,8 @@ if [[ "${1:-}" == "api26" || "${1:-}" == "api33" ]]; then
 fi
 mkdir -p qa/phone qa/tablet
 status=0
+# The unfiltered API 36 runs below execute the complete instrumentation suite,
+# including PlannerUxTest and DeviceSecurityTest.
 trap 'adb shell cmd connectivity airplane-mode disable || true; adb shell svc wifi enable || true; adb shell svc data enable || true' EXIT
 adb shell svc wifi disable
 adb shell svc data disable
@@ -50,7 +53,7 @@ if [[ "$status" == 0 ]]; then
   adb shell svc data disable
   gradle --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.epbloger.trachu.ui.NavigationTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || status=1
   adb pull /sdcard/Android/data/ru.epbloger.trachu/files/qa/. qa/store-phone/ || status=1
-  python3 store/rustore/verify-evidence.py screens qa/store-phone --require-guided-v11 || status=1
+  python3 store/rustore/verify-evidence.py screens qa/store-phone --require-ux-v12 || status=1
   cp -a app/build/outputs/androidTest-results qa/store-phone/ || true
 fi
 adb shell wm size reset

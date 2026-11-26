@@ -27,6 +27,26 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.util.Currency
 
+// Translate parser/overflow failures at the field boundary, before writing anything.
+private class EditorInputError(message:String):IllegalArgumentException(message)
+private fun <T> editorInput(message:String,block:()->T):T =
+    try { block() } catch(e:EditorInputError) { throw e }
+    catch(e:kotlinx.coroutines.CancellationException) { throw e }
+    catch(_:Exception) { throw EditorInputError(message) }
+private fun editorAmount(text:String,currency:String,label:String):Long =
+    editorInput("$label: введите корректную сумму (до ${Money.digits(currency)} знаков после запятой).") { Money.parse(text,currency) }
+private fun editorDate(text:String,label:String="Дата"):Long =
+    editorInput("$label: укажите дату в формате ГГГГ-ММ-ДД.") { parseDay(text) }
+private fun editorMessage(error:Throwable,fallback:String):String =
+    error.message?.takeIf{it.any{c->c in 'А'..'я'||c=='ё'||c=='Ё'}} ?: fallback
+private fun requireEditorName(name:String,label:String) {
+    require(name.isNotBlank()){"$label: введите название"}
+    require(name.trim().length<=160){"$label: не более 160 символов"}
+}
+private fun requireEditorNote(note:String) {
+    require(note.trim().length<=8_000){"Комментарий: не более 8000 символов"}
+}
+
 private val currencies = Currency.getAvailableCurrencies().map { it.currencyCode }.filter { runCatching { Money.digits(it) }.isSuccess }.sorted()
 private val commonCurrencies = listOf("RUB","USD","EUR","CNY","KZT","BYN","TRY","JPY","GBP","AED")
 val allCurrencies = (commonCurrencies+currencies).distinct()
@@ -42,13 +62,13 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
     val used=current!=null && (ledger.entries.any{it.accountId==current.id || it.targetAccountId==current.id} || ledger.debts.any{it.accountId==current.id} || ledger.schedules.any{it.template.accountId==current.id || it.template.targetAccountId==current.id})
-    Form(if(current==null)"Новый счёт" else "Настройки счёта",close,busy,onSave={
+    Form(if(current==null)"Новый счёт" else "Настройки счёта",close,busy,validationError=error,onSave={
         runCatching {
-            require(name.isNotBlank()){"Введите название"}
-            val a=Account(current?.id ?: newId(),name.trim(),currency,type,Money.parse(opening,currency),archived,included,statistics,current?.sortOrder ?: ((ledger.accounts.maxOfOrNull{it.sortOrder} ?: -1)+1))
+            requireEditorName(name,"Название счёта")
+            val a=Account(current?.id ?: newId(),name.trim(),currency,type,editorAmount(opening,currency,"Начальный остаток"),archived,included,statistics,current?.sortOrder ?: ((ledger.accounts.maxOfOrNull{it.sortOrder} ?: -1)+1))
             vm.change({ l->
                 require(l.accounts.none{it.id!=a.id && it.name.equals(a.name,true)}){"Счёт с таким названием уже существует"}
-                if(current!=null && currency!=current.currency) require(l.entries.none{it.accountId==current.id || it.targetAccountId==current.id} && l.debts.none{it.accountId==current.id} && l.schedules.none{it.template.accountId==current.id || it.template.targetAccountId==current.id})
+                if(current!=null && currency!=current.currency) require(l.entries.none{it.accountId==current.id || it.targetAccountId==current.id} && l.debts.none{it.accountId==current.id} && l.schedules.none{it.template.accountId==current.id || it.template.targetAccountId==current.id}){"Валюта: счёт уже используется, менять валюту нельзя"}
                 if(a.archived && current?.archived!=true) {
                     require(l.schedules.none{it.enabled && (it.template.accountId==a.id || it.template.targetAccountId==a.id)}){"Сначала приостановите регулярные операции этого счёта"}
                     require(l.entries.none{it.status==EntryStatus.PLANNED && (it.accountId==a.id || it.targetAccountId==a.id)}){"Сначала обработайте запланированные операции"}
@@ -56,20 +76,23 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
                 }
                 l.copy(accounts=l.accounts.filterNot{it.id==a.id}+a)
             },close)
-        }.onFailure{error=it.message ?: "Проверьте данные"}
+        }.onFailure{error=editorMessage(it,"Проверьте название и начальный остаток счёта.")}
     }) {
-        Field("Название",name,{name=it})
+        Field("Название",name,{name=it;error=""})
         Choice("Тип",type,AccountType.entries,{it.label()}){type=it}
         if(used)Text("Валюта: $currency. Её нельзя менять после появления операций.")
-        else CurrencyPicker("Валюта",currency){if(it!=currency){currency=it;opening="0"}}
-        Field("Начальный остаток",opening,{opening=it},true,supporting="Не входит в доходы или расходы. Для кредитного счёта можно указать отрицательное значение.")
+        else CurrencyPicker("Валюта",currency){if(it!=currency){currency=it;opening="0";error=""}}
+        Field("Начальный остаток",opening,{opening=it;error=""},true,supporting="Не входит в доходы или расходы. Для кредитного счёта можно указать отрицательное значение.")
         Toggle("Включать в общий баланс",included,{included=it})
         Toggle("Включать в отчёты и бюджеты",statistics,{statistics=it},"Исключение не изменяет операции и остаток счёта.")
         if(current!=null)Toggle("Архивировать",archived,{archived=it},"История и остаток сохраняются. Архивный счёт скрыт в формах новых операций.")
         if(current!=null&&!used)TextButton(onClick={delete=true}){Text("Удалить счёт",color=MaterialTheme.colorScheme.error)}
-        if(error.isNotEmpty())Warning(error)
     }
-    if(delete&&current!=null)Confirm("Удалить счёт?","Начальный остаток будет удалён.",{delete=false},{vm.change({l->l.copy(accounts=l.accounts.filterNot{it.id==current.id})},close)},busy)
+    if(delete&&current!=null)Confirm("Удалить счёт?","Начальный остаток будет удалён.",{delete=false},{vm.change({l->
+        require(l.entries.none{it.accountId==current.id||it.targetAccountId==current.id}&&
+            l.debts.none{it.accountId==current.id}&&l.schedules.none{it.template.accountId==current.id||it.template.targetAccountId==current.id}){"Счёт уже используется. Его можно архивировать."}
+        l.copy(accounts=l.accounts.filterNot{it.id==current.id})
+    },close)},busy)
 }
 
 private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","☕","🎁","✈","📚","🎮","👕","🐾","💼","💳","🚗","💡","🍽","🏋")
@@ -85,18 +108,22 @@ private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","�
     var delete by draft.state("delete"){false}
     val used=current!=null && (ledger.entries.any{e->e.splits.any{it.categoryId==current.id}} || ledger.categories.any{it.parentId==current.id} || ledger.budgets.any{it.categoryId==current.id} || ledger.schedules.any{it.template.splits.any{sp->sp.categoryId==current.id}})
     val parents=listOf("")+ledger.categories.filter{it.id!=current?.id && it.income==income && it.parentId==null && !it.archived}.map{it.id}
-    Form(if(current==null)"Новая категория" else "Изменить категорию",close,busy,onSave={
+    Form(if(current==null)"Новая категория" else "Изменить категорию",close,busy,validationError=error,onSave={
         runCatching {
-            require(name.isNotBlank()){"Введите название"}
+            requireEditorName(name,"Название категории")
+            require(parent.isBlank()||parent in parents||parent==current?.parentId){"Выберите основную категорию"}
             val c=Category(current?.id ?: newId(),name.trim(),income,parent.ifBlank{null},color,icon,archived)
-            vm.change({ l->l.copy(categories=l.categories.filterNot{it.id==c.id}+c) },close)
-        }.onFailure{error=it.message ?: "Проверьте данные"}
+            vm.change({ l->
+                if(c.parentId!=null)require(l.categories.any{it.id==c.parentId&&it.id!=c.id&&it.parentId==null&&it.income==c.income}){"Основная категория больше недоступна. Выберите другую."}
+                l.copy(categories=l.categories.filterNot{it.id==c.id}+c)
+            },close)
+        }.onFailure{error=editorMessage(it,"Проверьте название и основную категорию.")}
     }) {
-        Field("Название",name,{name=it})
-        if(!used)Chips(listOf(false,true),income,{if(it)"Доход" else "Расход"}){income=it;parent=""}
+        Field("Название",name,{name=it;error=""})
+        if(!used)Chips(listOf(false,true),income,{if(it)"Доход" else "Расход"}){income=it;parent="";error=""}
         else Text(if(income)"Категория доходов" else "Категория расходов")
         if(current==null || ledger.categories.none{it.parentId==current.id})
-            Choice("Родительская категория",parent,parents,{if(it.isEmpty())"Нет (основная)" else ledger.categoryName(it)}){parent=it}
+            Choice("Родительская категория",parent,parents,{if(it.isEmpty())"Нет (основная)" else ledger.categoryName(it)}){parent=it;error=""}
         Choice("Значок",icon,categoryIcons,{it}){icon=it}
         Text("Цвет",style=MaterialTheme.typography.labelLarge)
         colorOptions.chunked(3).forEach { row->
@@ -109,9 +136,12 @@ private val categoryIcons=listOf("•","🛒","🚇","🏠","✚","★","₽","�
         }
         if(current!=null)Toggle("Архивировать",archived,{archived=it},"Старые операции сохранят категорию.")
         if(current!=null&&!used)TextButton(onClick={delete=true}){Text("Удалить категорию",color=MaterialTheme.colorScheme.error)}
-        if(error.isNotEmpty())Warning(error)
     }
-    if(delete&&current!=null)Confirm("Удалить категорию?","Категория не используется в операциях.",{delete=false},{vm.change({l->l.copy(categories=l.categories.filterNot{it.id==current.id})},close)},busy)
+    if(delete&&current!=null)Confirm("Удалить категорию?","Категория не используется в операциях.",{delete=false},{vm.change({l->
+        require(l.entries.none{e->e.splits.any{it.categoryId==current.id}}&&l.categories.none{it.parentId==current.id}&&
+            l.budgets.none{it.categoryId==current.id}&&l.schedules.none{e->e.template.splits.any{it.categoryId==current.id}}){"Категория уже используется. Её можно архивировать."}
+        l.copy(categories=l.categories.filterNot{it.id==current.id})
+    },close)},busy)
 }
 
 private data class SplitDraft(val category: String,val amount: String)
@@ -235,49 +265,80 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
     Form(if(recurring)"Регулярная операция" else if(current==null)"Новая операция" else "Редактировать операцию",close,busy,spacing=6,compact=true,validationError=error,onSave={
         runCatching {
             val a=requireNotNull(account){"Сначала создайте счёт"}
-            val minor=Money.parse(amount,a.currency);require(minor>0){"Сумма должна быть положительной"}
+            val minor=editorAmount(amount,a.currency,"Сумма");require(minor>0){"Сумма должна быть положительной"}
             if(kind!=Kind.TRANSFER) {
                 val selected=if(splitMode)splitDrafts else splitDrafts.take(1)
                 require(selected.isNotEmpty()&&selected.all{draft->cats.any{it.id==draft.category}}) {
                     "Выберите категорию операции"
                 }
             }
-            val date=parseDay(day)
-            val t=LocalTime.parse(time)
-            val split=if(kind==Kind.TRANSFER)emptyList() else if(splitMode)splitDrafts.map{it.category to Money.parse(it.amount,a.currency)} else listOf(splitDrafts.first().category to minor)
-            if(kind!=Kind.TRANSFER)require(Money.sum(split.map{it.second})==minor){"Сумма распределения должна совпадать с суммой операции"}
+            val date=editorDate(day)
+            val t=editorInput("Время: укажите часы и минуты в формате ЧЧ:ММ."){LocalTime.parse(time)}
+            val split=if(kind==Kind.TRANSFER)emptyList() else if(splitMode)splitDrafts.mapIndexed{i,part->
+                val value=editorAmount(part.amount,a.currency,"Часть суммы ${i+1}")
+                require(value>0){"Часть суммы ${i+1}: сумма должна быть больше нуля"}
+                part.category to value
+            } else listOf(splitDrafts.first().category to minor)
+            if(kind!=Kind.TRANSFER){
+                require(split.size<=200){"Распределение: не более 200 частей"}
+                require(split.map{it.first}.distinct().size==split.size){"Распределение: выберите разные категории"}
+                require(editorInput("Распределение: сумма частей слишком велика."){Money.sum(split.map{it.second})}==minor){"Сумма распределения должна совпадать с суммой операции"}
+            }
             val toMinor=if(kind!=Kind.TRANSFER)null else {
                 val dest=requireNotNull(target){"Выберите счёт получателя"}
-                if(dest.currency==a.currency)minor else Money.parse(targetAmount,dest.currency)
+                require(dest.id!=a.id){"Выберите другой счёт получателя"}
+                if(dest.currency==a.currency)minor else editorAmount(targetAmount,dest.currency,"Получено").also{
+                    require(it>0){"Получено: сумма должна быть больше нуля"}
+                }
             }
             val id=original?.id ?: newId()
             val plan=recurring || planned || date>today()
             val rate=explicitRate.trim().replace(',','.').ifBlank{null}
+            if(a.currency!=ledger.baseCurrency){
+                val resolved=rate ?: Finance.rate(ledger,a.currency,date)
+                require(resolved!=null){"Курс: укажите курс валюты на выбранную дату"}
+                editorInput("Курс или сумма: проверьте курс и размер суммы в основной валюте."){Money.convert(minor,a.currency,ledger.baseCurrency,resolved)}
+            }
+            requireEditorNote(note)
+            val entryTags=tags.split(',').map{it.trim()}.filter{it.isNotBlank()}.distinct()
+            require(entryTags.size<=100){"Теги: не более 100 тегов"}
+            require(entryTags.all{it.length<=100}){"Теги: каждый тег не длиннее 100 символов"}
+            val scheduleInterval=if(recurring)interval.trim().toIntOrNull()?.takeIf{it in 1..365}
+                ?: throw EditorInputError("Интервал: введите целое число от 1 до 365.") else 1
+            val scheduleEnd=if(recurring)endDay.trim().takeIf{it.isNotEmpty()}?.let{editorDate(it,"Окончание")} else null
+            val scheduleDays=if(recurring&&frequency==Frequency.MONTHLY)
+                monthDays.split(',').map{it.trim()}.filter{it.isNotEmpty()}.map{
+                    it.toIntOrNull()?.takeIf{n->n in 1..31} ?: throw EditorInputError("Дни месяца: укажите числа от 1 до 31 через запятую.")
+                }.distinct().sorted() else emptyList()
+            require(!recurring||!enabled||scheduleEnd==null||scheduleEnd>=date){"Дата окончания раньше следующего повтора. Измените дату или отключите расписание."}
             val receipts=pendingReceipts.filter{it.id in receiptIds}
             vm.change({ old->
                 if(!recurring&&original!=null)require(old.entries.find{it.id==original?.id}==original) {
                     "Операция изменилась. Закройте редактор и откройте её снова."
                 }
                 val prepared=old.copy(receipts=old.receipts+receipts)
-                val e=Finance.makeEntry(prepared,kind,a.id,minor,date,split,note,tags.split(',').map{it.trim()},
+                require(old.accounts.any{it.id==a.id&&(!it.archived||original!=null)}){"Счёт больше недоступен. Выберите другой."}
+                if(kind==Kind.TRANSFER)require(old.accounts.any{it.id==targetId&&(!it.archived||original!=null)}){"Счёт получателя больше недоступен. Выберите другой."}
+                else require(split.all{(id,_)->old.categories.any{it.id==id&&it.income==(kind==Kind.INCOME)&&(!it.archived||original?.splits?.any{sp->sp.categoryId==id}==true)}}){"Категория больше недоступна. Выберите другую."}
+                val e=editorInput("Сумма или курс: проверьте значения операции."){Finance.makeEntry(prepared,kind,a.id,minor,date,split,note,entryTags,
                     targetId=targetId.takeIf{kind==Kind.TRANSFER},targetMinor=toMinor,
                     status=if(plan)EntryStatus.PLANNED else EntryStatus.POSTED,explicitRate=rate,essential=essential,
-                    timeMinutes=t.hour*60+t.minute,id=id,receiptIds=receiptIds,allowArchived=original!=null,autoPostPlanned=plan&&!recurring&&autoPostPlanned)
+                    timeMinutes=t.hour*60+t.minute,id=id,receiptIds=receiptIds,allowArchived=original!=null,autoPostPlanned=plan&&!recurring&&autoPostPlanned)}
                 if(recurring) {
                     if(originalSchedule!=null)require(old.schedules.find{it.id==originalSchedule?.id}==originalSchedule){"Расписание изменилось. Откройте его снова."}
                     val previous=originalSchedule
-                    val s=Schedule(previous?.id ?: newId(),e,date,frequency,interval.toInt(),
-                        endDay.trim().takeIf{it.isNotEmpty()}?.let(::parseDay),autoPost,enabled,
+                    val s=Schedule(previous?.id ?: newId(),e,date,frequency,scheduleInterval,
+                        scheduleEnd,autoPost,enabled,
                         if(previous!=null && previous.nextDay==date)previous.anchorDay else LocalDate.ofEpochDay(date).dayOfMonth,
                         if(frequency==Frequency.WEEKLY)weekdays.sorted() else emptyList(),
-                        if(frequency==Frequency.WEEKLY&&useAlternate&&interval.toInt()==2)alternate.sorted() else emptyList(),
-                        if(frequency==Frequency.MONTHLY)monthDays.split(',').map{it.trim()}.filter{it.isNotEmpty()}.map{it.toInt()}.distinct().sorted() else emptyList(),
+                        if(frequency==Frequency.WEEKLY&&useAlternate&&scheduleInterval==2&&weekdays.isNotEmpty())alternate.sorted() else emptyList(),
+                        scheduleDays,
                         if(previous!=null&&previous.nextDay==date)previous.anchorEpochDay else date)
                     require(!s.enabled || s.endDay==null || s.endDay>=s.nextDay){"Дата окончания раньше следующего повтора. Измените дату или отключите расписание."}
                     prepared.copy(schedules=prepared.schedules.filterNot{it.id==s.id}+s)
                 } else Finance.putEntry(prepared,e)
             }) { vm.rememberAccount(a.id); close() }
-        }.onFailure{error=it.message ?: "Проверьте данные"}
+        }.onFailure{error=editorMessage(it,"Проверьте сумму, дату и остальные данные операции.")}
     }) {
         if(active.isEmpty())Warning("Создайте хотя бы один счёт в разделе «Счета».")
         Chips(listOf(Kind.EXPENSE,Kind.INCOME,Kind.TRANSFER),kind,{it.label()},tagPrefix="entry-kind"){ k->
@@ -287,7 +348,7 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             Text("Введите сумму реальной операции и выберите категорию. Если хотите только посмотреть форму, нажмите «Отмена».",
                 Modifier.padding(horizontal=12.dp,vertical=10.dp),style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onPrimaryContainer)
         }
-        Choice("Счёт",accountId,active.map{it.id},{id->active.find{it.id==id}?.let{"${it.name} · ${it.currency}"} ?: "Выбрать счёт"},compact=true){id->
+        AccountChoice("Счёт",accountId,active,compact=true){id->
             if(id!=accountId){
                 val previousCurrency=account?.currency
                 val nextCurrency=active.first{it.id==id}.currency
@@ -312,16 +373,12 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
                 }
             } else Column { AmountInput();ConvertButton() }
         }
-        DateField("Дата",day,{day=it},supporting=null)
-        if(!recurring)Chips(listOf(today(),today()-1),runCatching{parseDay(day)}.getOrDefault(Long.MIN_VALUE),{if(it==today())"Сегодня" else "Вчера"}){day=iso(it)}
-        if(!recurring&&!planned&&runCatching{parseDay(day)>today()}.getOrDefault(false))
-            Text("Будущая операция будет запланирована.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.tertiary)
         if(kind==Kind.TRANSFER) {
-            Choice("На счёт",targetId,active.filter{it.id!=accountId}.map{it.id},{id->active.find{it.id==id}?.let{"${it.name} · ${it.currency}"} ?: "Выбрать счёт"},compact=true){id->
+            AccountChoice("На счёт",targetId,active.filter{it.id!=accountId},compact=true){id->
                 if(target?.currency!=active.first{it.id==id}.currency)targetAmount=""
                 targetId=id
             }
-            if(account!=null && target!=null && account.currency!=target.currency)Field("Получено (${target.currency})",targetAmount,{targetAmount=it},true)
+            if(account!=null && target!=null && account.currency!=target.currency)Field("Получено (${target.currency})",targetAmount,{targetAmount=it;error=""},true)
         } else {
             val currency=account?.currency ?: ledger.baseCurrency
             val totalMinor=runCatching{Money.parse(amount,currency)}.getOrNull()
@@ -339,28 +396,36 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
                     error=""
                 }
                 if(splitMode) {
-                    Field("Часть суммы ${i+1}",draft.amount,{v->splitDrafts=splitDrafts.mapIndexed{j,d->if(i==j)d.copy(amount=v) else d}},true)
+                    Field("Часть суммы ${i+1}",draft.amount,{v->splitDrafts=splitDrafts.mapIndexed{j,d->if(i==j)d.copy(amount=v) else d};error=""},true)
                     if(remainder!=null&&remainder>0&&draft.amount.isBlank())TextButton(onClick={splitDrafts=splitDrafts.mapIndexed{j,d->if(i==j)d.copy(amount=Money.input(remainder,currency)) else d}}){Text("Заполнить остатком")}
                     if(splitDrafts.size>1)TextButton(onClick={splitDrafts=splitDrafts.filterIndexed{j,_->j!=i}}){Text("Удалить часть")}
                 }
             }
-            if(splitMode)OutlinedButton(onClick={splitDrafts=splitDrafts+SplitDraft("","")},enabled=splitDrafts.none{it.category.isBlank()}){Text("Добавить часть")}
+            if(splitMode)OutlinedButton(onClick={splitDrafts=splitDrafts+SplitDraft("","")},enabled=splitDrafts.size<200&&splitDrafts.none{it.category.isBlank()}){Text("Добавить часть")}
             Toggle("Разделить по категориям",splitMode,{value->
                 splitMode=value
                 splitDrafts=if(value)listOf(splitDrafts.first().copy(amount=amount)) else listOf(splitDrafts.first().copy(amount=""))
             })
         }
-        if(!recurring && !forcePlanned) TextButton(onClick={advanced=!advanced}) { Text(if(advanced)"Свернуть детали" else "Комментарий, теги и чек") }
+        DateField("Дата",day,{day=it;error=""},supporting=null)
+        if(!recurring)Chips(listOf(today(),today()-1),runCatching{parseDay(day)}.getOrDefault(Long.MIN_VALUE),{if(it==today())"Сегодня" else "Вчера"}){day=iso(it);error=""}
+        if(!recurring&&(planned||runCatching{parseDay(day)>today()}.getOrDefault(false)))
+            Text("Запланировано — баланс изменится после проведения.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.tertiary)
+        if(!recurring && !forcePlanned) OutlinedButton(onClick={advanced=!advanced},modifier=Modifier.fillMaxWidth().testTag("entry-details")) {
+            Text(if(advanced)"Свернуть детали" else "Детали и планирование",Modifier.weight(1f))
+            Text(if(advanced)"⌃" else "⌄")
+        }
         if(advanced) {
             TimeField("Время",time,{time=it})
         }
-        if(rateRequired)Field("Курс: ${ledger.baseCurrency} за 1 ${account?.currency}",explicitRate,{explicitRate=it},true,
+        if(rateRequired)Field("Курс: ${ledger.baseCurrency} за 1 ${account?.currency}",explicitRate,{explicitRate=it;error=""},true,
             supporting=currentRate?.let{"Сохранённый курс: $it. Пустое поле использует его."} ?: "Укажите курс или загрузите его в настройках.")
         if(advanced) {
-            Field("Комментарий",note,{note=it},singleLine=false)
-            Field("Теги",tags,{tags=it},supporting="Через запятую")
+            Text("Комментарий, теги и чек",style=MaterialTheme.typography.titleSmall)
+            Field("Комментарий",note,{note=it;error=""},singleLine=false)
+            Field("Теги",tags,{tags=it;error=""},supporting="Через запятую")
             if(kind==Kind.EXPENSE)Toggle("Обязательная трата",essential,{essential=it})
-            if(!recurring)Toggle("Запланировать",planned,{planned=it},"До проведения операция не меняет фактический баланс.")
+            if(!recurring)Toggle("Запланировать",planned,{planned=it},"До проведения операция не меняет баланс. Будущая дата всегда означает план.")
             if(!recurring&&(planned||runCatching{parseDay(day)>today()}.getOrDefault(false)))Toggle("Проводить автоматически",autoPostPlanned,{autoPostPlanned=it},"В назначенную дату и время, когда Android выполнит фоновую задачу. Для архивных счетов автоматическое проведение недоступно.")
         }
         if(recurring) {
@@ -398,7 +463,8 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             title={Text(if(income)"Новая категория доходов" else "Новая категория расходов")},
             text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
                 Field("Название категории",categoryCreationName,{categoryCreationName=it})
-                if(duplicate)Warning("Категория с таким названием уже существует.")
+                if(name.length>160)Warning("Название категории: не более 160 символов.")
+                else if(duplicate)Warning("Категория с таким названием уже существует.")
                 else Text("Категория появится в списке и будет выбрана в этой операции.")
             }},
             confirmButton={Button(onClick={
@@ -425,12 +491,19 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         val destination=pendingAccount?.currency ?: account.currency
         val quote=runCatching{CurrencyConversion.quote(ledger,conversionCurrency,destination,parseDay(day))}.getOrNull()
         val result=runCatching{
-            val source=Money.parse(conversionAmount,conversionCurrency)
+                val source=editorAmount(conversionAmount,conversionCurrency,"Исходная сумма")
             require(source>0){"Введите положительную сумму"}
             val converted=when {
                 conversionCurrency==destination->source
-                conversionManual->CurrencyConversion.convert(source,conversionCurrency,destination,CurrencyConversion.manualRate(conversionRate))
-                else->CurrencyConversion.convertStored(ledger,source,conversionCurrency,destination,parseDay(day))
+                conversionManual->{
+                    val manual=editorInput("Ручной курс: введите положительное число."){CurrencyConversion.manualRate(conversionRate)}
+                    editorInput("Исходная сумма: результат пересчёта слишком велик."){CurrencyConversion.convert(source,conversionCurrency,destination,manual)}
+                }
+                else->{
+                    val date=editorDate(day)
+                    require(quote!=null){"На выбранную дату нет курса. Введите курс вручную."}
+                    editorInput("Исходная сумма: результат пересчёта слишком велик."){CurrencyConversion.convertStored(ledger,source,conversionCurrency,destination,date)}
+                }
             }
             converted.also{
                 require(it>0){"После округления сумма равна нулю"}
@@ -450,7 +523,7 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
                     else Warning("Нет сохранённого курса на эту дату.")
                 }
                 result.onSuccess{MoneyText(it,destination,modifier=Modifier.testTag("entry-convert-result"),large=true)}
-                if(conversionAmount.isNotBlank())result.onFailure{Warning(it.message ?: "Проверьте сумму и курс")}
+                if(conversionAmount.isNotBlank())result.onFailure{Warning(editorMessage(it,"Проверьте исходную сумму и курс."))}
                 Text("В операцию будет внесена сумма в валюте счёта. Курс конвертации не изменяет сохранённые курсы.",style=MaterialTheme.typography.bodySmall)
                 if(splitMode)Text("После пересчёта проверьте распределение по категориям.",style=MaterialTheme.typography.bodySmall)
                 if(pendingAccount!=null)TextButton(onClick={selectAccount(pendingAccount.id);cancelConversion()}){
@@ -510,8 +583,8 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
     Form(ledger.entryName(entry),close,busy,saveLabel="Закрыть",onSave=close) {
         MoneyText(entry.minor,account.currency,large=true)
         Text(entry.kind.label()+" · "+dayLabel(entry.day))
-        Text("Счёт: "+account.name)
-        if(entry.targetAccountId!=null)Text("Получатель: "+ledger.accountName(entry.targetAccountId))
+        Text("Счёт: "+accountChoiceLabel(account))
+        if(entry.targetAccountId!=null)Text("Получатель: "+ledger.accounts.find{it.id==entry.targetAccountId}?.let(::accountChoiceLabel).orEmpty())
         if(entry.targetAccountId!=null && entry.targetMinor!=null)Text("Получено: "+Money.format(entry.targetMinor,ledger.accounts.first{it.id==entry.targetAccountId}.currency))
         if(account.currency!=ledger.baseCurrency)Text("Курс: ${entry.rate}; в отчёте: "+Money.format(entry.baseMinor,ledger.baseCurrency))
         if(entry.note.isNotBlank())Text(entry.note)
@@ -557,35 +630,40 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
     val refundable=remember(ledger,entry.id,current?.id){Finance.refundableSplits(ledger,entry.id,current?.id)}
     var byCategory by draft.state("byCategory"){current!=null && entry.splits.size>1}
     var parts by draft.state("parts"){refundable.associate{split->split.categoryId to (current?.splits?.find{it.categoryId==split.categoryId}?.let{Money.input(it.minor,account.currency)} ?: "")}}
-    val categoryAmounts=runCatching{parts.mapNotNull{(id,text)->if(text.isBlank())null else (id to Money.parse(text,account.currency)).takeIf{it.second!=0L}}}
+    val categoryAmounts=runCatching{parts.mapNotNull{(id,text)->if(text.isBlank())null else (id to editorAmount(text,account.currency,ledger.categoryName(id))).takeIf{it.second!=0L}}}
     val categoryTotal=categoryAmounts.mapCatching{Money.sum(it.map{part->part.second})}.getOrNull()
-    Form("Возврат покупки",close,busy,onSave={
+    Form("Возврат покупки",close,busy,validationError=error,onSave={
         runCatching {
             val selected=if(byCategory)categoryAmounts.getOrThrow() else null
-            val minor=if(selected!=null)Money.sum(selected.map{it.second}) else Money.parse(amount,account.currency)
-            val date=parseDay(day)
+            val minor=if(selected!=null)editorInput("Сумма возврата: итог по категориям слишком велик."){Money.sum(selected.map{it.second})} else editorAmount(amount,account.currency,"Сумма возврата")
+            val date=editorDate(day)
             require(date<=today()){"Дата возврата не может быть в будущем"}
+            require(date>=entry.day){"Дата возврата не может быть раньше даты покупки"}
             require(minor>0){"Введите положительную сумму возврата"}
+            require(minor<=left){"Сумма возврата превышает доступный остаток покупки"}
+            requireEditorNote(note)
             if(selected!=null)require(selected.all{(id,value)->value>0 && refundable.any{it.categoryId==id && value<=it.minor}}){"Проверьте доступные суммы по категориям"}
             vm.change({l->
                 require(l.entries.find{it.id==entry.id}==entry){"Покупка изменилась. Откройте её снова."}
                 if(current!=null)require(l.entries.find{it.id==current.id}==current){"Возврат изменился. Откройте его снова."}
-                Finance.putEntry(l,Finance.refund(l,entry.id,minor,date,note,current?.id ?: newId(),categoryAmounts=selected))
+                val available=Finance.refundableSplits(l,entry.id,current?.id)
+                require(minor<=Money.sum(available.map{it.minor})){"Сумма возврата превышает доступный остаток покупки"}
+                if(selected!=null)require(selected.all{(id,value)->available.any{it.categoryId==id&&value<=it.minor}}){"Доступные суммы по категориям изменились. Проверьте возврат."}
+                Finance.putEntry(l,editorInput("Проверьте сумму и распределение возврата."){Finance.refund(l,entry.id,minor,date,note,current?.id ?: newId(),categoryAmounts=selected)})
             },close)
-        }.onFailure{error=it.message ?: "Проверьте сумму"}
+        }.onFailure{error=editorMessage(it,"Проверьте сумму и дату возврата.")}
     }) {
         Text(ledger.entryName(entry));Text("Максимум: "+Money.format(left,account.currency))
         if(entry.splits.size>1)Toggle("Выбрать категории возврата",byCategory,{byCategory=it},"Укажите, какие части покупки были возвращены.")
         if(byCategory) {
             refundable.forEach { split->
-                Field(ledger.categoryName(split.categoryId),parts[split.categoryId].orEmpty(),{parts=parts+(split.categoryId to it)},true,supporting="Доступно: "+Money.format(split.minor,account.currency))
+                Field(ledger.categoryName(split.categoryId),parts[split.categoryId].orEmpty(),{parts=parts+(split.categoryId to it);error=""},true,supporting="Доступно: "+Money.format(split.minor,account.currency))
             }
             if(categoryTotal==null)Warning("Проверьте суммы по категориям")
             else Text("Всего к возврату: "+Money.format(categoryTotal,account.currency),style=MaterialTheme.typography.titleMedium)
-        } else Field("Сумма возврата",amount,{amount=it},true)
-        DateField("Дата",day,{day=it})
-        Field("Комментарий",note,{note=it})
+        } else Field("Сумма возврата",amount,{amount=it;error=""},true)
+        DateField("Дата",day,{day=it;error=""})
+        Field("Комментарий",note,{note=it;error=""})
         Text("Возврат уменьшает расходы в дату получения денег и использует исторический курс покупки. Без ручного выбора сумма распределяется автоматически по категориям исходной покупки.")
-        if(error.isNotEmpty())Warning(error)
     }
 }

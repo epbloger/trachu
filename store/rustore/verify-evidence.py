@@ -15,6 +15,9 @@ import zlib
 SCREENS = ('dashboard', 'operations', 'split_entry')
 SCREENS_V11 = SCREENS + ('onboarding', 'drawer', 'converter', 'quick_entry', 'dashboard_dark')
 SCREENS_GUIDED = SCREENS_V11 + ('tutorial',)
+SCREENS_V12 = SCREENS_GUIDED + ('analytics_expense', 'analytics_income')
+PLANNER_UX_V12 = ('groupedNavigationAndGoalAdjustments', 'principalAndInterestAreRecordedExactlyOnce')
+NOTIFICATION_OPT_OUT_V12 = 'persistedPinRateLimitConsentAndBudgetThreshold'
 PAGE = 16 * 1024
 
 
@@ -138,7 +141,63 @@ def verify_tests(root, pattern, minimum, critical=()):
     return count
 
 
-def verify_release(qa, apk, aab, commit, require_ux_v11=False, require_guided_v11=False):
+def verify_badging(text, variant):
+    package = re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'", text, re.M)
+    require(package is not None and package.groups() == ('ru.epbloger.trachu', '3', '1.2.0'),
+            f'{variant}: unexpected package, versionCode or versionName')
+    require("sdkVersion:'26'" in text and "targetSdkVersion:'36'" in text,
+            f'{variant}: unexpected Android SDK versions')
+
+
+def device_test_requirements(device, require_ux_v11=False, require_guided_v11=False, require_ux_v12=False):
+    """Return the minimum report count and required cases for one device tier."""
+    require_guided_v11 = require_guided_v11 or require_ux_v12
+    require_ux_v11 = require_ux_v11 or require_guided_v11
+    storage = ('legacyEncryptedArchiveWithMultiMegabyteReceiptRestoresAtomically',
+               'transactionRollbackAndRestore', 'concurrentDueProcessingAndCorruptImportAreAtomic',
+               'migrationPreservesLegacyRowsAndReopen', 'keystorePinAndTampering')
+    editors = ('repeatExpenseRequiresSaveAndDoesNotCopyOriginalIdentityOrReceipt',
+               'accountDraftSurvivesRecreationAndCancelDiscardsIt',
+               'entryDraftAndPendingReceiptSurviveRecreation',
+               'staleEditorCannotUndoBackgroundAutoPosting',
+               'corruptedLedgerCanBeRecoveredFromBackupOnlyAfterUnlock',
+               'selectedFileWaitsForUnlockAndExportsOnlyOnce',
+               'completedScheduleCanBeEditedButCannotBeEnabledPastEnd')
+    setup = ('actualFirstSetupSurvivesRecreationAndNewActivity', 'actualLegacyPreferencesAndExistingLedgerArePreserved',
+             'firstLaunchRestoreChecksPasswordAndCompletesEvenForEmptyBackup',
+             'protectedEmptyLedgerCannotEnterSetupOrRestoreBeforePin', 'recordExpenseAndNavigateAfterRotation')
+    if require_ux_v11 and device != 'store-phone':
+        editors += ('createCategoryFromEntryKeepsDraftAndSelectsIt',
+                    'searchCurrencyAndConvertOnlyAfterConfirmation')
+    critical = (('recordExpenseAndNavigateAfterRotation',) if device == 'store-phone' else
+                storage if device == 'api26' else storage + editors)
+    if require_ux_v11 and device != 'store-phone':
+        critical += setup
+    if require_guided_v11 and device != 'store-phone':
+        critical += ('converterFetchesAutomaticallyAndPreservesManualRate',
+                     'onboardingStartsRealWalkthroughAndReplayCanBeSkippedWithoutEntries',
+                     'lockingDuringReplayRemovesTheGuideAndNeverBypassesPin')
+        if device != 'api26':
+            critical += ('newCategoryEditorUsesDistinctPaletteColor',
+                         'categoryEditorPreservesAnExistingCustomColor',
+                         'eachNewSplitPartRequiresItsOwnCategory',
+                         'editingEntryKeepsItsOriginalCategorySelected')
+    if require_ux_v12 and device != 'store-phone':
+        critical += PLANNER_UX_V12 + (NOTIFICATION_OPT_OUT_V12,)
+
+    minimums = {
+        'phone': 17, 'tablet': 17, 'store-phone': 1, 'api26': 9, 'api33': 16,
+    }
+    if require_ux_v11:
+        minimums.update(phone=23, tablet=23, api26=14, api33=23)
+    if require_ux_v12:
+        minimums.update(phone=32, tablet=32, api26=19, api33=32)
+    require(device in minimums, f'Unknown device tier: {device}')
+    return minimums[device], critical
+
+
+def verify_release(qa, apk, aab, commit, require_ux_v11=False, require_guided_v11=False, require_ux_v12=False):
+    require_guided_v11 = require_guided_v11 or require_ux_v12
     require_ux_v11 = require_ux_v11 or require_guided_v11
     require(re.fullmatch('[0-9a-f]{40}', commit), 'Expected full Git SHA')
     expected = provenance(qa, commit)
@@ -161,45 +220,15 @@ def verify_release(qa, apk, aab, commit, require_ux_v11=False, require_guided_v1
                 'legacyDuplicateColorsHaveStableDistinctChartColors')
     count = verify_tests(qa, 'app/build/test-results/testDebugUnitTest/TEST-*.xml',
                          43 if require_ux_v11 else 35, jvm)
-    storage = ('legacyEncryptedArchiveWithMultiMegabyteReceiptRestoresAtomically',
-               'transactionRollbackAndRestore', 'concurrentDueProcessingAndCorruptImportAreAtomic',
-               'migrationPreservesLegacyRowsAndReopen', 'keystorePinAndTampering')
-    editors = ('repeatExpenseRequiresSaveAndDoesNotCopyOriginalIdentityOrReceipt',
-               'accountDraftSurvivesRecreationAndCancelDiscardsIt',
-               'entryDraftAndPendingReceiptSurviveRecreation',
-               'staleEditorCannotUndoBackgroundAutoPosting',
-               'corruptedLedgerCanBeRecoveredFromBackupOnlyAfterUnlock',
-               'selectedFileWaitsForUnlockAndExportsOnlyOnce',
-               'completedScheduleCanBeEditedButCannotBeEnabledPastEnd')
-    setup = ('actualFirstSetupSurvivesRecreationAndNewActivity', 'actualLegacyPreferencesAndExistingLedgerArePreserved',
-             'firstLaunchRestoreChecksPasswordAndCompletesEvenForEmptyBackup',
-             'protectedEmptyLedgerCannotEnterSetupOrRestoreBeforePin', 'recordExpenseAndNavigateAfterRotation')
-    if require_ux_v11:
-        editors += ('createCategoryFromEntryKeepsDraftAndSelectsIt', 'searchCurrencyAndConvertOnlyAfterConfirmation')
-    minima = [('phone', 23), ('tablet', 23), ('store-phone', 1), ('api26', 14), ('api33', 23)] if require_ux_v11 else [
-        ('phone', 17), ('tablet', 17), ('store-phone', 1), ('api26', 9), ('api33', 16)]
-    for device, minimum in minima:
-        critical = (('recordExpenseAndNavigateAfterRotation',) if device == 'store-phone' else
-                    storage if device == 'api26' else storage + editors)
-        if require_ux_v11 and device != 'store-phone':
-            critical += setup
-        if require_guided_v11 and device != 'store-phone':
-            critical += ('converterFetchesAutomaticallyAndPreservesManualRate',
-                         'onboardingStartsRealWalkthroughAndReplayCanBeSkippedWithoutEntries',
-                         'lockingDuringReplayRemovesTheGuideAndNeverBypassesPin')
-            if device != 'api26':
-                critical += ('newCategoryEditorUsesDistinctPaletteColor',
-                             'categoryEditorPreservesAnExistingCustomColor',
-                             'eachNewSplitPartRequiresItsOwnCategory',
-                             'editingEntryKeepsItsOriginalCategorySelected')
+    for device in ('phone', 'tablet', 'store-phone', 'api26', 'api33'):
+        minimum, critical = device_test_requirements(device, require_ux_v11, require_guided_v11, require_ux_v12)
         count += verify_tests(qa, f'qa/{device}/androidTest-results/connected/debug/TEST-*.xml', minimum, critical)
     for variant in ('debug', 'release'):
         lint = ET.parse(qa/f'app/build/reports/lint-results-{variant}.xml').getroot()
         require(not any(i.get('severity', '').lower() in ('error', 'fatal') for i in lint.findall('issue')),
                 f'Lint {variant}: errors')
-    badging = (qa/'qa/release-apk-badging.txt').read_text(encoding='utf-8')
-    require("package: name='ru.epbloger.trachu'" in badging and "sdkVersion:'26'" in badging
-            and "targetSdkVersion:'36'" in badging, 'Unexpected release package or Android versions')
+    for variant, report in (('debug', 'apk-badging.txt'), ('release', 'release-apk-badging.txt')):
+        verify_badging((qa/'qa'/report).read_text(encoding='utf-8'), variant)
     for report in ('apk-permissions.txt', 'release-apk-permissions.txt'):
         permissions = (qa/'qa'/report).read_text(encoding='utf-8')
         require(not re.search(r'permission\.(AD_ID|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|READ_CONTACTS|READ_SMS|RECORD_AUDIO)\b',
@@ -212,7 +241,8 @@ def verify_release(qa, apk, aab, commit, require_ux_v11=False, require_guided_v1
         require(re.search(r'Active default network:\s*(none|null)\s*$',
                           (offline/f'connectivity-{stage}.txt').read_text(), re.I|re.M),
                 f'Offline {stage}: default network exists')
-    verify_screens(qa/'qa/store-phone', SCREENS_GUIDED if require_guided_v11 else SCREENS_V11 if require_ux_v11 else SCREENS)
+    screens = SCREENS_V12 if require_ux_v12 else SCREENS_GUIDED if require_guided_v11 else SCREENS_V11 if require_ux_v11 else SCREENS
+    verify_screens(qa/'qa/store-phone', screens)
     print(f'PASS {count} tests, lint, exact offline amount and release artifact checks for {commit}')
 
 
@@ -223,6 +253,7 @@ if __name__ == '__main__':
     screens.add_argument('directory', type=pathlib.Path)
     screens.add_argument('--require-ux-v11', action='store_true')
     screens.add_argument('--require-guided-v11', action='store_true')
+    screens.add_argument('--require-ux-v12', action='store_true')
     release = sub.add_parser('release')
     release.add_argument('--qa', required=True, type=pathlib.Path)
     release.add_argument('--apk', required=True, type=pathlib.Path)
@@ -230,8 +261,10 @@ if __name__ == '__main__':
     release.add_argument('--commit', required=True)
     release.add_argument('--require-ux-v11', action='store_true')
     release.add_argument('--require-guided-v11', action='store_true')
+    release.add_argument('--require-ux-v12', action='store_true')
     args = parser.parse_args()
     if args.mode == 'screens':
-        verify_screens(args.directory, SCREENS_GUIDED if args.require_guided_v11 else SCREENS_V11 if args.require_ux_v11 else SCREENS)
+        names = SCREENS_V12 if args.require_ux_v12 else SCREENS_GUIDED if args.require_guided_v11 else SCREENS_V11 if args.require_ux_v11 else SCREENS
+        verify_screens(args.directory, names)
     else:
-        verify_release(args.qa, args.apk, args.aab, args.commit, args.require_ux_v11, args.require_guided_v11)
+        verify_release(args.qa, args.apk, args.aab, args.commit, args.require_ux_v11, args.require_guided_v11, args.require_ux_v12)

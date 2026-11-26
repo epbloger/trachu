@@ -99,13 +99,13 @@ try:
     adb("shell", "svc", "data", "disable")
     (OUT / "connectivity-before.txt").write_text(no_network(), encoding="utf-8")
     assert "Success" in adb("install", "-r", sys.argv[2])
-    (OUT / "after-package.txt").write_text(version("1.1.0"), encoding="utf-8")
+    (OUT / "after-package.txt").write_text(version("1.2.0"), encoding="utf-8")
     verify_overview()
     (OUT / "connectivity-after.txt").write_text(no_network(), encoding="utf-8")
     after = snapshot()
     assert before == after, "Financial ledger changed during update"
     digest = hashlib.sha256(json.dumps(after, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-    result = f"PASS: {BASELINE_VERSION} -> 1.1.0, no clear or onboarding, {len(after)} identical ledger records, 4250 minor units; SHA256 {digest}\n"
+    result = f"PASS: {BASELINE_VERSION} -> 1.2.0, no clear or onboarding, {len(after)} identical ledger records, 4250 minor units; SHA256 {digest}\n"
     (OUT / "result.txt").write_text(result, encoding="utf-8")
     print(result)
 finally:

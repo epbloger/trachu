@@ -44,6 +44,7 @@ import ru.epbloger.trachu.core.*
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.Currency
 
 val dateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy",Locale("ru"))
 fun dayLabel(day: Long): String = LocalDate.ofEpochDay(day).format(dateFormatter)
@@ -60,6 +61,15 @@ fun AccountType.label(): String = when(this) {
 }
 fun Frequency.label(): String = when(this) { Frequency.DAILY->"День"; Frequency.WEEKLY->"Неделя"; Frequency.MONTHLY->"Месяц"; Frequency.YEARLY->"Год" }
 fun Ledger.accountName(id: String): String = accounts.find { it.id==id }?.name ?: "Счёт"
+/** A currency symbol is immediately recognizable; the ISO code disambiguates shared symbols. */
+private fun accountCurrencyLabel(code:String):String {
+    val symbol=when(code) {
+        "RUB"->"₽"; "USD"->"$"; "EUR"->"€"; "GBP"->"£"; "JPY"->"¥"; "CNY"->"¥"; "KZT"->"₸"; "TRY"->"₺"
+        else->runCatching{Currency.getInstance(code).getSymbol(Locale("ru","RU"))}.getOrDefault(code)
+    }
+    return if(symbol==code)code else "$symbol $code"
+}
+fun accountChoiceLabel(account:Account):String = "${account.name} · ${accountCurrencyLabel(account.currency)}"
 fun Ledger.categoryName(id: String): String = Finance.categoryLabel(this,id)
 fun Ledger.entryName(e: Entry): String = when(e.kind) {
     Kind.TRANSFER->"${accountName(e.accountId)} → ${accountName(e.targetAccountId.orEmpty())}"
@@ -135,6 +145,34 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
         }
     }
 }
+@Composable fun AccountChoice(label:String,value:String,accounts:List<Account>,modifier:Modifier=Modifier,compact:Boolean=false,onChoose:(String)->Unit) {
+    var open by remember { mutableStateOf(false) }
+    val current=accounts.find{it.id==value}
+    Column(modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+        if(!compact||LocalDensity.current.fontScale>=1.3f)
+            Text(label,style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Box {
+            OutlinedButton(onClick={open=true},enabled=accounts.isNotEmpty(),modifier=Modifier.fillMaxWidth().testTag("choice:$label")) {
+                if(compact&&LocalDensity.current.fontScale<1.3f)
+                    Text("$label: ",style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(current?.name ?: "Выбрать счёт",Modifier.weight(1f),maxLines=2,overflow=TextOverflow.Ellipsis)
+                if(current!=null)Text(accountCurrencyLabel(current.currency),Modifier.padding(start=6.dp,end=6.dp))
+                Text("⌄")
+            }
+            DropdownMenu(expanded=open,onDismissRequest={open=false},modifier=Modifier.heightIn(max=360.dp)) {
+                accounts.forEach{account->
+                    DropdownMenuItem(
+                        text={Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                            Text(account.name,Modifier.weight(1f),maxLines=2,overflow=TextOverflow.Ellipsis)
+                            Text(accountCurrencyLabel(account.currency),fontWeight=FontWeight.SemiBold)
+                        }},
+                        onClick={open=false;onChoose(account.id)},
+                        modifier=Modifier.testTag("choice-option:$label:${account.id}"))
+                }
+            }
+        }
+    }
+}
 @OptIn(ExperimentalLayoutApi::class)
 @Composable fun CategoryChoice(label:String, value:String, options:List<Category>, ledger:Ledger, onCreate:(()->Unit)?=null, quick:Boolean=false, highlight:Boolean=false, onChoose:(String)->Unit) {
     var open by remember { mutableStateOf(false) }
@@ -150,7 +188,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
     Column(Modifier.fillMaxWidth().then(if(highlight)Modifier.border(2.dp,MaterialTheme.colorScheme.primary,MaterialTheme.shapes.large).padding(6.dp) else Modifier),
         verticalArrangement=Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-            Text(label,Modifier.weight(1f),style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(if(current==null)"$label *" else label,Modifier.weight(1f),style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
             if(onCreate!=null)TextButton(onClick=onCreate,modifier=Modifier.testTag("category-create:$label")) { Text("+ Новая категория") }
         }
         Surface(
@@ -159,18 +197,16 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
             color=currentColor ?: MaterialTheme.colorScheme.surfaceVariant,
             contentColor=currentTextColor ?: MaterialTheme.colorScheme.onSurfaceVariant
         ) {
-            Row(Modifier.padding(horizontal=14.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically,
-                horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.size(46.dp).background(
+            Row(Modifier.padding(horizontal=12.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically,
+                horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                Box(Modifier.size(36.dp).background(
                     (currentTextColor ?: MaterialTheme.colorScheme.onSurfaceVariant).copy(alpha=.14f),CircleShape
                 ),contentAlignment=Alignment.Center) {
                     Text(current?.icon ?: "?",style=MaterialTheme.typography.titleLarge)
                 }
                 Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(2.dp)) {
-                    Text(if(current!=null)"ВЫБРАНА КАТЕГОРИЯ" else "КАТЕГОРИЯ НЕ ВЫБРАНА",
-                        style=MaterialTheme.typography.labelMedium,fontWeight=FontWeight.Bold)
                     Text(current?.let(::title) ?: "Выберите категорию ниже",
-                        style=MaterialTheme.typography.titleLarge)
+                        style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
                 }
                 Text(if(current!=null)"✓" else "!",
                     style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)

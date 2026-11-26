@@ -111,7 +111,7 @@ class EditorRecreationTest {
             rule.onNodeWithTag("category-quick:transport").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithTag("toggle:Разделить по категориям").performScrollTo().performClick().assertIsOn()
             enter("field:Часть суммы 1","1234")
-            rule.onNodeWithText("Комментарий, теги и чек").performScrollTo().performClick()
+            rule.onNodeWithTag("entry-details").performScrollTo().performClick()
             enter("field:Комментарий","Несохранённая покупка",imeDone=false)
             enter("field:Теги","черновик")
             rule.onNodeWithTag("toggle:Запланировать").performScrollTo().performClick().assertIsOn()
@@ -230,7 +230,7 @@ class EditorRecreationTest {
             rule.onNodeWithText("Сегодня").performScrollTo().performClick().assertIsSelected()
             rule.onNodeWithTag("field:Дата").performScrollTo().assertTextContains(iso(today()))
             rule.onNodeWithText("Вчера").performScrollTo().performClick().assertIsSelected()
-            rule.onNodeWithText("Комментарий, теги и чек").performScrollTo().performClick()
+            rule.onNodeWithTag("entry-details").performScrollTo().performClick()
             enter("field:Комментарий","Комментарий до создания",imeDone=false)
             rule.onNodeWithTag("category-create:Категория").performScrollTo().performClick()
             rule.onNodeWithTag("field:Название категории").performTextReplacement(name)
@@ -329,6 +329,10 @@ class EditorRecreationTest {
             rule.onNodeWithTag("category-list").performScrollToNode(hasTestTag("category-option:food"))
             rule.onNodeWithTag("category-option:food").performClick()
             rule.onNodeWithTag("category-selected:Категория 2").assertIsSelected().assertTextContains("Продукты")
+            enter("field:Часть суммы 2","0")
+            rule.onNodeWithTag("form_save").performClick()
+            rule.onNodeWithText("Часть суммы 2: сумма должна быть больше нуля").assertExists()
+            enter("field:Часть суммы 2","7")
             rule.onNodeWithTag("form_save").performClick()
             rule.waitUntil(20_000){rule.onAllNodesWithTag("form_save").fetchSemanticsNodes().isEmpty()}
             val saved=runBlocking{store.current().entries.single{it.accountId==account.id}}
@@ -434,6 +438,8 @@ class EditorRecreationTest {
             // Same-currency account changes do not alter the amount; cross-currency changes
             // require a decision, and cancelling preserves the original account and amount.
             rule.onNodeWithTag("choice:Счёт").performScrollTo().performClick()
+            val foreignLabel=if(foreign=="USD")"$ USD" else "€ EUR"
+            rule.onNodeWithTag("choice-option:Счёт:${second.id}").assertTextContains(foreignLabel)
             rule.onNodeWithTag("choice-option:Счёт:${third.id}").performClick()
             rule.onNodeWithTag(amountTag).performScrollTo().assertTextContains(Money.input(Money.parse("30",currency),currency))
             rule.onNodeWithTag("choice:Счёт").performScrollTo().performClick()
@@ -450,6 +456,7 @@ class EditorRecreationTest {
             enter("field:$foreign за 1 $currency","2")
             rule.onNodeWithTag("entry-convert-apply").performClick()
             rule.onNodeWithTag("choice:Счёт").performScrollTo().assertTextContains(second.name,substring=true)
+            rule.onNodeWithTag("choice:Счёт").assertTextContains(foreignLabel)
             rule.onNodeWithTag("field:Сумма ($foreign)").performScrollTo().assertTextContains(Money.input(Money.parse("60",foreign),foreign))
             enter("field:Курс: $currency за 1 $foreign","0.5")
             rule.onNodeWithTag("category-selected:Категория").performScrollTo()

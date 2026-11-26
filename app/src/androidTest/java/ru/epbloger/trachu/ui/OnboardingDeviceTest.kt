@@ -71,6 +71,12 @@ class OnboardingDeviceTest {
     @Test fun actualFirstSetupSurvivesRecreationAndNewActivity() = isolated {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             awaitTag("onboarding-next")
+            awaitTag("onboarding-notifications-skip")
+            rule.onNodeWithTag("onboarding-notifications-allow").assertIsDisplayed()
+            rule.onNodeWithTag("onboarding-notifications-skip").performClick()
+            rule.waitUntil(10_000){runBlocking{prefs.current().notificationsEnabled==false}}
+            rule.waitUntil(10_000){rule.onAllNodesWithTag("onboarding-notifications-skip").fetchSemanticsNodes().isEmpty()}
+            assertFalse(runBlocking{prefs.current().onboardingCompleted})
             rule.onNodeWithTag("onboarding-next").performClick()
             rule.onNodeWithText("Введите название счёта").assertExists()
             rule.onNodeWithTag("currency:Основная валюта").performScrollTo().performClick()
@@ -98,10 +104,12 @@ class OnboardingDeviceTest {
             assertEquals(12345L, account.openingMinor)
             assertTrue(saved.entries.isEmpty())
             assertEquals(account.id, runBlocking { prefs.current().lastAccount })
+            assertEquals(false,runBlocking{prefs.current().notificationsEnabled})
         }
         ActivityScenario.launch(MainActivity::class.java).use {
             awaitTag("nav-home")
             rule.onNodeWithTag("onboarding-next").assertDoesNotExist()
+            rule.onNodeWithTag("onboarding-notifications-skip").assertDoesNotExist()
             assertEquals(1, runBlocking { store.current().accounts.size })
         }
     }
@@ -132,12 +140,38 @@ class OnboardingDeviceTest {
         }
     }
 
+    @Test fun notificationChoiceAndPermissionResultSurviveRecreation() = isolated {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("onboarding-notifications-allow")
+            val state=vm(scenario)
+            if(android.os.Build.VERSION.SDK_INT<33){
+                rule.onNodeWithTag("onboarding-notifications-allow").performClick()
+            }else{
+                // Inject the Android permission callback, not a claim that the
+                // external system permission dialog was physically exercised.
+                scenario.onActivity{state.notificationPermissionResult(true)}
+            }
+            rule.waitUntil(10_000){runBlocking{prefs.current().notificationsEnabled==true}}
+            rule.waitUntil(10_000){rule.onAllNodesWithTag("onboarding-notifications-allow").fetchSemanticsNodes().isEmpty()}
+            assertFalse(runBlocking{prefs.current().onboardingCompleted})
+            scenario.onActivity{state.notificationPermissionResult(false)}
+            rule.waitUntil(10_000){runBlocking{prefs.current().notificationsEnabled==false}}
+            scenario.recreate()
+            awaitTag("onboarding-next")
+            rule.onNodeWithTag("onboarding-notifications-allow").assertDoesNotExist()
+            assertFalse(runBlocking{prefs.current().onboardingCompleted})
+        }
+    }
+
     @Test fun firstLaunchRestoreChecksPasswordAndCompletesEvenForEmptyBackup() = isolated {
         val file = File(context.cacheDir, "onboarding-${newId()}.trachu")
         try {
             file.outputStream().use { Backup.write(Ledger.initial(), "valid-password".toCharArray(), it) }
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 awaitTag("onboarding-restore")
+                awaitTag("onboarding-notifications-skip")
+                rule.onNodeWithTag("onboarding-notifications-skip").performClick()
+                rule.waitUntil(10_000){rule.onAllNodesWithTag("onboarding-notifications-skip").fetchSemanticsNodes().isEmpty()}
                 rule.onNodeWithTag("onboarding-restore").performClick()
                 rule.onNodeWithText("Пароль резервной копии").assertExists()
                 rule.onNodeWithText("Отмена").performClick()

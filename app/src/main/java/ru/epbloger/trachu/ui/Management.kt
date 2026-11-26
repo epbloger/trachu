@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -20,7 +21,7 @@ import ru.epbloger.trachu.core.*
 import ru.epbloger.trachu.security.Settings
 import ru.epbloger.trachu.widget.refreshWidgets
 
-enum class MorePage(val label:String) { INDEX("Инструменты"), ACCOUNTS("Счета"), CATEGORIES("Категории"), CONVERTER("Конвертер валют"), RATES("Валюты и курсы"), SETTINGS("Настройки"), DATA("Файлы и копии"), TUTORIAL("Обучение"), ABOUT("О приложении") }
+enum class MorePage(val label:String) { INDEX("Инструменты"), ACCOUNTS("Счета"), CATEGORIES("Категории"), CONVERTER("Валюты"), RATES("Курсы"), SETTINGS("Настройки"), DATA("Данные и копии"), TUTORIAL("Обучение"), ABOUT("Помощь") }
 
 @Composable fun Accounts(ledger:Ledger,edit:(Account?)->Unit,transfer:()->Unit,back:()->Unit,move:(String,Int)->Unit) {
     var showArchived by remember{mutableStateOf(false)}
@@ -80,36 +81,31 @@ enum class MorePage(val label:String) { INDEX("Инструменты"), ACCOUNT
     var date by remember{mutableStateOf(iso(today()))}
     var value by remember{mutableStateOf("")}
     var error by remember{mutableStateOf("")}
-    var base by remember(ledger.baseCurrency){mutableStateOf(ledger.baseCurrency)}
-    val canChange=ledger.accounts.isEmpty() && ledger.entries.isEmpty() && ledger.budgets.isEmpty() && ledger.schedules.isEmpty() && ledger.debts.isEmpty()
     val relevant=ledger.rates.filter{it.currency==currency}.sortedByDescending{it.day}
     LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
-        item{SectionTitle("Валюты и курсы",action="Назад",onAction=back)}
+        item{SectionTitle("Курсы валют",action="Конвертер",onAction=back)}
         item{Panel{
             Text("Основная валюта отчётов: ${ledger.baseCurrency}",style=MaterialTheme.typography.titleMedium)
-            if(canChange) {
-                CurrencyPicker("Валюта отчётов",base){base=it}
-                Button(onClick={vm.change({l->require(l.accounts.isEmpty()&&l.entries.isEmpty()&&l.budgets.isEmpty()&&l.schedules.isEmpty()&&l.debts.isEmpty());l.copy(baseCurrency=base,rates=emptyList())})},enabled=!busy&&base!=ledger.baseCurrency){Text("Изменить основную валюту")}
-            } else Text("После создания финансовых записей основная валюта фиксируется для корректных исторических отчётов.")
+            Toggle("Автоматические курсы ЦБ",settings.automaticRates,{if(!busy)vm.setAutomaticRates(it)},"Обновляются при наличии интернета")
         }}
         item{Panel{
-            SectionTitle("Сохранить курс")
+            SectionTitle("Курс для финансового учёта")
             Choice("Валюта",currency.takeIf{it!=ledger.baseCurrency},allCurrencies.filter{it!=ledger.baseCurrency},{it}){currency=it;value=""}
             DateField("Дата курса",date,{date=it})
             Field("${ledger.baseCurrency} за 1 $currency",value,{value=it},true)
             Button(onClick={
                 runCatching{
-                    val d=parseDay(date)
+                    val d=runCatching{parseDay(date)}.getOrElse{throw IllegalArgumentException("Укажите дату курса")}
                     val r=value.trim().replace(',','.')
-                    require(currency!=ledger.baseCurrency && d<=today())
-                    Money.convert(1,currency,ledger.baseCurrency,r)
+                    require(currency!=ledger.baseCurrency) { "Выберите другую валюту" }
+                    require(d<=today()) { "Дата курса не может быть в будущем" }
+                    runCatching{Money.convert(1,currency,ledger.baseCurrency,r)}.getOrElse{throw IllegalArgumentException("Введите положительный курс валюты")}
                     vm.change({l->l.copy(rates=l.rates.filterNot{it.currency==currency&&it.day==d}+FxRate(currency,d,r))})
                     error=""
-                }.onFailure{error=it.message ?: "Проверьте курс и дату"}
+                }.onFailure{error=it.message?.takeIf{m->m.any{c->c in 'А'..'я'||c=='ё'||c=='Ё'}} ?: "Проверьте дату и курс."}
             },enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Сохранить вручную")}
             OutlinedButton(onClick={runCatching{parseDay(date).also{require(it<=today())}}.onSuccess{vm.fetchRates(it);error=""}.onFailure{error="Проверьте дату"}},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Получить официальные курсы ЦБ РФ")}
-            Toggle("Автоматически обновлять курсы",settings.automaticRates,{if(!busy)vm.setAutomaticRates(it)},"При открытии конвертера и примерно раз в сутки при наличии интернета.")
-            Text("Запрос к cbr.ru содержит только дату. Операции, остатки и названия счетов не передаются. Ручные курсы и исторические курсы записанных операций сохраняются.",style=MaterialTheme.typography.bodySmall)
+            Text("Ручные курсы не заменяются курсами ЦБ. Финансовые записи не передаются.",style=MaterialTheme.typography.bodySmall)
             if(error.isNotEmpty())Warning(error)
         }}
         item{Text("История $currency",style=MaterialTheme.typography.titleLarge)}
@@ -117,38 +113,28 @@ enum class MorePage(val label:String) { INDEX("Инструменты"), ACCOUNT
         items(relevant,key={it.day}){r->Panel{Text(dayLabel(r.day),style=MaterialTheme.typography.titleMedium);Text("1 ${r.currency} = ${r.unitsOfBasePerUnit} ${ledger.baseCurrency}");Text(if(r.source=="CBR")"ЦБ РФ" else "Вручную",style=MaterialTheme.typography.bodySmall)}}
     }
 }
-@Composable fun MoreIndex(open:(MorePage)->Unit) {
-    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
-        item{Text("Инструменты",style=MaterialTheme.typography.headlineLarge)}
-        val descriptions=mapOf(
-            MorePage.ACCOUNTS to "Наличные, карты, накопления и архив",
-            MorePage.CATEGORIES to "Категории, подкатегории, цвета и значки",
-            MorePage.CONVERTER to "Пересчёт любой суммы в другую валюту",
-            MorePage.RATES to "Исторические курсы и основная валюта",
-            MorePage.DATA to "Резервные копии, CSV, PDF и импорт",
-            MorePage.SETTINGS to "Тема, PIN, биометрия, уведомления и виджет",
-            MorePage.TUTORIAL to "Краткое знакомство с приложением",
-            MorePage.ABOUT to "Приватность, условия и контакты")
-        items(descriptions.toList()){(page,detail)->Panel{
-            SectionTitle(page.label,detail,action="Открыть"){open(page)}
-        }}
-    }
-}
+private fun canChangeBaseCurrency(ledger:Ledger)=ledger.accounts.isEmpty()&&ledger.entries.isEmpty()&&ledger.budgets.isEmpty()&&ledger.schedules.isEmpty()&&ledger.debts.isEmpty()
 @Composable fun PinField(label:String,value:String,change:(String)->Unit) {
     OutlinedTextField(value,{change(it.filter(Char::isDigit).take(12))},Modifier.fillMaxWidth(),label={Text(label)},singleLine=true,
         keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.NumberPassword),visualTransformation=PasswordVisualTransformation())
 }
-@Composable fun SettingsPage(settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,authenticate:((()->Unit)->Unit),back:()->Unit){
+@Composable fun SettingsPage(ledger:Ledger,settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,authenticate:((()->Unit)->Unit),back:()->Unit){
     var pinDialog by remember{mutableStateOf(false)}
     var removeDialog by remember{mutableStateOf(false)}
-    val notify=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){ granted ->
-        if(granted) ru.epbloger.trachu.worker.FinanceWorker.refresh(vm.getApplication())
-    }
+    var base by remember(ledger.baseCurrency){mutableStateOf(ledger.baseCurrency)}
+    val notify=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission(),vm::notificationPermissionResult)
     LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
         item{SectionTitle("Настройки",action="Назад",onAction=back)}
         item{Panel{
             SectionTitle("Оформление")
             Choice("Тема",settings.theme,listOf("system","light","dark"),{when(it){"light"->"Светлая";"dark"->"Тёмная";else->"Системная"}}){vm.perform{vm.preferences.theme(it)}}
+        }}
+        item{Panel{
+            SectionTitle("Финансовый учёт")
+            if(canChangeBaseCurrency(ledger)){
+                CurrencyPicker("Основная валюта",base){base=it}
+                Button(onClick={vm.change({l->require(canChangeBaseCurrency(l)){"Сначала завершите работу с существующими счетами и записями"};l.copy(baseCurrency=base,rates=emptyList())})},enabled=!busy&&base!=ledger.baseCurrency){Text("Изменить валюту")}
+            }else Text("Основная валюта: ${ledger.baseCurrency}",style=MaterialTheme.typography.bodyLarge)
             Choice("Начало отчётного месяца",settings.monthStart,(1..31).toList(),{"$it число"}){vm.perform{vm.preferences.monthStart(it)}}
             Text("Настройка меняет месячный период в обзоре и аналитике. Бюджеты ведутся по календарным месяцам.",style=MaterialTheme.typography.bodySmall)
         }}
@@ -168,12 +154,30 @@ enum class MorePage(val label:String) { INDEX("Инструменты"), ACCOUNT
             Text("PIN ограничивает доступ к интерфейсу. База защищена изоляцией Android; переносимая резервная копия шифруется отдельно паролем.",style=MaterialTheme.typography.bodySmall)
         }}
         item{Panel{
-            SectionTitle("Виджет и уведомления")
+            SectionTitle("Уведомления")
+            Toggle("Напоминания",settings.notificationsEnabled!=false,{enabled->
+                if(!busy){
+                    vm.perform{
+                        vm.preferences.notificationsEnabled(enabled)
+                        if(enabled){
+                            ru.epbloger.trachu.worker.FinanceWorker.refresh(vm.getApplication())
+                            if(Build.VERSION.SDK_INT>=33)notify.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }else ru.epbloger.trachu.worker.FinanceWorker.cancelReminders(vm.getApplication())
+                    }
+                }
+            },"Платежи, долги и лимиты бюджета")
+            run {
+                val context=androidx.compose.ui.platform.LocalContext.current
+                TextButton(onClick={
+                    context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,context.packageName))
+                }){Text("Разрешения Android")}
+            }
+        }}
+        item{Panel{
+            SectionTitle("Виджет")
             Toggle("Показывать баланс на виджете",settings.showWidgetBalance,{v->vm.perform{
                 vm.preferences.widget(v);ru.epbloger.trachu.widget.refreshWidgets(vm.getApplication())
             }},"При включённом PIN сумма всегда скрыта.")
-            if(Build.VERSION.SDK_INT>=33)Button(onClick={notify.launch(Manifest.permission.POST_NOTIFICATIONS)}){Text("Разрешить уведомления")}
-            Text("Напоминания о плановых операциях, долгах и превышении бюджета. Android может откладывать фоновые задачи.",style=MaterialTheme.typography.bodyMedium)
         }}
         if(!BuildConfig.DEBUG && BuildConfig.YANDEX_BANNER_ID.isNotEmpty())item{Panel{
             SectionTitle("Реклама и конфиденциальность")
@@ -211,13 +215,13 @@ enum class MorePage(val label:String) { INDEX("Инструменты"), ACCOUNT
     }
 }
 data class FileRequest(val mode:String,val save:Boolean,val password:String="",val account:String="",val period:Period=Period.month())
-@Composable fun DataPage(ledger:Ledger,launch:(FileRequest)->Unit,busy:Boolean,back:()->Unit) {
+@Composable fun DataPage(ledger:Ledger,launch:(FileRequest)->Unit,busy:Boolean,back:()->Unit,openReports:()->Unit) {
     var backup by remember{mutableStateOf<String?>(null)}
     var importStatement by remember{mutableStateOf(false)}
     var account by remember{mutableStateOf(ledger.accounts.firstOrNull{!it.archived}?.id.orEmpty())}
     var csvConfirm by remember{mutableStateOf(false)}
     LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
-        item{SectionTitle("Файлы и копии",action="Назад",onAction=back)}
+        item{SectionTitle("Данные и копии",action="Назад",onAction=back)}
         item{Panel{
             SectionTitle("Зашифрованная копия")
             Text("Сохраните все счета, операции, настройки финансов, категории, курсы и чеки в одном файле. Пароль нужен для восстановления на любом устройстве.")
@@ -234,8 +238,8 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
         }}
         item{Panel{
             SectionTitle("PDF-отчёт")
-            Text("Отчёт за текущий месяц. Другой период можно выбрать в аналитике.")
-            Button(onClick={launch(FileRequest("pdf",true,period=Period.month()))},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Сохранить PDF")}
+            Text("Выберите период и счёт в аналитике.")
+            Button(onClick=openReports,enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Перейти к экспорту PDF")}
         }}
     }
     if(backup!=null){
@@ -258,16 +262,20 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
     if(importStatement)Form("Импорт выписки",{importStatement=false},busy,"Выбрать файл",onSave={
         if(account.isNotBlank()){launch(FileRequest("statement",false,account=account));importStatement=false}
     }){
-        Choice("Счёт",account,ledger.accounts.filter{!it.archived}.map{it.id},{ledger.accountName(it)}){account=it}
+        AccountChoice("Счёт",account,ledger.accounts.filter{!it.archived}){account=it}
         Text("Суммы должны быть в валюте этого счёта. Импорт повторно не добавит те же строки. Для операций в иностранной валюте заранее сохраните исторические курсы.")
     }
 }
-@Composable fun AboutPage(back:()->Unit) {
-    var document by remember{mutableStateOf("privacy")}
+@Composable fun AboutPage(back:()->Unit,startTutorial:()->Unit) {
+    var document by remember{mutableStateOf<String?>(null)}
     val context=androidx.compose.ui.platform.LocalContext.current
-    val text=remember(document){runCatching{context.assets.open("legal/$document.txt").bufferedReader().use{it.readText()}}.getOrElse{"Документ недоступен"}}
+    val text=remember(document){document?.let{runCatching{context.assets.open("legal/$it.txt").bufferedReader().use{r->r.readText()}}.getOrElse{"Документ недоступен"}}}
     LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
-        item{SectionTitle("О приложении",action="Назад",onAction=back)}
+        item{SectionTitle("Помощь",action="Назад",onAction=back)}
+        item{Panel{
+            SectionTitle("Как пользоваться ТРАЧУ.")
+            Button(onClick=startTutorial,modifier=Modifier.fillMaxWidth().testTag("help-tutorial")){Text("Повторить обучение")}
+        }}
         item{Panel{
             Text("ТРАЧУ.",style=MaterialTheme.typography.displaySmall,color=MaterialTheme.colorScheme.primary)
             Text("Личные финансы под контролем")
@@ -277,8 +285,11 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
             Text("helpmoorkis@yandex.ru")
         }}
         item{Panel{
-            Chips(listOf("privacy","terms","developer"),document,{when(it){"privacy"->"Приватность";"terms"->"Условия";else->"Разработчик"}}){document=it}
-            Text(text,style=MaterialTheme.typography.bodyMedium)
+            SectionTitle("Документы")
+            listOf("privacy" to "Политика конфиденциальности","terms" to "Условия использования","developer" to "О разработчике").forEach{(key,label)->
+                TextButton(onClick={document=if(document==key)null else key},modifier=Modifier.fillMaxWidth()){Text(label)}
+                if(document==key&&text!=null)Text(text,style=MaterialTheme.typography.bodyMedium)
+            }
         }}
     }
 }

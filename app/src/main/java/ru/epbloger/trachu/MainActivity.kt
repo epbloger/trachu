@@ -147,7 +147,7 @@ class MainActivity : FragmentActivity() {
                         if(error==null)CircularProgressIndicator()
                         else RecoveryScreen(error,canRestore=s!=null&&l==null,busy=busy,retry=vm::retryLoad,file=::launchFile)
                     }
-                    else if(!s.protected && needsOnboarding(l,s)) OnboardingScreen(l,vm,busy,::launchFile){start->
+                    else if(!s.protected && needsOnboarding(l,s)) OnboardingScreen(l,s,vm,busy,::launchFile){start->
                         tutorialStep=if(start)TutorialStep.EXPENSE else null
                     }
                     else AppShell(l,s,vm,busy,biometricAvailable(),s.protected&&!unlocked,{done->authenticate(done)},::launchFile,::chooseReceipt,tutorialStep){tutorialStep=it}
@@ -233,13 +233,21 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
 @Composable private fun AppShell(ledger:Ledger,settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,locked:Boolean,authenticate:((()->Unit)->Unit),file:(FileRequest)->Unit,chooseReceipt:()->Unit,tutorialStep:TutorialStep?,onTutorialStep:(TutorialStep?)->Unit){
     var tab by rememberSaveable{mutableStateOf(Tab.HOME)}
     var more by rememberSaveable{mutableStateOf(MorePage.INDEX)}
+    var returnTab by rememberSaveable{mutableStateOf(Tab.HOME)}
     var plan by rememberSaveable{mutableStateOf(PlannerTab.BUDGET)}
     var editor by vm.editorState
     var waitingForTutorialEditor by rememberSaveable{mutableStateOf(false)}
     val quick by vm.quick.collectAsStateWithLifecycle()
     LaunchedEffect(settings.adsConsent){updateAdsConsent(settings.adsConsent==true)}
     fun startTutorial(){tab=Tab.HOME;more=MorePage.INDEX;waitingForTutorialEditor=false;onTutorialStep(TutorialStep.EXPENSE)}
-    fun openMore(page:MorePage){if(page==MorePage.TUTORIAL)startTutorial() else {tab=Tab.MORE;more=page}}
+    fun openMore(page:MorePage){
+        if(page==MorePage.TUTORIAL)startTutorial()
+        else {if(tab!=Tab.MORE)returnTab=tab;tab=Tab.MORE;more=page}
+    }
+    fun backFromMore(){
+        if(more==MorePage.RATES)more=MorePage.CONVERTER
+        else {tab=returnTab;more=MorePage.INDEX}
+    }
     fun add(kind:Kind,planned:Boolean=false,initialDay:Long?=null){
         if(ledger.accounts.none{!it.archived}){openMore(MorePage.ACCOUNTS);editor=Editor("account")}
         else editor=Editor(if(planned)"planned" else "entry",kind=kind,initialDay=initialDay)
@@ -307,8 +315,8 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
     val spotlight=tutorialStep!=null&&editor==null&&!busy&&!waitingForTutorialEditor&&quick==null&&
         (if(guideNeedsDrawer)drawerOpen else drawerClosed)
     val mainTabs=Tab.entries.filter{it!=Tab.MORE}
-    val drawerPages=listOf(MorePage.ACCOUNTS,MorePage.CATEGORIES,MorePage.CONVERTER,MorePage.RATES,
-        MorePage.DATA,MorePage.SETTINGS,MorePage.TUTORIAL,MorePage.ABOUT,MorePage.INDEX)
+    val drawerPages=listOf(MorePage.ACCOUNTS,MorePage.CATEGORIES,MorePage.CONVERTER,
+        MorePage.DATA,MorePage.SETTINGS,MorePage.ABOUT)
     LaunchedEffect(editor){if(editor!=null && drawerState.targetValue!=DrawerValue.Closed)drawerState.close()}
     Box(Modifier.fillMaxSize()){
     // Keep real layouts composed for the spotlight. Hide their accessibility actions
@@ -325,15 +333,12 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                     Text("ТРАЧУ.",style=MaterialTheme.typography.headlineLarge,color=MaterialTheme.colorScheme.primary,modifier=Modifier.padding(16.dp))
                     Text("Личные финансы",style=MaterialTheme.typography.bodyMedium,modifier=Modifier.padding(horizontal=16.dp))
                     Spacer(Modifier.height(8.dp))
-                    mainTabs.forEach{t->
-                        NavigationDrawerItem(label={Text(t.label)},selected=tab==t,
-                            icon={Icon(t.icon,contentDescription=null)},onClick={choose(t);scope.launch{drawerState.close()}},
-                            modifier=Modifier.testTag("drawer-tab-${t.name.lowercase()}"))
-                    }
-                    HorizontalDivider(Modifier.padding(vertical=8.dp))
-                    Text("Инструменты",style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(horizontal=16.dp,vertical=4.dp))
                     drawerPages.forEach{page->
-                        NavigationDrawerItem(label={Text(if(page==MorePage.INDEX)"Все инструменты" else page.label)},selected=tab==Tab.MORE&&more==page,
+                        if(page==MorePage.ACCOUNTS || page==MorePage.DATA){
+                            if(page==MorePage.DATA)HorizontalDivider(Modifier.padding(vertical=8.dp))
+                            Text(if(page==MorePage.ACCOUNTS)"Управление" else "Приложение",style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(horizontal=16.dp,vertical=4.dp))
+                        }
+                        NavigationDrawerItem(label={Text(page.label)},selected=tab==Tab.MORE&&(more==page||page==MorePage.CONVERTER&&more==MorePage.RATES),
                             onClick={openMore(page);scope.launch{drawerState.close()}},modifier=Modifier.testTag("drawer-${page.name.lowercase()}").then(when(page){MorePage.CATEGORIES->target(TutorialStep.CATEGORIES);MorePage.CONVERTER->target(TutorialStep.CONVERTER);else->Modifier}))
                     }
                     Spacer(Modifier.height(12.dp))
@@ -367,7 +372,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                 bottomBar={if(!rail)NavigationBar{
                     mainTabs.forEach{t->NavigationBarItem(selected=t==tab,onClick={choose(t)},modifier=Modifier.testTag("nav-${t.name.lowercase()}").then(when(t){Tab.OPERATIONS->target(TutorialStep.OPERATIONS);Tab.PLAN->target(TutorialStep.PLAN);Tab.REPORTS->target(TutorialStep.REPORTS);else->Modifier}),icon={Icon(t.icon,contentDescription=t.label)},label={Text(t.label,maxLines=1)},alwaysShowLabel=!largeFont)}
                 }},
-                floatingActionButton={if(tab==Tab.OPERATIONS)FloatingActionButton(onClick={add(Kind.EXPENSE)}){Text("+",style=MaterialTheme.typography.headlineSmall)}}){padding->
+                floatingActionButton={if(tab==Tab.OPERATIONS)ExtendedFloatingActionButton(onClick={add(Kind.EXPENSE)},modifier=Modifier.testTag("operation-add")){Text("+ Операция")}}){padding->
                 Column(Modifier.fillMaxSize().padding(padding)){
                     if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
                     Box(Modifier.weight(1f)){
@@ -376,14 +381,15 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                                 consentContent=if(!BuildConfig.DEBUG && BuildConfig.YANDEX_BANNER_ID.isNotEmpty() && settings.adsConsent==null)
                                     {{AdConsentPanel { accepted->vm.perform{vm.preferences.adsConsent(accepted)} }}} else null,
                                 tutorialTarget={id->target(if(id=="expense")TutorialStep.EXPENSE else TutorialStep.INCOME)})}
-                            Tab.OPERATIONS->Operations(ledger,{add(it)},{editor=Editor("detail",it.id)},settings.monthStart)
+                            Tab.OPERATIONS->Operations(ledger,{editor=Editor("detail",it.id)},settings.monthStart)
                             Tab.PLAN->Planner(ledger,plan,{editor=Editor("budget",it?.id)},{editor=Editor("goal",it?.id)},
                                 {if(ledger.accounts.isEmpty()){openMore(MorePage.ACCOUNTS);editor=Editor("account")}else editor=Editor("debt",it?.id)},
-                                {editor=Editor("payment",it.id)},::schedule,{editor=Editor("detail",it.id)},{day->add(Kind.EXPENSE,true,day)})
+                                {editor=Editor("payment",it.id)},::schedule,{editor=Editor("detail",it.id)},{day->add(Kind.EXPENSE,true,day)},
+                                adjustGoal={g,withdraw->editor=Editor(if(withdraw)"goalWithdraw" else "goalFund",g.id)})
                             Tab.REPORTS->Reports(ledger,settings.monthStart){period,account->file(FileRequest("pdf",true,period=period,account=account))}
                             Tab.MORE->when(more){
-                                MorePage.INDEX->MoreIndex{openMore(it)}
-                                MorePage.ACCOUNTS->Accounts(ledger,{editor=Editor("account",it?.id)},{add(Kind.TRANSFER)},{more=MorePage.INDEX}){id,delta->
+                                MorePage.INDEX->LaunchedEffect(Unit){backFromMore()}
+                                MorePage.ACCOUNTS->Accounts(ledger,{editor=Editor("account",it?.id)},{add(Kind.TRANSFER)},::backFromMore){id,delta->
                                     vm.change({ l->
                                         val sorted=l.accounts.sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name}).toMutableList()
                                         val i=sorted.indexOfFirst{it.id==id};val j=i+delta
@@ -391,13 +397,13 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                                         l.copy(accounts=sorted.mapIndexed{index,a->a.copy(sortOrder=index)})
                                     })
                                 }
-                                MorePage.CATEGORIES->Categories(ledger,{editor=Editor("category",it?.id)},{more=MorePage.INDEX})
-                                MorePage.CONVERTER->CurrencyConverter(ledger,vm,busy,{more=MorePage.INDEX},{more=MorePage.RATES})
-                                MorePage.RATES->Rates(ledger,settings,vm,busy){more=MorePage.INDEX}
-                                MorePage.SETTINGS->SettingsPage(settings,vm,busy,biometricAvailable,authenticate){more=MorePage.INDEX}
-                                MorePage.DATA->DataPage(ledger,file,busy){more=MorePage.INDEX}
-                                MorePage.ABOUT->AboutPage{more=MorePage.INDEX}
-                                MorePage.TUTORIAL->MoreIndex{openMore(it)}
+                                MorePage.CATEGORIES->Categories(ledger,{editor=Editor("category",it?.id)},::backFromMore)
+                                MorePage.CONVERTER->CurrencyConverter(ledger,vm,busy,::backFromMore,{more=MorePage.RATES})
+                                MorePage.RATES->Rates(ledger,settings,vm,busy,::backFromMore)
+                                MorePage.SETTINGS->SettingsPage(ledger,settings,vm,busy,biometricAvailable,authenticate,::backFromMore)
+                                MorePage.DATA->DataPage(ledger,file,busy,::backFromMore){choose(Tab.REPORTS)}
+                                MorePage.ABOUT->AboutPage(::backFromMore,::startTutorial)
+                                MorePage.TUTORIAL->LaunchedEffect(Unit){startTutorial()}
                             }
                         }
                     }
@@ -416,7 +422,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
     if(spotlight)TutorialSpotlight(requireNotNull(tutorialStep),anchor,::advanceTutorial,::stopTutorial)
     }
     androidx.activity.compose.BackHandler(enabled=editor==null&&drawerState.currentValue==DrawerValue.Closed&&drawerState.targetValue==DrawerValue.Closed&&tab!=Tab.HOME){
-        if(tab==Tab.MORE&&more!=MorePage.INDEX)more=MorePage.INDEX else tab=Tab.HOME
+        if(tab==Tab.MORE)backFromMore() else tab=Tab.HOME
     }
     androidx.activity.compose.BackHandler(enabled=editor==null&&(drawerState.currentValue==DrawerValue.Open||drawerState.targetValue==DrawerValue.Open)){
         scope.launch{drawerState.close()}
@@ -446,6 +452,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                 "editPayment"->ledger.entries.find{it.id==current.id}?.let{p->ledger.debts.find{it.id==p.debtId}?.let{d->DebtPaymentEditor(ledger,d,vm,busy,close,p,entryDraft)}}
                 "budget"->BudgetEditor(ledger,ledger.budgets.find{it.id==current.id},vm,busy,close,entryDraft)
                 "goal"->GoalEditor(ledger,ledger.goals.find{it.id==current.id},vm,busy,close,entryDraft)
+                "goalFund","goalWithdraw"->ledger.goals.find{it.id==current.id}?.let{GoalFundingEditor(it,vm,busy,close,entryDraft,withdraw=current.type=="goalWithdraw")}
                 "debt"->DebtEditor(ledger,ledger.debts.find{it.id==current.id},vm,busy,close,entryDraft)
                 "payment"->ledger.debts.find{it.id==current.id}?.let{DebtPaymentEditor(ledger,it,vm,busy,close,draft=entryDraft)}
             }

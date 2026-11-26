@@ -1,5 +1,11 @@
 package ru.epbloger.trachu.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -9,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -39,7 +46,7 @@ internal fun firstAccountLedger(ledger: Ledger, currency: String, name: String, 
 }
 
 @Composable
-internal fun OnboardingScreen(ledger: Ledger, vm: AppViewModel, busy: Boolean, file: (FileRequest) -> Unit, requestTutorial: (Boolean) -> Unit) {
+internal fun OnboardingScreen(ledger: Ledger, settings: Settings, vm: AppViewModel, busy: Boolean, file: (FileRequest) -> Unit, requestTutorial: (Boolean) -> Unit) {
     val draft = vm.onboardingDraft
     var currency by draft.state("currency") { ledger.baseCurrency }
     var name by draft.state("name") { "" }
@@ -49,6 +56,18 @@ internal fun OnboardingScreen(ledger: Ledger, vm: AppViewModel, busy: Boolean, f
     var tutorial by draft.state("tutorial") { false }
     var restoring by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
+    val context=LocalContext.current
+    val notify=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission(),vm::notificationPermissionResult)
+    fun chooseNotifications(enabled:Boolean){
+        vm.perform{
+            vm.preferences.notificationsEnabled(enabled)
+            if(enabled){
+                if(Build.VERSION.SDK_INT>=33 && ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
+                    notify.launch(Manifest.permission.POST_NOTIFICATIONS)
+                else ru.epbloger.trachu.worker.FinanceWorker.refresh(context)
+            }
+        }
+    }
     Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding(), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.widthIn(max = 540.dp).fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp)) {
             Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -72,6 +91,13 @@ internal fun OnboardingScreen(ledger: Ledger, vm: AppViewModel, busy: Boolean, f
                 modifier = Modifier.fillMaxWidth().testTag("onboarding-restore")) { Text("Восстановить из копии") }
         }
     }
+    if(settings.notificationsEnabled==null) AlertDialog(
+        onDismissRequest={if(!busy)chooseNotifications(false)},
+        title={Text("Включить напоминания?")},
+        text={Text("Напомним о платежах, долгах и лимитах бюджета. Настройку можно изменить позже.")},
+        confirmButton={TextButton(onClick={chooseNotifications(true)},enabled=!busy,modifier=Modifier.testTag("onboarding-notifications-allow")){Text("Разрешить")}},
+        dismissButton={TextButton(onClick={chooseNotifications(false)},enabled=!busy,modifier=Modifier.testTag("onboarding-notifications-skip")){Text("Не сейчас")}}
+    )
     if (tutorial) TutorialIntro(onClose = { if (!busy) { tutorial = false; requestTutorial(false) } }, onStart = {
         requestTutorial(true)
         vm.finishOnboarding(currency, name, type, opening)
@@ -97,6 +123,6 @@ internal fun TutorialIntro(onStart: () -> Unit, onSkip: () -> Unit, busy: Boolea
     Form("Как пользоваться ТРАЧУ.", onClose, busy, "Начать", onStart) {
         TextButton(onClick = onSkip, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Пропустить обучение") }
         Text("Покажем основные кнопки прямо в приложении. Нажимайте подсвеченные элементы, чтобы открыть нужный экран.")
-        Text("Обучение не создаёт пробных операций. Его можно прервать и запустить заново из меню.", style = MaterialTheme.typography.bodyMedium)
+        Text("Обучение не создаёт пробных операций. Повторить его можно в разделе «Помощь».", style = MaterialTheme.typography.bodyMedium)
     }
 }

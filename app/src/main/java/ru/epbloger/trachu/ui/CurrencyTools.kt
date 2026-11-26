@@ -5,7 +5,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.selected
@@ -66,12 +65,17 @@ fun CurrencyPicker(label: String, value: String, onChange: (String) -> Unit) {
 
 @Composable
 fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () -> Unit, rates: () -> Unit) {
-    var from by rememberSaveable(ledger.baseCurrency) { mutableStateOf(ledger.baseCurrency) }
-    var to by rememberSaveable(ledger.baseCurrency) { mutableStateOf(if (ledger.baseCurrency == "USD") "RUB" else "USD") }
-    var amount by rememberSaveable { mutableStateOf("1") }
-    var manual by rememberSaveable { mutableStateOf(false) }
-    var rateText by rememberSaveable { mutableStateOf("") }
-    var date by rememberSaveable { mutableStateOf(iso(today())) }
+    if(vm.converterBase!=ledger.baseCurrency){
+        vm.converterBase=ledger.baseCurrency
+        vm.converterDraft=EntryDraft()
+    }
+    val draft=vm.converterDraft
+    var from by draft.state("from"){ledger.baseCurrency}
+    var to by draft.state("to"){if(ledger.baseCurrency=="USD")"RUB" else "USD"}
+    var amount by draft.state("amount"){"1"}
+    var manual by draft.state("manual"){false}
+    var rateText by draft.state("rate"){ "" }
+    var date by draft.state("date"){iso(today())}
     val settings by vm.settings.collectAsState()
     val automatic=settings?.automaticRates==true
     val status by vm.converterRateStatus.collectAsState()
@@ -135,7 +139,7 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
                     .onFailure {
                         if(!manual&&from!=to&&saved==null&&currentStatus?.loading==true)
                             Text("Получаем курс ЦБ РФ…",style=MaterialTheme.typography.bodyLarge)
-                        else Warning(it.message ?: "Проверьте сумму и курс")
+                        else Warning(it.message?.takeIf{m->m.any{c->c in 'А'..'я'||c=='ё'||c=='Ё'}} ?: "Проверьте сумму и курс")
                     }
                 if(!manual&&from!=to&&currentStatus?.loading==true){
                     LinearProgressIndicator(Modifier.fillMaxWidth().testTag("converter-loading"))
@@ -154,7 +158,7 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
                     Toggle("Ввести курс вручную", manual, { manual = it })
                     if (manual) {
                         Field("$to за 1 $from", rateText, { rateText = it }, numeric = true)
-                        Text("Ручной курс применяется только к этому расчёту.")
+                        Text("Только для этого расчёта. Учёт не изменится.")
                     } else if (saved != null) {
                         Text("1 $from ≈ ${saved.toPlainString()} $to")
                         quoteRates.forEach { rate ->
@@ -170,8 +174,8 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
         item {
             Panel {
                 OutlinedButton(onClick = { day?.let{vm.refreshConverterRates(it,force=true)} }, enabled = !busy && day != null && currentStatus?.loading!=true, modifier = Modifier.fillMaxWidth()) { Text("Обновить курс сейчас") }
-                Text(if(automatic)"Курсы обновляются автоматически при открытии конвертера." else "Автообновление отключено в настройках курсов.",style=MaterialTheme.typography.bodyMedium)
-                OutlinedButton(onClick = rates, modifier = Modifier.fillMaxWidth()) { Text("История и ручные курсы") }
+                Text(if(automatic)"Курсы обновляются автоматически при открытии конвертера." else "Автообновление выключено. Включите его в управлении курсами.",style=MaterialTheme.typography.bodyMedium)
+                OutlinedButton(onClick = rates, modifier = Modifier.fillMaxWidth().testTag("converter-rates")) { Text("Управление курсами") }
                 Text("Без интернета доступны сохранённые и ручные курсы.", style = MaterialTheme.typography.bodySmall)
             }
         }

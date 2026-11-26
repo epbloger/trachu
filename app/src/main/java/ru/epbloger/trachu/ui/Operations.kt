@@ -14,7 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.core.*
 
-@Composable fun Operations(ledger: Ledger, add: (Kind)->Unit, open: (Entry)->Unit, monthStart:Int=1) {
+@Composable fun Operations(ledger: Ledger, open: (Entry)->Unit, monthStart:Int=1) {
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf("Все") }
     var account by rememberSaveable { mutableStateOf("") }
@@ -46,16 +46,30 @@ import ru.epbloger.trachu.core.*
       val wide=maxWidth>=760.dp && LocalDensity.current.fontScale<1.5f
       Row(Modifier.fillMaxSize()) {
        LazyColumn(modifier=Modifier.weight(1f).testTag("operations-list"),contentPadding=PaddingValues(start=20.dp,end=20.dp,top=20.dp,bottom=96.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-        item { SectionTitle("Операции",action="Добавить"){add(Kind.EXPENSE)} }
+         item { SectionTitle("Операции") }
         item {
             Field("Поиск по сумме, заметке, тегу",query,{query=it})
-            Chips(listOf("Все","Расход","Доход","Перевод","Возврат","План","Погашение долга","Возврат долга вам","Получение займа","Выдача займа"),filter,{it}){filter=it}
+             val primaryTypes=listOf("Все","Расход","Доход","Перевод")
+             val otherTypes=listOf("Возврат","План","Погашение долга","Возврат долга вам","Получение займа","Выдача займа")
+             var moreTypes by rememberSaveable{mutableStateOf(false)}
+             Chips(primaryTypes,filter,{it}){filter=it}
+             Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                 TextButton(onClick={moreTypes=true},modifier=Modifier.testTag("operation-more-types")){
+                     Text(if(filter in otherTypes)"Тип: $filter ▾" else "Другие типы ▾")
+                 }
+                 if(filter in otherTypes)TextButton(onClick={filter="Все"}){Text("Сбросить")}
+             }
+             if(moreTypes)AlertDialog(onDismissRequest={moreTypes=false},title={Text("Тип операции")},text={
+                 Column(Modifier.verticalScroll(rememberScrollState())){
+                     otherTypes.forEach{kind->TextButton(onClick={filter=kind;moreTypes=false},modifier=Modifier.fillMaxWidth().testTag("operation-type:$kind")){Text(if(filter==kind)"✓ $kind" else kind)}}
+                 }
+             },confirmButton={TextButton(onClick={moreTypes=false}){Text("Закрыть")}})
             val activeFilters=(if(account.isNotEmpty())1 else 0)+(if(categories.isNotEmpty())1 else 0)+(if(tags.isNotEmpty())1 else 0)+(if(!allDates)1 else 0)+(if(sort!="Новые")1 else 0)
             TextButton(onClick={expanded=!expanded}){Text((if(expanded)"Скрыть фильтры" else "Фильтры и сортировка")+if(activeFilters>0)" ($activeFilters)" else "")}
         }
         if(expanded)item {
             Panel {
-                Choice("Счёт",account,listOf("")+ledger.accounts.map{it.id},{if(it.isEmpty())"Все счета" else ledger.accountName(it)}){account=it}
+                 Choice("Счёт",account,listOf("")+ledger.accounts.map{it.id},{id->if(id.isEmpty())"Все счета" else ledger.accounts.find{it.id==id}?.let(::accountChoiceLabel) ?: "Счёт недоступен"}){account=it}
                 MultiChoice("Категории",categories,ledger.categories.map{it.id},{ledger.categoryName(it)}){categoryIds=it.toList()}
                 if(availableTags.isNotEmpty()||tags.isNotEmpty())MultiChoice("Теги (любой выбранный)",tags,availableTags,{it}){tagIds=it.toList()}
                 Choice("Сортировка",sort,listOf("Новые","Старые","Сумма"),{it}){sort=it}
@@ -65,7 +79,7 @@ import ru.epbloger.trachu.core.*
             }
         }
         item { Text("Найдено: ${entries.size}",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant) }
-        if(entries.isEmpty()) item { EmptyState("Нет операций","Добавьте расход или измените фильтры.","Добавить",{add(Kind.EXPENSE)}) }
+        if(entries.isEmpty()) item { EmptyState("Нет операций","Добавьте расход или измените фильтры.") }
         items(entries,key={it.id}) { entry->Panel(Modifier.testTag("operation:${entry.id}")) { EntryRow(ledger,entry){if(wide)selectedId=entry.id else open(entry)} } }
        }
        if(wide) {

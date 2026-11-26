@@ -9,6 +9,7 @@ import ru.epbloger.trachu.core.Ledger
 import ru.epbloger.trachu.data.Backup
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import androidx.test.platform.app.InstrumentationRegistry
 
 @RunWith(AndroidJUnit4::class)
@@ -32,7 +33,9 @@ class DeviceSecurityTest {
     }
     @Test fun persistedPinRateLimitConsentAndBudgetThreshold()=runBlocking {
         // Instrumented runs use a fresh app sandbox; restore security defaults afterwards.
-        val prefs=Preferences(InstrumentationRegistry.getInstrumentation().targetContext)
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val prefs=Preferences(context)
+        val previous=context.settingsStore.data.first()
         prefs.setCredential("test-credential")
         try {
             repeat(5){prefs.pinResult(false)}
@@ -46,12 +49,17 @@ class DeviceSecurityTest {
             prefs.adsConsent(true);assertEquals(true,prefs.current().adsConsent)
             prefs.adsConsent(false);assertEquals(false,prefs.current().adsConsent)
             val id=java.util.UUID.randomUUID().toString()
+            prefs.notificationsEnabled(false)
+            assertFalse(prefs.markNotice(id,"today"))
+            assertFalse(prefs.markBudgetNotice(id,"2026-11",1))
+            prefs.notificationsEnabled(true)
+            assertTrue(prefs.markNotice(id,"today"))
             assertTrue(prefs.markBudgetNotice(id,"2026-11",1))
             assertFalse(prefs.markBudgetNotice(id,"2026-11",0))
             assertFalse(prefs.markBudgetNotice(id,"2026-11",1))
             assertTrue(prefs.markBudgetNotice(id,"2026-11",2))
             assertFalse(prefs.markBudgetNotice(id,"2026-11",1))
             assertTrue(prefs.markBudgetNotice(id,"2026-12",1))
-        } finally { prefs.setCredential("");prefs.adsConsent(false) }
+        } finally { context.settingsStore.updateData{previous} }
     }
 }

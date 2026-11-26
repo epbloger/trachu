@@ -115,19 +115,10 @@ import java.time.temporal.TemporalAdjusters
                     recent.forEach { EntryRow(ledger,it){openEntry(it)} }
                 }
             }
-            item {
-                @Composable fun Spending() { CategoryReport(ledger,p) }
-                @Composable fun Earnings() { CategoryReport(ledger,p,income=true) }
-                if(wide) Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
-                    Box(Modifier.weight(1f)){Spending()}; Box(Modifier.weight(1f)){Earnings()}
-                } else Column(verticalArrangement=Arrangement.spacedBy(16.dp)){Spending();Earnings()}
-            }
-            item {
+            if(budget!=null) item {
                 @Composable fun BudgetSummary() {
                     Panel {
                         SectionTitle("Бюджет",action="План",onAction=plans)
-                        if(budget==null) { Text("Установите лимит на месяц, чтобы отслеживать остаток."); TextButton(onClick=plans){Text("Настроить бюджет")} }
-                        else {
                             val result=runCatching{Finance.budget(ledger,budget,day).also{it.remaining}}.getOrNull()
                             Text(budget.name,style=MaterialTheme.typography.titleMedium)
                             if(result==null)Warning("Слишком большой накопленный лимит. Измените бюджет в плане.")
@@ -137,15 +128,13 @@ import java.time.temporal.TemporalAdjusters
                                 Progress(result.spent,result.available)
                                 Text("Использовано ${result.percent}%")
                             }
-                        }
                     }
                 }
                 BudgetSummary()
             }
-            item {
+            if(planned.isNotEmpty()) item {
                 Panel {
                     SectionTitle("Предстоящие платежи",action="Календарь",onAction=calendar)
-                    if(planned.isEmpty()) Text("Пока ничего не запланировано.",color=MaterialTheme.colorScheme.onSurfaceVariant)
                     planned.forEach { EntryRow(ledger,it){openEntry(it)} }
                 }
             }
@@ -231,6 +220,7 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
     var type by rememberSaveable { mutableStateOf(PeriodType.MONTH) }
     var period by rememberSaveable(monthStart,stateSaver=PeriodSaver) { mutableStateOf(Period.month(startDay=monthStart)) }
     var selectedAccount by rememberSaveable{mutableStateOf("")}
+    var structureIncome by rememberSaveable{mutableStateOf(false)}
     val reportLedger=remember(ledger,selectedAccount){
         if(selectedAccount.isEmpty())ledger else ledger.copy(accounts=ledger.accounts.map{it.copy(includeInStats=it.id==selectedAccount && it.includeInStats)})
     }
@@ -264,7 +254,7 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
             item { SectionTitle("Аналитика",action="PDF"){exportPdf(period,selectedAccount)} }
             item { Panel {
                 PeriodControls(type,{type=it},period,{period=it},monthStart)
-                Choice("Счёт в отчёте",selectedAccount,listOf("")+ledger.accounts.filter{it.includeInStats}.map{it.id},{if(it.isEmpty())"Все счета отчётов" else ledger.accountName(it)}){selectedAccount=it}
+                Choice("Счёт в отчёте",selectedAccount,listOf("")+ledger.accounts.filter{it.includeInStats}.map{it.id},{id->if(id.isEmpty())"Все счета отчётов" else ledger.accounts.find{it.id==id}?.let(::accountChoiceLabel) ?: "Счёт недоступен"}){selectedAccount=it}
                 if(selectedAccount.isNotEmpty())Text("Фильтр применяется к отчётам и PDF. Прогноз показывает все счета.",style=MaterialTheme.typography.bodySmall)
             } }
             item {
@@ -291,9 +281,12 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
                 if(wide)Row(horizontalArrangement=Arrangement.spacedBy(16.dp)){
                     Box(Modifier.weight(1f)){CategoryReport(reportLedger,period)}
                     Box(Modifier.weight(1f)){CategoryReport(reportLedger,period,income=true)}
-                } else Column(verticalArrangement=Arrangement.spacedBy(16.dp)){
-                    CategoryReport(reportLedger,period)
-                    CategoryReport(reportLedger,period,income=true)
+                } else Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
+                    Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                        FilterChip(selected=!structureIncome,onClick={structureIncome=false},label={Text("Расходы")},modifier=Modifier.weight(1f).testTag("structure-expense"))
+                        FilterChip(selected=structureIncome,onClick={structureIncome=true},label={Text("Доходы")},modifier=Modifier.weight(1f).testTag("structure-income"))
+                    }
+                    CategoryReport(reportLedger,period,income=structureIncome)
                 }
             }
             item {

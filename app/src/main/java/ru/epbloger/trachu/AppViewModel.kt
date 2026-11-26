@@ -34,6 +34,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // backup passwords or receipt bytes into Android's saved-instance state.
     internal val editorState=mutableStateOf<Editor?>(null)
     internal var onboardingDraft=EntryDraft()
+    // Calculator amounts are also kept in memory rather than saved-instance state.
+    internal var converterDraft=EntryDraft()
+    internal var converterBase=""
     internal var editor:Editor?
         get()=editorState.value
         set(value){editorState.value=value}
@@ -172,7 +175,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try { task() }
             catch(e: kotlinx.coroutines.CancellationException) { throw e }
-            catch(e: Exception) { _message.value=e.message ?: "Не удалось выполнить действие" }
+            catch(e: Exception) {
+                // Keep explicit Russian validation messages; don't expose exception
+                // classes, storage paths or a raw Kotlin "Failed requirement".
+                val message=e.message.orEmpty().trim()
+                _message.value=when {
+                    e is ArithmeticException -> "Сумма слишком велика для расчёта. Проверьте введённые значения."
+                    e is IllegalArgumentException && message.any{it in 'А'..'я'||it=='ё'||it=='Ё'} -> message
+                    e is IllegalStateException && message.any{it in 'А'..'я'||it=='ё'||it=='Ё'} -> message
+                    e is IllegalArgumentException -> "Проверьте обязательные поля, суммы и даты."
+                    else -> "Не удалось выполнить действие. Повторите попытку."
+                }
+            }
             finally { _busy.value=false }
         }
     }
@@ -191,6 +205,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if(receipt!=null) next=next.copy(receipts=next.receipts+receipt)
         Finance.putEntry(next,entry)
     }) { viewModelScope.launch { preferences.lastAccount(entry.accountId) }; onDone() }
+    fun notificationPermissionResult(granted:Boolean) {
+        // Activity result can arrive while another action is busy (including a
+        // synchronous permission result). Do not drop the user's decision.
+        viewModelScope.launch {
+            try {
+                preferences.notificationsEnabled(granted)
+                if(granted) FinanceWorker.refresh(getApplication())
+                else FinanceWorker.cancelReminders(getApplication())
+            } catch(e:kotlinx.coroutines.CancellationException) { throw e }
+            catch(_:Exception) { _message.value="Не удалось сохранить настройку уведомлений" }
+        }
+    }
     fun setAutomaticRates(enabled:Boolean) = perform {
         preferences.automaticRates(enabled)
         RatesWorker.configure(getApplication(),enabled,immediate=enabled)
@@ -273,6 +299,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             catch(e:kotlinx.coroutines.CancellationException) { throw e }
             catch(_:Exception) { /* The verified backup has already been restored. */ }
             onboardingDraft=EntryDraft()
+            converterDraft=EntryDraft()
+            converterBase=""
             if(_ledger.value==null)retryLoad()
         }
         _message.value="Данные загружены"

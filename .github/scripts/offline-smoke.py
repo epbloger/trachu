@@ -103,6 +103,8 @@ def start(quick=False):
 
 try:
     adb('install', '-r', sys.argv[1])
+    installed = adb('shell', 'dumpsys', 'package', package)
+    current_v12 = bool(re.search(r'^\s*versionName=1\.2\.0\s*$', installed, re.M))
     if sys.argv[2:] == ['--legacy']:
         installed = adb('shell', 'dumpsys', 'package', package)
         assert re.search(r'^\s*versionName=1\.0\.0\s*$', installed, re.M), 'Legacy flow is only allowed for installed version 1.0.0'
@@ -117,6 +119,8 @@ try:
     assert_offline('before')
     start()
     if not legacy_apk:
+        if current_v12:
+            tap(text('Не сейчас'))
         text('Начнём с вашего счёта')
         enter('OfflineQA')
         tap(text('Далее'))
