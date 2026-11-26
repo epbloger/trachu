@@ -1,4 +1,4 @@
-name: Android integration
+name: Release build
 on:
   workflow_dispatch:
   push:
@@ -14,6 +14,7 @@ on:
       - '.github/scripts/notification-smoke.py'
       - 'store/rustore/sign-release.ps1'
   pull_request:
+    branches: [main]
     paths:
       - 'app/**'
       - '*.gradle.kts'
@@ -28,8 +29,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  # Keep the evidence for each distinct source revision. A correction must
-  # not interrupt an already running device suite for an earlier revision.
+  # Keep each source revision isolated; never cancel a build for another revision.
   group: android-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
@@ -52,7 +52,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Verify SDK 36
+      - name: Prepare Android SDK
         shell: bash
         run: |
           set -euo pipefail
@@ -66,10 +66,10 @@ jobs:
             "$manager" --sdk_root="$SDK" 'platforms;android-36' 'build-tools;35.0.0'
           fi
           test -f "$SDK/platforms/android-36/android.jar"
-      - name: Build debug and unsigned release APK/AAB and device tests
+      - name: Build application variants
         id: build
         run: gradle --no-daemon --continue --stacktrace assembleDebug assembleRelease bundleRelease assembleDebugAndroidTest
-      - name: Record artifact provenance and inspect merged permissions
+      - name: Check package metadata
         id: provenance
         shell: bash
         run: |
@@ -113,10 +113,10 @@ jobs:
             grep -Eq 'YANDEX_BANNER_ID = "";' "$release_config"
             printf 'Debug: official demo only\nRelease: disabled, empty placement\n' > qa/ads-config.txt
           fi
-      - name: Run unit tests and lint
+      - name: Code checks
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: gradle --no-daemon --continue --stacktrace testDebugUnitTest lintDebug lintRelease
-      - name: Build verified 1.0.0 and previous 1.1.0 baselines for real in-place upgrades
+      - name: Upgrade compatibility
         id: baseline
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' }}
         shell: bash
@@ -143,14 +143,14 @@ jobs:
           echo "TRACHU_UPGRADE_V11_APK=$old11" >> "$GITHUB_ENV"
           git -C "$baseline11" rev-parse HEAD > qa/upgrade-v11-baseline-commit.txt
           sha256sum "$old11" > qa/upgrade-v11-baseline-sha256.txt
-      - name: Enable KVM
+      - name: Prepare emulator
         id: kvm
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.provenance.outcome == 'success' && steps.baseline.outcome == 'success' }}
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Instrumented phone, tablet and planner UX tests
+      - name: Device compatibility
         if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -159,7 +159,7 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh
-      - name: Android 8 compatibility and planner UX tests
+      - name: Legacy Android compatibility
         if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -168,7 +168,7 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh api26
-      - name: Android 13 compatibility, editor and planner UX tests
+      - name: Android 13 compatibility
         if: ${{ !cancelled() && steps.kvm.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -177,7 +177,7 @@ jobs:
           target: default
           disable-animations: true
           script: bash .github/scripts/device-tests.sh api33
-      - name: Verify release binaries, package, checksums and 16-KiB compatibility
+      - name: Validate release packages
         shell: bash
         run: |
           set -euo pipefail
@@ -231,12 +231,12 @@ jobs:
           for candidate in sys.argv[1:]:
               verify(candidate)
           PY
-      - name: VerifyOnly unsigned APK and AAB against exact commit
+      - name: Validate release provenance
         shell: pwsh
         run: |
           $sha=(git rev-parse HEAD).Trim()
           & ./store/rustore/sign-release.ps1 -ArtifactDir . -ExpectedCommit $sha -VerifyOnly 6>&1 | Tee-Object -FilePath qa/signing-verify-only.txt
-      - name: Upload unsigned Release APK and AAB for owner signing
+      - name: Upload unsigned Release files
         if: success()
         uses: actions/upload-artifact@v4
         with:

@@ -19,9 +19,6 @@ status=0
 # The unfiltered API 36 runs below execute the complete instrumentation suite,
 # including PlannerUxTest and DeviceSecurityTest.
 trap 'adb shell cmd connectivity airplane-mode disable || true; adb shell svc wifi enable || true; adb shell svc data enable || true' EXIT
-adb shell svc wifi disable
-adb shell svc data disable
-adb shell dumpsys connectivity > qa/phone/connectivity-before-test.txt
 gradle --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || status=1
 adb pull /sdcard/Android/data/ru.epbloger.trachu/files/qa/. qa/phone/ || true
 cp -a app/build/outputs/androidTest-results qa/phone/ || true
