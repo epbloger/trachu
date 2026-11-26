@@ -14,6 +14,7 @@ import zlib
 
 SCREENS = ('dashboard', 'operations', 'split_entry')
 SCREENS_V11 = SCREENS + ('onboarding', 'drawer', 'converter', 'quick_entry', 'dashboard_dark')
+SCREENS_GUIDED = SCREENS_V11 + ('tutorial',)
 PAGE = 16 * 1024
 
 
@@ -137,7 +138,8 @@ def verify_tests(root, pattern, minimum, critical=()):
     return count
 
 
-def verify_release(qa, apk, aab, commit, require_ux_v11=False):
+def verify_release(qa, apk, aab, commit, require_ux_v11=False, require_guided_v11=False):
+    require_ux_v11 = require_ux_v11 or require_guided_v11
     require(re.fullmatch('[0-9a-f]{40}', commit), 'Expected full Git SHA')
     expected = provenance(qa, commit)
     verify_binary(apk, 'apk', commit, expected)
@@ -154,6 +156,9 @@ def verify_release(qa, apk, aab, commit, require_ux_v11=False):
                 'storedCrossRateRoundsOnlyOnceAtExactHalf', 'pristineDatabaseInEitherCategoryOrderNeedsSetup',
                 'existingFinancialDataAndCustomizedCategoriesAreNeverReinitialized',
                 'firstAccountUsesChosenCurrencyAndExactOpeningWithoutIncome')
+    if require_guided_v11:
+        jvm += ('newCategoriesReceiveDistinctColorsAndExplicitColorsAreNotChanged',
+                'legacyDuplicateColorsHaveStableDistinctChartColors')
     count = verify_tests(qa, 'app/build/test-results/testDebugUnitTest/TEST-*.xml',
                          43 if require_ux_v11 else 35, jvm)
     storage = ('legacyEncryptedArchiveWithMultiMegabyteReceiptRestoresAtomically',
@@ -178,6 +183,15 @@ def verify_release(qa, apk, aab, commit, require_ux_v11=False):
                     storage if device == 'api26' else storage + editors)
         if require_ux_v11 and device != 'store-phone':
             critical += setup
+        if require_guided_v11 and device != 'store-phone':
+            critical += ('converterFetchesAutomaticallyAndPreservesManualRate',
+                         'onboardingStartsRealWalkthroughAndReplayCanBeSkippedWithoutEntries',
+                         'lockingDuringReplayRemovesTheGuideAndNeverBypassesPin')
+            if device != 'api26':
+                critical += ('newCategoryEditorUsesDistinctPaletteColor',
+                             'categoryEditorPreservesAnExistingCustomColor',
+                             'eachNewSplitPartRequiresItsOwnCategory',
+                             'editingEntryKeepsItsOriginalCategorySelected')
         count += verify_tests(qa, f'qa/{device}/androidTest-results/connected/debug/TEST-*.xml', minimum, critical)
     for variant in ('debug', 'release'):
         lint = ET.parse(qa/f'app/build/reports/lint-results-{variant}.xml').getroot()
@@ -198,7 +212,7 @@ def verify_release(qa, apk, aab, commit, require_ux_v11=False):
         require(re.search(r'Active default network:\s*(none|null)\s*$',
                           (offline/f'connectivity-{stage}.txt').read_text(), re.I|re.M),
                 f'Offline {stage}: default network exists')
-    verify_screens(qa/'qa/store-phone', SCREENS_V11 if require_ux_v11 else SCREENS)
+    verify_screens(qa/'qa/store-phone', SCREENS_GUIDED if require_guided_v11 else SCREENS_V11 if require_ux_v11 else SCREENS)
     print(f'PASS {count} tests, lint, exact offline amount and release artifact checks for {commit}')
 
 
@@ -208,14 +222,16 @@ if __name__ == '__main__':
     screens = sub.add_parser('screens')
     screens.add_argument('directory', type=pathlib.Path)
     screens.add_argument('--require-ux-v11', action='store_true')
+    screens.add_argument('--require-guided-v11', action='store_true')
     release = sub.add_parser('release')
     release.add_argument('--qa', required=True, type=pathlib.Path)
     release.add_argument('--apk', required=True, type=pathlib.Path)
     release.add_argument('--aab', required=True, type=pathlib.Path)
     release.add_argument('--commit', required=True)
     release.add_argument('--require-ux-v11', action='store_true')
+    release.add_argument('--require-guided-v11', action='store_true')
     args = parser.parse_args()
     if args.mode == 'screens':
-        verify_screens(args.directory, SCREENS_V11 if args.require_ux_v11 else SCREENS)
+        verify_screens(args.directory, SCREENS_GUIDED if args.require_guided_v11 else SCREENS_V11 if args.require_ux_v11 else SCREENS)
     else:
-        verify_release(args.qa, args.apk, args.aab, args.commit, args.require_ux_v11)
+        verify_release(args.qa, args.apk, args.aab, args.commit, args.require_ux_v11, args.require_guided_v11)

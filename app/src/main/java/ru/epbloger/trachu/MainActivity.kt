@@ -132,7 +132,6 @@ class MainActivity : FragmentActivity() {
             val unlocked by vm.unlocked.collectAsStateWithLifecycle()
             // Only the tutorial step is saveable; no financial fields or passwords.
             var tutorialStep by rememberSaveable{mutableStateOf<TutorialStep?>(null)}
-            LaunchedEffect(settings?.protected,unlocked){if(settings?.protected==true&&!unlocked)tutorialStep=null}
             SideEffect {
                 if(settings==null || settings?.protected == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -258,8 +257,9 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
         else vm.notice("Сначала завершите текущую операцию. Черновик сохранён.")
         vm.quick(null)
     }}
-    LaunchedEffect(locked){if(locked){onTutorialStep(null);waitingForTutorialEditor=false}}
     if(locked){
+        // Keep only the non-sensitive walkthrough state and existing in-memory
+        // draft; neither the underlying financial UI nor its spotlight is composed.
         LockScreen(settings,vm,busy,biometricAvailable,authenticate)
         return
     }
@@ -276,8 +276,9 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
     LaunchedEffect(editor,waitingForTutorialEditor,tutorialStep){
         if(waitingForTutorialEditor && editor==null){tab=Tab.HOME;more=MorePage.INDEX;waitingForTutorialEditor=false}
     }
+    val guideNeedsDrawer=tutorialStep==TutorialStep.CATEGORIES||tutorialStep==TutorialStep.CONVERTER
     LaunchedEffect(tutorialStep,busy,editor){
-        if(tutorialStep==TutorialStep.CONVERTER&&!busy&&editor==null)drawerState.open()
+        if(guideNeedsDrawer&&!busy&&editor==null)drawerState.open()
     }
     fun advanceTutorial(){
         val step=tutorialStep ?: return
@@ -291,7 +292,9 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
             TutorialStep.OPERATIONS->choose(Tab.OPERATIONS)
             TutorialStep.PLAN->choose(Tab.PLAN)
             TutorialStep.REPORTS->choose(Tab.REPORTS)
-            TutorialStep.MENU->Unit // The CONVERTER step opens the real drawer, also after rotation.
+            TutorialStep.MENU->Unit // The CATEGORIES step opens the real drawer, also after rotation.
+            TutorialStep.CATEGORIES->{openMore(MorePage.CATEGORIES);scope.launch{drawerState.close()}}
+            TutorialStep.MENU_CONVERTER->Unit
             TutorialStep.CONVERTER->{openMore(MorePage.CONVERTER);scope.launch{drawerState.close()}}
             TutorialStep.DONE->Unit
         }
@@ -300,7 +303,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
     val drawerOpen=drawerState.currentValue==DrawerValue.Open&&drawerState.targetValue==DrawerValue.Open
     val drawerClosed=drawerState.currentValue==DrawerValue.Closed&&drawerState.targetValue==DrawerValue.Closed
     val spotlight=tutorialStep!=null&&editor==null&&!busy&&!waitingForTutorialEditor&&quick==null&&
-        (if(tutorialStep==TutorialStep.CONVERTER)drawerOpen else drawerClosed)
+        (if(guideNeedsDrawer)drawerOpen else drawerClosed)
     val mainTabs=Tab.entries.filter{it!=Tab.MORE}
     val drawerPages=listOf(MorePage.ACCOUNTS,MorePage.CATEGORIES,MorePage.CONVERTER,MorePage.RATES,
         MorePage.DATA,MorePage.SETTINGS,MorePage.TUTORIAL,MorePage.ABOUT,MorePage.INDEX)
@@ -329,7 +332,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                     Text("Инструменты",style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(horizontal=16.dp,vertical=4.dp))
                     drawerPages.forEach{page->
                         NavigationDrawerItem(label={Text(if(page==MorePage.INDEX)"Все инструменты" else page.label)},selected=tab==Tab.MORE&&more==page,
-                            onClick={openMore(page);scope.launch{drawerState.close()}},modifier=Modifier.testTag("drawer-${page.name.lowercase()}").then(if(page==MorePage.CONVERTER)target(TutorialStep.CONVERTER) else Modifier))
+                            onClick={openMore(page);scope.launch{drawerState.close()}},modifier=Modifier.testTag("drawer-${page.name.lowercase()}").then(when(page){MorePage.CATEGORIES->target(TutorialStep.CATEGORIES);MorePage.CONVERTER->target(TutorialStep.CONVERTER);else->Modifier}))
                     }
                     Spacer(Modifier.height(12.dp))
                 }
@@ -352,7 +355,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                     Surface(color=MaterialTheme.colorScheme.background){
                         Row(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top+WindowInsetsSides.Horizontal))
                             .padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically){
-                            IconButton(onClick={scope.launch{drawerState.open()}},enabled=editor==null&&!busy,modifier=Modifier.testTag("nav-more").then(target(TutorialStep.MENU))){
+                            IconButton(onClick={scope.launch{drawerState.open()}},enabled=editor==null&&!busy,modifier=Modifier.testTag("nav-more").then(target(if(tutorialStep==TutorialStep.MENU_CONVERTER)TutorialStep.MENU_CONVERTER else TutorialStep.MENU))){
                                 Icon(Icons.Outlined.Menu,contentDescription="Открыть меню")
                             }
                             Text("ТРАЧУ.",style=MaterialTheme.typography.titleLarge,color=MaterialTheme.colorScheme.primary)

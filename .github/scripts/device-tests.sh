@@ -50,7 +50,7 @@ if [[ "$status" == 0 ]]; then
   adb shell svc data disable
   gradle --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.epbloger.trachu.ui.NavigationTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || status=1
   adb pull /sdcard/Android/data/ru.epbloger.trachu/files/qa/. qa/store-phone/ || status=1
-  python3 store/rustore/verify-evidence.py screens qa/store-phone --require-ux-v11 || status=1
+  python3 store/rustore/verify-evidence.py screens qa/store-phone --require-guided-v11 || status=1
   cp -a app/build/outputs/androidTest-results qa/store-phone/ || true
 fi
 adb shell wm size reset

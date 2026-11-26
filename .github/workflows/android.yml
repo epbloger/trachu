@@ -215,7 +215,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 store/rustore/verify-evidence.py release --qa . --apk . --aab . --commit "$(git rev-parse HEAD)" --require-ux-v11 | tee qa/current-evidence.txt
+          python3 store/rustore/verify-evidence.py release --qa . --apk . --aab . --commit "$(git rev-parse HEAD)" --require-guided-v11 | tee qa/current-evidence.txt
           grep -F 'PASS: 1.0.0 -> 1.1.0, no clear or onboarding' qa/upgrade/result.txt
           grep -F 'PASS: 1.1.0 -> 1.1.0, no clear or onboarding' qa/upgrade-v11/result.txt
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/release/*.apk | tee qa/zipalign.txt

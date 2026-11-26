@@ -41,6 +41,10 @@ class EvidenceTest(unittest.TestCase):
         for index, name in enumerate(verify.SCREENS_V11[len(verify.SCREENS):], start=3):
             (self.root/(name+'.png')).write_bytes(png(1080, 1920, index))
         verify.verify_screens(self.root, verify.SCREENS_V11)
+        with self.assertRaises(FileNotFoundError):
+            verify.verify_screens(self.root, verify.SCREENS_GUIDED)
+        (self.root/'tutorial.png').write_bytes(png(1080, 1920, 19))
+        verify.verify_screens(self.root, verify.SCREENS_GUIDED)
 
     def test_wrong_orientation(self):
         (self.root/'dashboard.png').write_bytes(png(1920, 1080, 0))
