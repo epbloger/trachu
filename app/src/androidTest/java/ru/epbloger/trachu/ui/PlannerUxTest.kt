@@ -14,6 +14,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import ru.epbloger.trachu.AppViewModel
 import ru.epbloger.trachu.MainActivity
+import ru.epbloger.trachu.Editor
 import ru.epbloger.trachu.core.*
 import ru.epbloger.trachu.data.LedgerStore
 import ru.epbloger.trachu.security.Preferences
@@ -148,6 +149,30 @@ class PlannerUxTest {
         }finally{
             rule.activityRule.scenario.onActivity{ViewModelProvider(it)[AppViewModel::class.java].editor=null}
             runBlocking{store.change{it.copy(goals=it.goals.filterNot{g->g.id==goal.id},accounts=it.accounts.filterNot{a->a.id==account.id},entries=it.entries.filterNot{e->e.accountId==account.id||e.targetAccountId==account.id})}}
+        }
+    }
+
+    @Test fun deletingRecordedDebtExplainsItsAccountBalanceEffect(){
+        val account=Account(name="Счёт для займа ${newId()}",currency=runBlocking{store.current().baseCurrency},openingMinor=50000)
+        val debt=Debt(person="Проверка удаления",accountId=account.id,owedByMe=true,principalMinor=10000,openedDay=today())
+        val seeded=runBlocking{store.current().copy(accounts=store.current().accounts+account,debts=store.current().debts+debt)}
+        val opening=Finance.makeEntry(seeded,Kind.LOAN_IN,account.id,debt.principalMinor,today(),
+            note="Получение займа",debtId=debt.id,principalMinor=debt.principalMinor)
+        runBlocking{store.change{it.copy(accounts=it.accounts+account,debts=it.debts+debt,entries=it.entries+opening)}}
+        try{
+            awaitLedger{it.debts.any{d->d.id==debt.id}&&it.entries.any{e->e.id==opening.id}}
+            val before=runBlocking{store.current()}
+            rule.activityRule.scenario.onActivity{ViewModelProvider(it)[AppViewModel::class.java].editor=Editor("debt",debt.id)}
+            awaitTag("field:Кому я должен")
+            rule.onNodeWithText("Удалить долг").performScrollTo().performClick()
+            rule.onNodeWithText("Связанная запись получения или выдачи денег тоже будет удалена, и остаток счёта изменится.")
+                .assertIsDisplayed()
+            rule.onNodeWithText("Отмена").performClick()
+            assertEquals(before,runBlocking{store.current()})
+            assertEquals(60000L,Finance.balance(runBlocking{store.current()},account.id))
+        }finally{
+            rule.activityRule.scenario.onActivity{ViewModelProvider(it)[AppViewModel::class.java].editor=null}
+            runBlocking{store.change{it.copy(entries=it.entries.filterNot{e->e.debtId==debt.id},debts=it.debts.filterNot{d->d.id==debt.id},accounts=it.accounts.filterNot{a->a.id==account.id})}}
         }
     }
 

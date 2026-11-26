@@ -404,7 +404,10 @@ private fun plannerDate(value:String):Long =
         Text("Основной долг не считается доходом или расходом; проценты учитываются при погашении.")
         if(current!=null&&!paid)TextButton(onClick={delete=true}){Text("Удалить долг",color=MaterialTheme.colorScheme.error)}
     }
-    if(delete&&current!=null)Confirm("Удалить долг?","Запись задолженности будет удалена.",{delete=false},{vm.change({l->l.copy(debts=l.debts.filterNot{it.id==current.id},entries=l.entries.filterNot{it.debtId==current.id})},close)},busy)
+    if(delete&&current!=null)Confirm("Удалить долг?",
+        if(current.openedDay!=null)"Связанная запись получения или выдачи денег тоже будет удалена, и остаток счёта изменится."
+        else "Запись задолженности будет удалена.",
+        {delete=false},{vm.change({l->l.copy(debts=l.debts.filterNot{it.id==current.id},entries=l.entries.filterNot{it.debtId==current.id})},close)},busy)
 }
 
 @Composable fun DebtPaymentEditor(ledger:Ledger,debt:Debt,vm:AppViewModel,busy:Boolean,close:()->Unit,current:Entry?=null, draft:EntryDraft){
