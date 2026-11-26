@@ -14,7 +14,7 @@ import ru.epbloger.trachu.core.*
 data class LedgerRecord(val kind: String, val id: String, val payload: String,
     @ColumnInfo(defaultValue = "1") val formatVersion: Int = 1)
 
-data class RecordStats(val bytes: Long, val rows: Long) {
+data class RecordStats(val bytes: Long, @ColumnInfo(name = "row_count") val rows: Long) {
     // Includes decoded strings, receipt builders and per-object/list overhead.
     fun estimatedMemory(): Long = bytes * 4 + rows * 1024
 }
@@ -23,7 +23,7 @@ data class RecordStats(val bytes: Long, val rows: Long) {
 interface LedgerDao {
     @Query("SELECT * FROM ledger_records ORDER BY kind, id")
     suspend fun read(): List<LedgerRecord>
-    @Query("SELECT COALESCE(SUM(length(CAST(payload AS BLOB)) + length(CAST(id AS BLOB)) + length(CAST(kind AS BLOB))), 0) AS bytes, COUNT(*) AS rows FROM ledger_records")
+    @Query("SELECT COALESCE(SUM(length(CAST(payload AS BLOB)) + length(CAST(id AS BLOB)) + length(CAST(kind AS BLOB))), 0) AS bytes, COUNT(*) AS row_count FROM ledger_records")
     suspend fun stats(): RecordStats
     @Query("SELECT * FROM ledger_records WHERE kind = :kind AND id > :after ORDER BY id LIMIT :limit")
     suspend fun page(kind: String, after: String, limit: Int): List<LedgerRecord>
