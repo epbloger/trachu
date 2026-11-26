@@ -1,6 +1,9 @@
 name: Android verification
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - 'dev/1.2.0-complete'
 
 permissions:
   contents: read
