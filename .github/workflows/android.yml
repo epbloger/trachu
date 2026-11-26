@@ -123,7 +123,6 @@ jobs:
           set -euo pipefail
           mkdir -p qa
           git rev-parse HEAD > qa/source-commit.txt
-          sha256sum app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk app/build/outputs/bundle/release/*.aab app/build/outputs/apk/androidTest/debug/*.apk > qa/SHA256SUMS
           AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
           "$AAPT" dump permissions app/build/outputs/apk/debug/*.apk | tee qa/apk-permissions.txt
           if grep -E 'permission\.(AD_ID|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|READ_CONTACTS|READ_SMS|RECORD_AUDIO)' qa/apk-permissions.txt; then
@@ -229,6 +228,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # connectedDebugAndroidTest may regenerate the instrumentation APK;
+          # fingerprint the exact binaries that will be validated and uploaded.
+          sha256sum app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk app/build/outputs/bundle/release/*.aab app/build/outputs/apk/androidTest/debug/*.apk > qa/SHA256SUMS
           sha256sum -c qa/SHA256SUMS
           python3 store/rustore/verify-evidence.py release --qa . --apk . --aab . --commit "$(git rev-parse HEAD)" --require-ux-v12 | tee qa/current-evidence.txt
           grep -F 'PASS: 1.0.0 -> 1.2.0, no clear or onboarding' qa/upgrade/result.txt
