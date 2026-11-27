@@ -411,6 +411,33 @@ object Finance {
         }
         return ledger.copy(entries = newEntries, schedules = updated)
     }
+    /** Recheck the denomination and availability under the actual write transaction. */
+    fun requireEntryAccount(ledger: Ledger, expected: Account, allowArchived: Boolean = false,
+        recipient: Boolean = false): Account {
+        val label = if (recipient) "Счёт получателя" else "Счёт"
+        val account = requireNotNull(ledger.accounts.find { it.id == expected.id && (!it.archived || allowArchived) }) {
+            "$label больше недоступен. Выберите другой."
+        }
+        require(account.currency == expected.currency) { "$label: валюта изменилась. Откройте операцию снова." }
+        return account
+    }
+
+    fun canPostPlanned(ledger: Ledger, entry: Entry): Boolean =
+        entry.status == EntryStatus.PLANNED &&
+            ledger.accounts.any { it.id == entry.accountId && !it.archived } &&
+            (entry.targetAccountId == null || ledger.accounts.any { it.id == entry.targetAccountId && !it.archived })
+
+    fun confirmPlanned(ledger: Ledger, expected: Entry, through: Long = today()): Ledger {
+        require(ledger.entries.find { it.id == expected.id } == expected) {
+            "Операция изменилась. Откройте её снова."
+        }
+        require(expected.status == EntryStatus.PLANNED && expected.day <= through) {
+            "Подтвердить можно только запланированную операцию с наступившей датой."
+        }
+        require(canPostPlanned(ledger, expected)) { "Сначала восстановите счета операции из архива." }
+        return putEntry(ledger, expected.copy(status = EntryStatus.POSTED, autoPostPlanned = false))
+    }
+
     fun putEntry(ledger: Ledger, entry: Entry): Ledger {
         val original = ledger.entries.find { it.id == entry.id }
         require(original == null || ledger.entries.none { it.originalId == entry.id }) { "Сначала удалите связанные возвраты" }

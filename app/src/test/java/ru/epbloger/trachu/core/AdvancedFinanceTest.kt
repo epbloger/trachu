@@ -62,6 +62,46 @@ class AdvancedFinanceTest {
         assertEquals(Finance.balance(recorded,a.id,day),Finance.balance(edited,a.id,day))
     }
 
+    @Test fun signedTotalsAreOrderIndependentAndCurrencySubtotalsRemainExact() {
+        assertEquals(Long.MAX_VALUE,Money.sum(listOf(Long.MAX_VALUE,1L,-1L)))
+        assertEquals(Long.MIN_VALUE,Money.sum(listOf(Long.MIN_VALUE,-1L,1L)))
+        assertTrue(runCatching{Money.sum(listOf(Long.MAX_VALUE,1L))}.isFailure)
+        assertTrue(runCatching{Money.sum(listOf(Long.MIN_VALUE,-1L))}.isFailure)
+        val unquoted=Ledger.initial().copy(accounts=listOf(
+            Account("x","X","USD",openingMinor=Long.MAX_VALUE),
+            Account("y","Y","USD",openingMinor=Long.MAX_VALUE)
+        )).validated()
+        assertEquals(setOf("USD"),Finance.valuation(unquoted).missingCurrencies)
+        val amounts=unquoted.accounts.map{Finance.balance(unquoted,it.id)}
+        val formatted=Money.formatTotal(amounts,"USD")
+        assertEquals("18446744073709551614",formatted.filter{it.isDigit()})
+        assertEquals(Money.format(-123,"RUB"),Money.formatTotal(listOf(100L,-223L),"RUB"))
+    }
+
+    @Test fun entryAccountRechecksCurrencyAndArchiveInsideWrite() {
+        val changed=l.copy(accounts=l.accounts.map{if(it.id==a.id)it.copy(currency="EUR")else it})
+        assertTrue(runCatching{Finance.requireEntryAccount(changed,a)}.isFailure)
+        val archived=l.copy(accounts=l.accounts.map{if(it.id==usd.id)it.copy(archived=true)else it})
+        assertTrue(runCatching{Finance.requireEntryAccount(archived,usd,recipient=true)}.isFailure)
+        assertEquals("USD",Finance.requireEntryAccount(archived,usd,allowArchived=true).currency)
+        assertEquals(a,Finance.requireEntryAccount(l,a))
+    }
+
+    @Test fun manualPostingChecksDueDateArchiveAndStaleSnapshot() {
+        val entry=Finance.makeEntry(l,Kind.TRANSFER,"a",100,day,targetId="usd",targetMinor=1,
+            status=EntryStatus.PLANNED,autoPostPlanned=true)
+        val initial=Finance.putEntry(l,entry)
+        assertTrue(Finance.canPostPlanned(initial,entry))
+        assertTrue(runCatching{Finance.confirmPlanned(initial,entry,day-1)}.isFailure)
+        val archived=initial.copy(accounts=initial.accounts.map{if(it.id=="usd")it.copy(archived=true)else it})
+        assertFalse(Finance.canPostPlanned(archived,entry))
+        assertTrue(runCatching{Finance.confirmPlanned(archived,entry,day)}.isFailure)
+        val posted=Finance.confirmPlanned(initial,entry,day)
+        assertEquals(EntryStatus.POSTED,posted.entries.single().status)
+        assertFalse(posted.entries.single().autoPostPlanned)
+        assertTrue(runCatching{Finance.confirmPlanned(posted,entry,day)}.isFailure)
+    }
+
     @Test fun archiveRequiresPrincipalAndKnownInterestToBeCleared() {
         val debt=Debt("archive-debt","Кредитор","a",true,10000,"36.5",openedDay=day)
         val initial=l.copy(debts=listOf(debt))

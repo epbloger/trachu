@@ -6,6 +6,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlannerRateValidationTest {
+    @Test fun refundPreviewRejectsInvalidCategoryAmountsWithoutThrowing() {
+        val ledger=ru.epbloger.trachu.core.Ledger.initial()
+        val valid=refundCategoryAmounts(mapOf("food" to "1.25","home" to "","other" to "0"),"RUB",ledger)
+        assertEquals(listOf("food" to 125L),valid.getOrThrow())
+        assertEquals(125L,refundCategoryTotal(valid))
+        for (bad in listOf("-1","abc","0.001","92233720368547758.08")) {
+            assertTrue(refundCategoryAmounts(mapOf("food" to bad),"RUB",ledger).isFailure)
+        }
+        val overflow=refundCategoryAmounts(mapOf("food" to "92233720368547758.07","home" to "0.01"),"RUB",ledger)
+        assertNull(refundCategoryTotal(overflow))
+    }
+
     @Test fun paymentPreviewHandlesBlankNegativeOverpreciseAndOverflowingAmounts() {
         assertEquals(DebtPaymentPreview(1250L,750L),debtPaymentPreview("12.50","",true,"RUB",2000L))
         assertEquals(DebtPaymentPreview(1500L,750L),debtPaymentPreview("12.50","2.50",true,"RUB",2000L))
