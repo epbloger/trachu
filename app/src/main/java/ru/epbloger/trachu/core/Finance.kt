@@ -334,6 +334,22 @@ object Finance {
             .getOrDefault(true)
     }
 
+    fun accountHasReferences(ledger: Ledger, accountId: String): Boolean =
+        ledger.entries.any { it.accountId == accountId || it.targetAccountId == accountId } ||
+        ledger.debts.any { it.accountId == accountId } ||
+        ledger.schedules.any { it.template.accountId == accountId || it.template.targetAccountId == accountId }
+
+    /** Delete exactly one unused account; never cascade to financial history. */
+    fun deleteAccount(ledger: Ledger, expected: Account): Ledger {
+        require(ledger.accounts.find { it.id == expected.id } == expected) {
+            "Счёт изменился. Откройте его снова."
+        }
+        require(!accountHasReferences(ledger, expected.id)) {
+            "Счёт уже используется. Его можно архивировать."
+        }
+        return ledger.copy(accounts = ledger.accounts.filterNot { it.id == expected.id }).validated()
+    }
+
     fun requireAccountCanArchive(ledger: Ledger, accountId: String, through: Long = today()) {
         require(ledger.schedules.none { it.enabled && (it.template.accountId == accountId || it.template.targetAccountId == accountId) }) {
             "Сначала приостановите регулярные операции этого счёта"

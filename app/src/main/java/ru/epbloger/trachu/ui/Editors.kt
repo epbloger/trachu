@@ -106,7 +106,7 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
     var archived by draft.state("archived"){current?.archived ?: false}
     var error by draft.state("error"){""}
     var delete by draft.state("delete"){false}
-    val used=original!=null && (ledger.entries.any{it.accountId==original?.id || it.targetAccountId==original?.id} || ledger.debts.any{it.accountId==original?.id} || ledger.schedules.any{it.template.accountId==original?.id || it.template.targetAccountId==original?.id})
+    val used=original!=null && Finance.accountHasReferences(ledger,original.id)
     // A non-zero opening balance is already denominated in this account's currency.
     // Do not silently discard it or reinterpret it when changing the currency.
     val currencyLocked=used || original?.openingMinor?.let{it!=0L}==true || current?.openingMinor?.let{it!=0L}==true
@@ -140,11 +140,8 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
         if(original!=null)Toggle("Архивировать",archived,{archived=it},"История и остаток сохраняются. Архивный счёт скрыт в формах новых операций.")
         if(original!=null&&!used)TextButton(onClick={delete=true}){Text("Удалить счёт",color=MaterialTheme.colorScheme.error)}
     }
-    if(delete&&original!=null)Confirm("Удалить счёт?","Начальный остаток будет удалён.",{delete=false},{delete=false;vm.change({l->
-        require(l.accounts.find{it.id==original?.id}==original){"Счёт изменился. Откройте его снова."}
-        require(l.entries.none{it.accountId==original?.id||it.targetAccountId==original?.id}&&
-            l.debts.none{it.accountId==original?.id}&&l.schedules.none{it.template.accountId==original?.id||it.template.targetAccountId==original?.id}){"Счёт уже используется. Его можно архивировать."}
-        l.copy(accounts=l.accounts.filterNot{it.id==original?.id})
+    if(delete&&original!=null)Confirm("Удалить счёт?","Будет удалён только этот счёт и его начальный остаток. Другие данные сохранятся.",{delete=false},{delete=false;vm.change({l->
+        Finance.deleteAccount(l,original)
     },close)},busy)
 }
 
@@ -703,7 +700,7 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         }
         OutlinedButton(onClick={deletionSnapshot=entry},enabled=refunds.isEmpty()&&!busy&&entry.kind !in setOf(Kind.LOAN_IN,Kind.LOAN_OUT),modifier=Modifier.fillMaxWidth()){Text("Удалить операцию",color=MaterialTheme.colorScheme.error)}
     }
-    deletionSnapshot?.let{snapshot->Confirm("Удалить операцию?","Баланс и отчёты будут пересчитаны.",{deletionSnapshot=null},{vm.change({l->
+    deletionSnapshot?.let{snapshot->Confirm("Удалить операцию?","Будет удалена только эта операция. Баланс и отчёты будут пересчитаны.",{deletionSnapshot=null},{vm.change({l->
         require(l.entries.find{it.id==snapshot.id}==snapshot){"Операция изменилась. Откройте её снова."}
         Finance.deleteEntry(l,snapshot.id)
     },close)},busy)}

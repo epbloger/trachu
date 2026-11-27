@@ -214,7 +214,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _converterRateStatus.value=null
         rateAttempts.clear()
         FinanceWorker.resetMutex.withLock {
-            val next=store.clearFinancialData()
+            val next=store.clearFinancialData(confirmation)
             _ledger.value=next
             editor=null
             onboardingDraft=EntryDraft()

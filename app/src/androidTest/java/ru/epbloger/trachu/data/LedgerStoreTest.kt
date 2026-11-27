@@ -61,7 +61,14 @@ class LedgerStoreTest {
             val store=LedgerStore(db)
             store.restore(initial)
             assertEquals(1,store.current().receipts.size)
-            val empty=store.clearFinancialData()
+            val before=store.current()
+            val rows=db.ledgerDao().read()
+            for(word in listOf("","Да","Не подтверждаю","ПОДТВЕРЖДА")){
+                assertTrue(runCatching{store.clearFinancialData(word)}.isFailure)
+                assertEquals(before,store.current())
+                assertEquals(rows,db.ledgerDao().read())
+            }
+            val empty=store.clearFinancialData("ПОДТВЕРЖДАЮ")
             assertEquals(Ledger.initial(),empty)
             val expectedPersisted=Ledger.initial().let{it.copy(categories=it.categories.sortedBy{c->c.id})}
             assertEquals(expectedPersisted,store.processDue(day+2))
@@ -70,6 +77,86 @@ class LedgerStoreTest {
             assertEquals(expectedPersisted,LedgerStore(db).current())
             assertTrue(db.ledgerDao().read().none{it.kind in setOf("entry","receipt","receipt_chunk","schedule","account","goal","debt","budget","rate")})
         } finally { db.close();context.deleteDatabase(name) }
+    }
+    @Test fun individualDeletesPreserveEveryUnrelatedDatabaseRow()=runBlocking {
+        val name="delete-isolation-${newId()}.db"
+        var db=Room.databaseBuilder(context,TrachuDatabase::class.java,name).build()
+        try {
+            var store=LedgerStore(db)
+            val day=today()
+            val a=Account("a","Карта",openingMinor=10000)
+            val b=Account("b","Наличные",openingMinor=20000)
+            val unused=Account("unused","Резерв",openingMinor=30000)
+            val shared=Receipt(id="shared",mime="image/png",base64="AQID")
+            val only=Receipt(id="only",mime="image/png",base64="BAUG")
+            val base=Ledger.initial().copy(accounts=listOf(a,b,unused),receipts=listOf(shared,only),
+                categories=Ledger.initial().categories+Category("custom","Своя категория"),
+                goals=listOf(Goal(id="goal",name="Цель",targetMinor=10000,savedMinor=500)),
+                debts=listOf(Debt(id="debt",person="Долг",accountId=b.id,owedByMe=true,principalMinor=1000)),
+                budgets=listOf(Budget(id="budget",name="Бюджет",monthlyMinor=1000,startMonth=Period.month(day).from)),
+                rates=listOf(FxRate("USD",day,"100")))
+            val first=Finance.makeEntry(base,Kind.EXPENSE,a.id,500,day,listOf("food" to 500L),
+                note="Удаляемая запись",id="delete",receiptIds=listOf(shared.id,only.id))
+            val other=Finance.makeEntry(base,Kind.EXPENSE,b.id,200,day,listOf("food" to 200L),
+                note="Сохранить",id="keep",receiptIds=listOf(shared.id))
+            val template=other.copy(id="template",receiptIds=emptyList())
+            store.restore(base.copy(entries=listOf(first,other),schedules=listOf(Schedule("schedule",template,day+1,Frequency.DAILY))))
+            val before=store.current()
+            val rowsBefore=db.ledgerDao().read()
+            val afterAccount=before.copy(accounts=before.accounts.filterNot{it.id==unused.id})
+            store.change{Finance.deleteAccount(it,unused)}
+            assertEquals(afterAccount,store.current())
+            assertEquals(rowsBefore.filterNot{it.kind=="account"&&it.id==unused.id},db.ledgerDao().read())
+            val rowsAfterAccount=db.ledgerDao().read()
+            for(account in listOf(a,b)){
+                assertTrue(runCatching{store.change{Finance.deleteAccount(it,account)}}.isFailure)
+                assertEquals(afterAccount,store.current())
+                assertEquals(rowsAfterAccount,db.ledgerDao().read())
+            }
+            val expected=afterAccount.copy(entries=afterAccount.entries.filterNot{it.id==first.id},
+                receipts=afterAccount.receipts.filterNot{it.id==only.id})
+            store.change{Finance.deleteEntry(it,first.id)}
+            assertEquals(expected,store.current())
+            assertEquals(10000L,Finance.balance(store.current(),a.id))
+            assertEquals(19800L,Finance.balance(store.current(),b.id))
+            val expectedRows=rowsAfterAccount.filterNot{
+                (it.kind=="entry"&&it.id==first.id)||(it.kind=="receipt"&&it.id==only.id)||
+                    (it.kind=="receipt_chunk"&&it.id.startsWith("${only.id}:"))
+            }
+            assertEquals(expectedRows,db.ledgerDao().read())
+            // A stale second delete of the same account and repeated entry deletion
+            // may not touch any additional row.
+            assertTrue(runCatching{store.change{Finance.deleteAccount(it,unused)}}.isFailure)
+            store.change{Finance.deleteEntry(it,first.id)}
+            db.close()
+            db=Room.databaseBuilder(context,TrachuDatabase::class.java,name).build()
+            store=LedgerStore(db)
+            assertEquals(expected,store.current())
+            assertEquals(expectedRows,db.ledgerDao().read())
+        } finally {db.close();context.deleteDatabase(name)}
+    }
+
+    @Test fun deletingLastEntryAndLastAccountKeepsIndependentFinancialHistory()=runBlocking {
+        val db=Room.inMemoryDatabaseBuilder(context,TrachuDatabase::class.java).build()
+        try {
+            val store=LedgerStore(db)
+            val day=today()
+            val account=Account("last","Последний счёт",openingMinor=10000)
+            val base=Ledger.initial().copy(accounts=listOf(account),
+                categories=Ledger.initial().categories+Category("custom","Моя категория"),
+                goals=listOf(Goal(name="Отпуск",targetMinor=20000,savedMinor=5000)),
+                budgets=listOf(Budget(name="Лимит",monthlyMinor=1000,startMonth=Period.month(day).from)),
+                rates=listOf(FxRate("USD",day,"100")))
+            val entry=Finance.makeEntry(base,Kind.EXPENSE,account.id,100,day,listOf("custom" to 100L))
+            store.restore(base.copy(entries=listOf(entry)))
+            val before=store.current()
+            store.change{Finance.deleteEntry(it,entry.id)}
+            assertEquals(before.copy(entries=emptyList()),store.current())
+            store.change{Finance.deleteAccount(it,account)}
+            val expected=before.copy(entries=emptyList(),accounts=emptyList())
+            assertEquals(expected,store.current())
+            assertEquals(expected,store.processDue(day+1))
+        } finally { db.close() }
     }
     @Test fun transactionRollbackAndRestore()=runBlocking {
         val db=Room.inMemoryDatabaseBuilder(context,TrachuDatabase::class.java).build()
