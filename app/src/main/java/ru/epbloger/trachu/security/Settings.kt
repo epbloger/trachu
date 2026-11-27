@@ -15,7 +15,7 @@ data class Settings(
     val biometric: Boolean = false,
     val lockSeconds: Int = 30,
     val lastAccount: String = "",
-    val showWidgetBalance: Boolean = false,
+    val showWidgetBalance: Boolean = true,
     val failedAttempts: Int = 0,
     val lockedUntil: Long = 0L, val monthStart: Int = 1, val automaticRates:Boolean=true,
     val adsConsent:Boolean?=null,
@@ -43,7 +43,7 @@ class Preferences(context: Context) {
     }
     val settings: Flow<Settings> = store.data.map { p ->
         Settings(p[K.theme] ?: "system",p[K.pin] ?: "",p[K.biometric] ?: false,
-            p[K.timeout] ?: 30,p[K.account] ?: "",p[K.widget] ?: false,
+            p[K.timeout] ?: 30,p[K.account] ?: "",p[K.widget] ?: true,
             p[K.failures] ?: 0,p[K.until] ?: 0,p[K.monthStart] ?: 1,p[K.automaticRates] ?: true,p[K.adsConsent],
             // Older installations with preferences already configured must not be sent through setup.
             p[K.onboardingCompleted] ?: p.asMap().isNotEmpty(),p[K.notificationsEnabled])
@@ -51,6 +51,10 @@ class Preferences(context: Context) {
     suspend fun current() = settings.first()
     suspend fun theme(value: String) { require(value in listOf("system","light","dark")); store.edit { it[K.theme]=value } }
     suspend fun lastAccount(value: String) { store.edit { it[K.account]=value } }
+    internal suspend fun clearFinancialReferences() { store.edit { p ->
+        p.remove(K.account)
+        p.asMap().keys.filter { it.name.startsWith("notice_") }.forEach { p.remove(it) }
+    } }
     suspend fun widget(value: Boolean) { store.edit { it[K.widget]=value } }
     suspend fun automaticRates(value:Boolean) { store.edit { it[K.automaticRates]=value } }
     suspend fun adsConsent(value:Boolean) { store.edit { it[K.adsConsent]=value } }

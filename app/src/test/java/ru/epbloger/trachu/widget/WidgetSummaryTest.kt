@@ -5,6 +5,9 @@ import org.junit.Test
 import ru.epbloger.trachu.core.*
 
 class WidgetSummaryTest {
+    @Test fun widgetBalanceIsVisibleByDefault() {
+        assertTrue(ru.epbloger.trachu.security.Settings().showWidgetBalance)
+    }
     @Test fun hiddenWidgetDoesNotReadLedgerOrExposeAmounts() {
         val s=widgetSummary(false,{error("Must not read hidden ledger")})
         assertEquals("••••••",s.balance)

@@ -200,6 +200,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { FinanceWorker.refresh(getApplication()) }
         onDone()
     }
+    internal fun eraseAllFinancialData(expected:Ledger,confirmation:String,pin:String,onDone:()->Unit={}) = perform {
+        require(!pickerPending() && editor==null) { "Сначала завершите открытые действия" }
+        require(confirmation=="УДАЛИТЬ") { "Введите УДАЛИТЬ для подтверждения" }
+        val protection=preferences.current()
+        require(!protection.protected || _unlocked.value) { "Сначала разблокируйте приложение" }
+        if(protection.protected)verifyPin(pin,protection)
+        // The transaction rejects changes made since the warning was opened.
+        store.eraseAllFinancialData(expected,confirmation)
+        _quick.value=null
+        onboardingDraft=EntryDraft()
+        converterDraft=EntryDraft()
+        converterBase=""
+        converterRateJob?.cancel()
+        _converterRateStatus.value=null
+        rateAttempts.clear()
+        // Do not remove security, privacy, display preferences or external backups.
+        runCatching { preferences.clearFinancialReferences() }
+        runCatching { FinanceWorker.cancelReminders(getApplication()) }
+        runCatching { refreshWidgets(getApplication()) }
+        runCatching { FinanceWorker.refresh(getApplication()) }
+        onDone()
+        _message.value="Финансовые данные удалены"
+    }
     fun saveEntry(entry: Entry, receipt: Receipt? = null, onDone: ()->Unit={}) = change({ old ->
         var next=old
         if(receipt!=null) next=next.copy(receipts=next.receipts+receipt)

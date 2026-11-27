@@ -276,6 +276,18 @@ class LedgerStore(private val db: TrachuDatabase) {
         checkGrowth(stats)
         next
     }
+    // Full deletion has its own explicit, snapshot-checked transaction.
+    // Ordinary record edits continue to use the per-record sync path above.
+    internal suspend fun eraseAllFinancialData(expected: Ledger, confirmation: String): Ledger = db.withTransaction {
+        require(confirmation == "УДАЛИТЬ") { "Введите УДАЛИТЬ для подтверждения" }
+        val before = readSnapshot(dao.stats())
+        require(before == expected) { "Данные изменились. Откройте подтверждение снова." }
+        val next = Ledger.initial().validated()
+        dao.clear()
+        LedgerRecords.records(next).map { it.checkedSize() }.chunked(pageSize).forEach { dao.put(it) }
+        next
+    }
+
     suspend fun restore(ledger: Ledger): Ledger = db.withTransaction {
         val next = prune(ledger.validated())
         val stats = dao.stats()

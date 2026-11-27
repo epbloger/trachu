@@ -15,6 +15,59 @@ import ru.epbloger.trachu.core.*
 @RunWith(AndroidJUnit4::class)
 class LedgerStoreTest {
     private val context=ApplicationProvider.getApplicationContext<Context>()
+    @Test fun isolatedDeletionAndEncryptedBackupEraseRestoreRoundTrip()=runBlocking {
+        val db=Room.inMemoryDatabaseBuilder(context,TrachuDatabase::class.java).build()
+        try {
+            val store=LedgerStore(db)
+            val day=today()
+            val a=Account("a","Карта",openingMinor=10000)
+            val b=Account("b","Наличные",openingMinor=20000)
+            val unused=Account("unused","Неиспользуемый")
+            val base=Ledger.initial().copy(accounts=listOf(a,b,unused),
+                goals=listOf(Goal("goal","Отпуск",targetMinor=5000,savedMinor=1000)),
+                debts=listOf(Debt("debt","Кредитор",a.id,true,3000)),
+                budgets=listOf(Budget("budget","Бюджет","food",5000,day)),
+                rates=listOf(FxRate("USD",day,"90")))
+            val receipt=Receipt("check","image/png","AAAA")
+            val expense=Finance.makeEntry(base,Kind.EXPENSE,a.id,1000,day,listOf("food" to 1000L),receiptIds=listOf(receipt.id))
+            val income=Finance.makeEntry(base,Kind.INCOME,b.id,2000,day,listOf("salary" to 2000L))
+            val template=Finance.makeEntry(base,Kind.EXPENSE,b.id,100,day+1,listOf("food" to 100L),status=EntryStatus.PLANNED)
+            store.restore(base.copy(entries=listOf(expense,income),receipts=listOf(receipt),
+                schedules=listOf(Schedule("schedule",template,day+1,Frequency.MONTHLY))))
+            val original=store.current()
+            store.change { Finance.deleteEntry(it,income.id) }
+            val withoutIncome=store.current()
+            assertEquals(original.copy(entries=original.entries.filterNot{it.id==income.id}),withoutIncome)
+            store.change { l->l.copy(accounts=l.accounts.filterNot{it.id==unused.id}) }
+            val withoutAccount=store.current()
+            assertEquals(withoutIncome.copy(accounts=withoutIncome.accounts.filterNot{it.id==unused.id}),withoutAccount)
+            assertTrue(runCatching{store.change{l->l.copy(accounts=l.accounts.filterNot{it.id==a.id})}}.isFailure)
+            assertEquals(withoutAccount,store.current())
+            store.restore(original)
+            val before=store.current()
+            val password="roundtrip-test-password"
+            val output=java.io.ByteArrayOutputStream()
+            Backup.write(before,password.toCharArray(),output)
+            val bytes=output.toByteArray()
+            assertEquals(before,Backup.read(password.toCharArray(),bytes.inputStream()))
+            assertTrue(runCatching{store.eraseAllFinancialData(before,"")}.isFailure)
+            assertTrue(runCatching{store.eraseAllFinancialData(before.copy(goals=emptyList()),"УДАЛИТЬ")}.isFailure)
+            assertEquals(before,store.current())
+            store.eraseAllFinancialData(before,"УДАЛИТЬ")
+            val empty=store.current()
+            assertEquals(Ledger.initial().copy(categories=Ledger.initial().categories.sortedBy{it.id}),empty)
+            assertTrue(db.ledgerDao().read().all{it.kind=="meta"||it.kind=="category"})
+            store.processDue(day+2)
+            assertEquals(empty,store.current())
+            assertTrue(runCatching{store.restore(Backup.read("wrong-password".toCharArray(),bytes.inputStream()))}.isFailure)
+            assertEquals(empty,store.current())
+            store.restore(Backup.read(password.toCharArray(),bytes.inputStream()))
+            assertEquals(before,store.current())
+            assertEquals(9000L,Finance.balance(store.current(),a.id))
+            assertEquals(22000L,Finance.balance(store.current(),b.id))
+        }finally{db.close()}
+    }
+
     @Test fun sameMinuteNewestFirstSurvivesDatabaseReopenAndEdits()=runBlocking {
         val name="entry-order-${newId()}.db"
         val account=Account("a","Карта",openingMinor=10000)

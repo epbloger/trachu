@@ -400,7 +400,7 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                                 MorePage.CONVERTER->CurrencyConverter(ledger,vm,busy,::backFromMore,{more=MorePage.RATES})
                                 MorePage.RATES->Rates(ledger,settings,vm,busy,::backFromMore)
                                 MorePage.SETTINGS->SettingsPage(ledger,settings,vm,busy,biometricAvailable,authenticate,::backFromMore)
-                                MorePage.DATA->DataPage(ledger,file,busy,::backFromMore){choose(Tab.REPORTS)}
+                                MorePage.DATA->DataPage(ledger,settings,vm,file,busy,::backFromMore){choose(Tab.REPORTS)}
                                 MorePage.ABOUT->AboutPage(::backFromMore,::startTutorial)
                                 MorePage.TUTORIAL->LaunchedEffect(Unit){startTutorial()}
                             }

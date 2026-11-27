@@ -246,13 +246,22 @@ private fun canChangeBaseCurrency(ledger:Ledger)=ledger.accounts.isEmpty()&&ledg
     }
 }
 data class FileRequest(val mode:String,val save:Boolean,val password:String="",val account:String="",val period:Period=Period.month())
-@Composable fun DataPage(ledger:Ledger,launch:(FileRequest)->Unit,busy:Boolean,back:()->Unit,openReports:()->Unit) {
+@Composable fun DataPage(ledger:Ledger,settings:Settings,vm:AppViewModel,launch:(FileRequest)->Unit,busy:Boolean,back:()->Unit,openReports:()->Unit) {
+    // Never persist the destructive confirmation or PIN in saved state.
+    var eraseSnapshot by remember{mutableStateOf<Ledger?>(null)}
+    var eraseStep by remember{mutableStateOf(0)}
+    var erasePhrase by remember{mutableStateOf("")}
+    var erasePin by remember{mutableStateOf("")}
+    var eraseError by remember{mutableStateOf("")}
+    fun cancelErase(){
+        eraseSnapshot=null;eraseStep=0;erasePhrase="";erasePin="";eraseError=""
+    }
     var backup by remember{mutableStateOf<String?>(null)}
     var importStatement by remember{mutableStateOf(false)}
     var account by remember{mutableStateOf(ledger.accounts.firstOrNull{!it.archived}?.id.orEmpty())}
     var importError by remember{mutableStateOf("")}
     var csvConfirm by remember{mutableStateOf(false)}
-    LazyColumn(contentPadding=PaddingValues(PageInset),verticalArrangement=Arrangement.spacedBy(SectionGap)){
+    LazyColumn(modifier=Modifier.testTag("data-list"),contentPadding=PaddingValues(PageInset),verticalArrangement=Arrangement.spacedBy(SectionGap)){
         item{SectionTitle("Данные и копии",action="Назад",onAction=back)}
         item{Panel{
             SectionTitle("Зашифрованная копия")
@@ -273,6 +282,40 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
             Button(onClick={launch(FileRequest("pdf",true,period=Period.month()))},enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("PDF за календарный месяц")}
             TextButton(onClick=openReports,enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Другой период или счёт")}
         }}
+        item{Panel{
+            SectionTitle("Удаление данных")
+            Text("Удалить всю финансовую историю с этого устройства. Сохранённые файлы копий останутся доступны.")
+            OutlinedButton(onClick={eraseSnapshot=ledger;eraseStep=1},enabled=!busy&&!vm.pickerPending(),
+                modifier=Modifier.fillMaxWidth().testTag("erase-all-data"),
+                colors=ButtonDefaults.outlinedButtonColors(contentColor=MaterialTheme.colorScheme.error)){
+                Text("Удалить все данные")
+            }
+        }}
+    }
+    if(eraseStep==1){
+        AlertDialog(onDismissRequest=::cancelErase,title={Text("Удалить все данные?")},text={
+            Column(verticalArrangement=Arrangement.spacedBy(12.dp)){
+                Warning("Будут удалены все счета и остатки, операции, пользовательские категории, бюджеты, цели, долги, расписания, курсы валют и чеки. Вернутся стандартные категории и валюта.")
+                Text("Отменить удаление нельзя. Сначала рекомендуется сохранить зашифрованную копию. PIN и настройки приложения сохранятся.")
+                Button(onClick={cancelErase();backup="save"},enabled=!busy,modifier=Modifier.fillMaxWidth().testTag("erase-create-backup")){Text("Создать резервную копию")}
+                Text("После успешного сохранения копии откройте удаление снова.")
+            }
+        },confirmButton={TextButton(onClick={eraseStep=2},enabled=!busy,modifier=Modifier.testTag("erase-without-backup")){
+            Text("Продолжить удаление",color=MaterialTheme.colorScheme.error)
+        }},dismissButton={TextButton(onClick=::cancelErase){Text("Отмена")}})
+    }
+    if(eraseStep==2){
+        Form("Подтвердите удаление",::cancelErase,busy,"Удалить навсегда",validationError=eraseError,onSave={
+            if(erasePhrase!="УДАЛИТЬ")eraseError="Введите УДАЛИТЬ для подтверждения"
+            else if(settings.protected&&erasePin.isBlank())eraseError="Введите текущий PIN"
+            else eraseSnapshot?.let{snapshot->
+                vm.eraseAllFinancialData(snapshot,erasePhrase,erasePin,::cancelErase)
+            }
+        }){
+            Warning("Все финансовые данные будут удалены. Продолжайте только если уверены в своём решении.")
+            Field("Введите УДАЛИТЬ",erasePhrase,{erasePhrase=it;eraseError=""})
+            if(settings.protected)PinField("Текущий PIN",erasePin,{erasePin=it;eraseError=""})
+        }
     }
     if(backup!=null){
         var password by remember{mutableStateOf("")}

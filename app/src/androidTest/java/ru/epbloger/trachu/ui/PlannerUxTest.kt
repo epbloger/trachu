@@ -77,6 +77,49 @@ class PlannerUxTest {
         awaitTag("planner-list")
     }
 
+    @Test fun fullDeletionRequiresExplicitConfirmationAndBackupCanRestoreIt(){
+        val previous=runBlocking{store.current()}
+        val seed=Ledger.initial().copy(accounts=listOf(Account("erase-ui-account","Проверка удаления",openingMinor=12345)))
+        runBlocking{store.restore(seed)}
+        try{
+            awaitLedger{it.accounts.singleOrNull()?.id=="erase-ui-account"}
+            val before=runBlocking{store.current()}
+            val bytes=java.io.ByteArrayOutputStream().also{ru.epbloger.trachu.data.Backup.write(before,"ui-backup-password".toCharArray(),it)}.toByteArray()
+            awaitTag("nav-more")
+            rule.onNodeWithTag("nav-more").performClick()
+            rule.onNodeWithTag("drawer-data").performScrollTo().performClick()
+            awaitTag("data-list")
+            fun openErase(){
+                rule.onNodeWithTag("data-list").performScrollToNode(hasTestTag("erase-all-data"))
+                rule.onNodeWithTag("erase-all-data").performClick()
+                awaitTag("erase-create-backup")
+            }
+            openErase()
+            rule.onNodeWithTag("erase-create-backup").performClick()
+            rule.onNodeWithText("Пароль резервной копии").assertExists()
+            rule.onNodeWithText("Отмена").performClick()
+            assertEquals(before,runBlocking{store.current()})
+            openErase()
+            rule.onNodeWithTag("erase-without-backup").performClick()
+            rule.onNodeWithTag("form_save").performClick()
+            rule.onNodeWithText("Введите УДАЛИТЬ для подтверждения").assertExists()
+            rule.onNodeWithText("Отмена").performClick()
+            assertEquals(before,runBlocking{store.current()})
+            openErase()
+            rule.onNodeWithTag("erase-without-backup").performClick()
+            enter("field:Введите УДАЛИТЬ","УДАЛИТЬ")
+            save()
+            awaitLedger{it.accounts.isEmpty()&&it.entries.isEmpty()}
+            assertEquals(Ledger.initial().copy(categories=Ledger.initial().categories.sortedBy{it.id}),runBlocking{store.current()})
+            rule.onNodeWithText("OK").performClick()
+            runBlocking{store.restore(ru.epbloger.trachu.data.Backup.read("ui-backup-password".toCharArray(),bytes.inputStream()))}
+            awaitLedger{it.accounts.singleOrNull()?.id=="erase-ui-account"}
+            assertEquals(before,runBlocking{store.current()})
+        }finally{
+            runBlocking{store.restore(previous)}
+        }
+    }
+
     @Test fun calendarDayArrowsCrossMonthBoundaryAndShowNewestFirst(){
         val currency=runBlocking{store.current().baseCurrency}
         val account=Account(name="Календарь ${newId()}",currency=currency,openingMinor=50000)
