@@ -78,6 +78,87 @@ class LedgerStoreTest {
             assertTrue(db.ledgerDao().read().none{it.kind in setOf("entry","receipt","receipt_chunk","schedule","account","goal","debt","budget","rate")})
         } finally { db.close();context.deleteDatabase(name) }
     }
+    @Test fun encryptedBackupRestoresEveryRecordAfterConfirmedResetAndReopen()=runBlocking {
+        val name="backup-reset-${newId()}.db"
+        val file=java.io.File.createTempFile("reset-test-", ".trachu", context.cacheDir)
+        val password="test-backup-2026"
+        var db=Room.databaseBuilder(context,TrachuDatabase::class.java,name).build()
+        try {
+            var store=LedgerStore(db)
+            val day=today()
+            val a=Account("a","Карта",openingMinor=100000)
+            val usd=Account("usd","Доллары","USD",openingMinor=10000)
+            val receipt=Receipt(id="receipt-test",mime="image/png",base64="AQID")
+            val debt=Debt(id="debt",person="Кредитор",accountId=a.id,owedByMe=true,principalMinor=20000)
+            val base=Ledger.initial().copy(accounts=listOf(a,usd),
+                categories=Ledger.initial().categories+Category("custom","Своя категория"),
+                receipts=listOf(receipt),debts=listOf(debt),
+                goals=listOf(Goal(id="goal",name="Отпуск",targetMinor=50000,savedMinor=10000,
+                    adjustments=listOf(GoalAdjustment(id="adjust",day=day,minor=5000,note="Пополнение")))),
+                budgets=listOf(Budget(id="budget",name="Лимит",categoryId="custom",monthlyMinor=10000,startMonth=Period.month(day).from)),
+                rates=listOf(FxRate("USD",day,"100")))
+            val expense=Finance.makeEntry(base,Kind.EXPENSE,a.id,5000,day,
+                listOf("custom" to 3000L,"food" to 2000L),note="Покупка",tags=listOf("тест"),
+                id="expense",timeMinutes=600,receiptIds=listOf(receipt.id)).copy(recordedAtMillis=100L)
+            val income=Finance.makeEntry(base,Kind.INCOME,a.id,20000,day,listOf("salary" to 20000L),
+                id="income",timeMinutes=600).copy(recordedAtMillis=101L)
+            val transfer=Finance.makeEntry(base,Kind.TRANSFER,a.id,10000,day,targetId=usd.id,targetMinor=100,id="transfer")
+            val payment=Finance.makeEntry(base,Kind.DEBT_OUT,a.id,2500,day,debtId=debt.id,principalMinor=2000,id="payment")
+            val planned=Finance.makeEntry(base,Kind.EXPENSE,a.id,300,day+2,listOf("food" to 300L),
+                status=EntryStatus.PLANNED,id="planned",autoPostPlanned=true)
+            val ledger=base.copy(entries=listOf(expense,income,transfer,payment,planned))
+            val refund=Finance.refund(ledger,expense.id,1000,day,id="refund")
+            val schedule=Schedule("schedule",expense.copy(id="template",receiptIds=emptyList(),recordedAtMillis=0L),
+                day+3,Frequency.MONTHLY,autoPost=true)
+            store.restore(ledger.copy(entries=ledger.entries+refund,schedules=listOf(schedule)))
+            val original=store.current()
+            val originalRows=db.ledgerDao().read()
+            val balances=original.accounts.associate{it.id to Finance.balance(original,it.id)}
+            val totals=Finance.totals(original,Period.month(day))
+            val order=original.entries.sortedWith(EntryOrder.newestFirst).map{it.id}
+            // Same encrypted staging implementation as the app's file export.
+            Backup.writeStaged(original,password.toCharArray(),context.cacheDir){file.outputStream()}
+            val bytes=file.readBytes()
+            assertTrue(bytes.isNotEmpty())
+            assertEquals(original,Backup.read(password.toCharArray(),bytes.inputStream()))
+            // Authentication failure must leave an existing, nonempty ledger intact.
+            val damaged=bytes.copyOf().apply{this[lastIndex]=(this[lastIndex].toInt() xor 1).toByte()}
+            for((data,secret) in listOf(bytes to "wrong-password",damaged to password,bytes.copyOf(bytes.size/2) to password)){
+                assertTrue(runCatching{store.restore(Backup.read(secret.toCharArray(),data.inputStream()))}.isFailure)
+                assertEquals(originalRows,db.ledgerDao().read())
+            }
+            store.clearFinancialData("ПОДТВЕРЖДАЮ")
+            db.close()
+            db=Room.databaseBuilder(context,TrachuDatabase::class.java,name).build()
+            store=LedgerStore(db)
+            val empty=store.current()
+            assertTrue(empty.accounts.isEmpty()&&empty.entries.isEmpty()&&empty.receipts.isEmpty()&&empty.schedules.isEmpty())
+            assertTrue(empty.goals.isEmpty()&&empty.debts.isEmpty()&&empty.budgets.isEmpty()&&empty.rates.isEmpty())
+            val emptyRows=db.ledgerDao().read()
+            assertArrayEquals(bytes,file.readBytes())
+            for((data,secret) in listOf(bytes to "wrong-password",damaged to password,bytes.copyOf(bytes.size/2) to password)){
+                assertTrue(runCatching{store.restore(Backup.read(secret.toCharArray(),data.inputStream()))}.isFailure)
+                assertEquals(emptyRows,db.ledgerDao().read())
+            }
+            file.inputStream().use{store.restore(Backup.read(password.toCharArray(),it))}
+            assertEquals(original,store.current())
+            assertEquals(originalRows,db.ledgerDao().read())
+            // Repeated restore replaces the snapshot without creating duplicates.
+            file.inputStream().use{store.restore(Backup.read(password.toCharArray(),it))}
+            db.close()
+            db=Room.databaseBuilder(context,TrachuDatabase::class.java,name).build()
+            val restored=LedgerStore(db).current()
+            assertEquals(original,restored)
+            assertEquals(originalRows,db.ledgerDao().read())
+            assertEquals(balances,restored.accounts.associate{it.id to Finance.balance(restored,it.id)})
+            assertEquals(totals,Finance.totals(restored,Period.month(day)))
+            assertEquals(order,restored.entries.sortedWith(EntryOrder.newestFirst).map{it.id})
+            assertEquals(15000L,Finance.goalSaved(restored.goals.single()))
+            assertEquals(18000L,Finance.debtRemaining(restored,restored.debts.single()))
+            assertEquals(receipt,restored.receipts.single())
+        } finally {db.close();context.deleteDatabase(name);file.delete()}
+    }
+
     @Test fun individualDeletesPreserveEveryUnrelatedDatabaseRow()=runBlocking {
         val name="delete-isolation-${newId()}.db"
         var db=Room.databaseBuilder(context,TrachuDatabase::class.java,name).build()
