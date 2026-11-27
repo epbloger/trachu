@@ -81,13 +81,77 @@ def tap(node):
     adb('shell', 'input', 'tap', str((x1+x2)//2), str((y1+y2)//2))
 
 
-def permission_state():
-    # Inspect the installed app's actual runtime permission, not the app switch.
-    dump = adb('shell', 'dumpsys', 'package', PACKAGE)
-    match = re.search(r'^\s*' + re.escape(PERMISSION)
-                      + r':\s*granted=(true|false),\s*flags=\[([^\]]*)\]', dump, re.M)
-    require(match is not None, 'Runtime notification permission not found')
+def indented_section(lines, header_index):
+    """Return only children of a dumpsys section (not the next sibling)."""
+    indent = len(lines[header_index]) - len(lines[header_index].lstrip())
+    result = []
+    for line in lines[header_index+1:]:
+        if not line.strip():
+            continue
+        if len(line) - len(line.lstrip()) <= indent:
+            break
+        result.append(line)
+    return result
+
+
+def parse_permission_state(dump):
+    # AOSP Android 13 Permissions.md: a requested runtime permission that
+    # has no runtime record is in its initial, ungranted state.
+    # Validate the package, manifest request and installed user first.
+    lines = dump.splitlines()
+    packages = [i for i, line in enumerate(lines)
+                if re.fullmatch(r'\s*Package \[' + re.escape(PACKAGE) + r'\] \([^)]*\):\s*', line)]
+    require(len(packages) == 1, 'Expected exactly one installed package record')
+    package = indented_section(lines, packages[0])
+    requested = [i for i, line in enumerate(package) if line.strip() == 'requested permissions:']
+    require(len(requested) == 1, 'Requested permissions section not found')
+    require(any(re.fullmatch(re.escape(PERMISSION) + r'(?:\s+\[[^\]]*\])?', line.strip())
+                for line in indented_section(package, requested[0])),
+            'APK does not request notification permission')
+    users = [i for i, line in enumerate(package) if re.match(r'\s*User 0:', line)]
+    require(len(users) == 1 and re.search(r'\binstalled=true\b', package[users[0]]),
+            'App not installed for emulator user 0')
+    user = indented_section(package, users[0])
+    runtime = [i for i, line in enumerate(user) if line.strip() == 'runtime permissions:']
+    require(len(runtime) <= 1, 'Ambiguous runtime permissions section')
+    rows = [line.strip() for line in user if line.strip().startswith(PERMISSION + ':')]
+    if not rows:
+        return False, False
+    require(len(rows) == 1 and len(runtime) == 1 and
+            rows[0] in [line.strip() for line in indented_section(user, runtime[0])],
+            'Notification permission outside expected runtime section')
+    match = re.fullmatch(re.escape(PERMISSION) + r':\s*granted=(true|false),\s*flags=\[([^\]]*)\]', rows[0])
+    require(match is not None, 'Unrecognized runtime notification permission format')
     return match[1] == 'true', 'USER_SET' in re.findall(r'[A-Z_]+', match[2])
+
+
+def permission_state():
+    # Missing runtime record may only satisfy the initial (False, False)
+    # check. Both real UI decisions and cold restart require USER_SET.
+    return parse_permission_state(adb('shell', 'dumpsys', 'package', PACKAGE))
+
+
+def test_permission_parser():
+    prefix = ('Packages:\n  Package [' + PACKAGE + '] (123abc):\n'
+              '    requested permissions:\n      ' + PERMISSION + '\n'
+              '    User 0: installed=true hidden=false\n')
+    section = '      runtime permissions:\n'
+    row = '        ' + PERMISSION + ': granted='
+    require(parse_permission_state(prefix) == (False, False), 'Initial absent section')
+    require(parse_permission_state(prefix + section) == (False, False), 'Initial absent row')
+    require(parse_permission_state(prefix + section + row + 'false, flags=[ ]') == (False, False), 'Initial explicit row')
+    require(parse_permission_state(prefix + section + row + 'true, flags=[ USER_SET|USER_SENSITIVE_WHEN_GRANTED ]') == (True, True), 'Granted row')
+    require(parse_permission_state(prefix + section + row + 'false, flags=[ USER_SET ]') == (False, True), 'Denied row')
+    require(parse_permission_state(prefix + section + '    User 10: installed=true\n' + section + row + 'true, flags=[ USER_SET ]') == (False, False), 'Other user must not satisfy check')
+    for malformed in ('', prefix.replace(PERMISSION, 'android.permission.INTERNET'),
+                      prefix.replace('installed=true', 'installed=false'),
+                      prefix + section + row + 'unknown',
+                      prefix + section + row + 'true, flags=[ USER_SET ]\n' + row + 'false, flags=[ ]'):
+        try:
+            parse_permission_state(malformed)
+        except AssertionError:
+            continue
+        raise AssertionError('Invalid permission dump was accepted')
 
 
 def varint(data, offset):
@@ -218,6 +282,10 @@ def scenario(apk, allow):
 
 
 def main():
+    test_permission_parser()
+    if sys.argv[1:] == ['--self-test']:
+        print('PASS: notification permission parser fixtures')
+        return
     require(len(sys.argv) == 3 and sys.argv[2] in ('33', '36'), 'Usage: notification-smoke.py APK 33|36')
     require(os.environ.get('GITHUB_ACTIONS') == 'true', 'Destructive notification smoke is restricted to GitHub Actions CI')
     apk, api = pathlib.Path(sys.argv[1]), sys.argv[2]
