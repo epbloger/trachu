@@ -276,6 +276,15 @@ class LedgerStore(private val db: TrachuDatabase) {
         checkGrowth(stats)
         next
     }
+    // Keep the user's reporting currency but remove every financial record,
+    // custom category, attachment and schedule in one database transaction.
+    suspend fun clearFinancialData(): Ledger = db.withTransaction {
+        val before=readSnapshot(dao.stats())
+        val next=Ledger.initial().copy(baseCurrency=before.baseCurrency).validated()
+        dao.clear()
+        LedgerRecords.records(next).map{it.checkedSize()}.chunked(pageSize).forEach { dao.put(it) }
+        next
+    }
     suspend fun restore(ledger: Ledger): Ledger = db.withTransaction {
         val next = prune(ledger.validated())
         val stats = dao.stats()

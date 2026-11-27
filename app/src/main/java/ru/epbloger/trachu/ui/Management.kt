@@ -135,9 +135,11 @@ private fun canChangeBaseCurrency(ledger:Ledger)=ledger.accounts.isEmpty()&&ledg
     OutlinedTextField(value,{change(it.filter(Char::isDigit).take(12))},Modifier.fillMaxWidth(),label={Text(label)},singleLine=true,
         keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.NumberPassword),visualTransformation=PasswordVisualTransformation())
 }
-@Composable fun SettingsPage(ledger:Ledger,settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,authenticate:((()->Unit)->Unit),back:()->Unit){
+@Composable fun SettingsPage(ledger:Ledger,settings:Settings,vm:AppViewModel,busy:Boolean,biometricAvailable:Boolean,authenticate:((()->Unit)->Unit),back:()->Unit,launch:(FileRequest)->Unit){
     var pinDialog by remember{mutableStateOf(false)}
     var removeDialog by remember{mutableStateOf(false)}
+    var resetDialog by remember{mutableStateOf(false)}
+    var resetBackup by remember{mutableStateOf(false)}
     var base by remember(ledger.baseCurrency){mutableStateOf(ledger.baseCurrency)}
     val context=LocalContext.current
     val lifecycle=LocalLifecycleOwner.current.lifecycle
@@ -214,7 +216,24 @@ private fun canChangeBaseCurrency(ledger:Ledger)=ledger.accounts.isEmpty()&&ledg
             SectionTitle("Реклама и конфиденциальность")
             AdConsentPanel(settings.adsConsent){value->vm.perform{vm.preferences.adsConsent(value)}}
         }}
+        item{Panel{
+            SectionTitle("Удаление данных")
+            Text("Удалить всю финансовую историю с устройства. Настройки приложения и PIN сохранятся.",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick={resetDialog=true},enabled=!busy,
+                modifier=Modifier.fillMaxWidth().testTag("reset-financial-data"),
+                colors=ButtonDefaults.outlinedButtonColors(contentColor=MaterialTheme.colorScheme.error)){
+                Text("Удалить все данные")
+            }
+        }}
     }
+    if(resetDialog)FinancialResetDialog(settings.protected,busy,{resetDialog=false},onBackup={
+        resetDialog=false
+        resetBackup=true
+    }){confirmation,pin->
+        vm.deleteAllFinancialData(confirmation,pin){resetDialog=false;back()}
+    }
+    // Saving or cancelling a backup never advances deletion confirmation.
+    if(resetBackup)BackupPasswordForm(true,busy,{resetBackup=false},launch)
     if(pinDialog||removeDialog){
         var old by remember{mutableStateOf("")}
         var pin by remember{mutableStateOf("")}
@@ -274,22 +293,7 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
             TextButton(onClick=openReports,enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("Другой период или счёт")}
         }}
     }
-    if(backup!=null){
-        var password by remember{mutableStateOf("")}
-        var repeat by remember{mutableStateOf("")}
-        var error by remember{mutableStateOf("")}
-        val save=backup=="save"
-        Form(if(save)"Пароль резервной копии" else "Восстановление",{backup=null},busy,if(save)"Выбрать место" else "Выбрать файл",onSave={
-            if(password.length<8 || save&&password!=repeat)error="Пароль должен содержать минимум 8 символов"+(if(save)" и совпадать с подтверждением" else "")
-            else {launch(FileRequest("backup",save,password));backup=null}
-        }){
-            if(!save)Warning("Восстановление полностью заменит текущие финансовые данные после проверки пароля и целостности файла.")
-            OutlinedTextField(password,{password=it},Modifier.fillMaxWidth(),label={Text("Пароль")},visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),singleLine=true)
-            if(save)OutlinedTextField(repeat,{repeat=it},Modifier.fillMaxWidth(),label={Text("Повторите пароль")},visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),singleLine=true)
-            Text("Пароль нигде не хранится. Восстановить забытый пароль невозможно.")
-            if(error.isNotEmpty())Warning(error)
-        }
-    }
+    if(backup!=null)BackupPasswordForm(backup=="save",busy,{backup=null},launch)
     if(csvConfirm)Confirm("Импортировать таблицу?","Совпадающие записи не дублируются. При несовместимых идентификаторах импорт будет отклонён.",{csvConfirm=false},{csvConfirm=false;launch(FileRequest("csv",false))},busy)
     if(importStatement)Form("Импорт выписки",{importStatement=false;importError=""},busy,"Выбрать файл",validationError=importError,onSave={
         if(ledger.accounts.any{it.id==account&&!it.archived}){launch(FileRequest("statement",false,account=account));importStatement=false;importError=""}
@@ -297,6 +301,21 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
     }){
         AccountChoice("Счёт",account,ledger.accounts.filter{!it.archived}){account=it;importError=""}
         Text("Суммы должны быть в валюте этого счёта. Импорт повторно не добавит те же строки. Для операций в иностранной валюте заранее сохраните исторические курсы.")
+    }
+}
+@Composable private fun BackupPasswordForm(save:Boolean,busy:Boolean,onClose:()->Unit,launch:(FileRequest)->Unit) {
+    var password by remember{mutableStateOf("")}
+    var repeat by remember{mutableStateOf("")}
+    var error by remember{mutableStateOf("")}
+    Form(if(save)"Пароль резервной копии" else "Восстановление",onClose,busy,if(save)"Выбрать место" else "Выбрать файл",onSave={
+        if(password.length<8 || save&&password!=repeat)error="Пароль должен содержать минимум 8 символов"+(if(save)" и совпадать с подтверждением" else "")
+        else {launch(FileRequest("backup",save,password));onClose()}
+    }){
+        if(!save)Warning("Восстановление полностью заменит текущие финансовые данные после проверки пароля и целостности файла.")
+        OutlinedTextField(password,{password=it},Modifier.fillMaxWidth(),label={Text("Пароль")},visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),singleLine=true)
+        if(save)OutlinedTextField(repeat,{repeat=it},Modifier.fillMaxWidth(),label={Text("Повторите пароль")},visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),singleLine=true)
+        Text("Пароль нигде не хранится. Восстановить забытый пароль невозможно.")
+        if(error.isNotEmpty())Warning(error)
     }
 }
 @Composable fun AboutPage(back:()->Unit,startTutorial:()->Unit) {

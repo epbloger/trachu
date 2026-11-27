@@ -11,6 +11,8 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.work.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.epbloger.trachu.MainActivity
 import ru.epbloger.trachu.R
 import ru.epbloger.trachu.core.*
@@ -21,7 +23,9 @@ import java.time.YearMonth
 import java.util.concurrent.TimeUnit
 
 class FinanceWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context,params) {
-    override suspend fun doWork(): Result = try {
+    override suspend fun doWork(): Result = resetMutex.withLock { runFinanceWork() }
+
+    private suspend fun runFinanceWork(): Result = try {
         val store=LedgerStore.get(applicationContext)
         val ledger=store.processDue()
         val prefs=Preferences(applicationContext)
@@ -57,6 +61,8 @@ class FinanceWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     catch (_: Exception) { if(runAttemptCount<3) Result.retry() else Result.failure() }
 
     companion object {
+        // Serialize reset with due-payment processing and notification delivery.
+        internal val resetMutex=Mutex()
         fun cancelReminders(context: Context) {
             val manager=context.getSystemService(NotificationManager::class.java)
             manager.activeNotifications.filter{it.notification.channelId=="finance"}.forEach{manager.cancel(it.tag,it.id)}

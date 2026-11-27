@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableStateOf
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -198,6 +200,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         store.change(transform)
         runCatching { FinanceWorker.refresh(getApplication()) }
+        onDone()
+    }
+    internal fun deleteAllFinancialData(confirmation:String,pin:String,onDone:()->Unit={}) = perform {
+        require(isFinancialResetConfirmed(confirmation)) { "Введите слово ПОДТВЕРЖДАЮ" }
+        require(!pickerPending() && editor==null) { "Сначала завершите текущую операцию." }
+        val protection=preferences.current()
+        require(!protection.protected || _unlocked.value) { "Сначала разблокируйте приложение" }
+        if(protection.protected)verifyPin(pin,protection)
+        // No pending converter request may write an old result after the reset.
+        converterRateJob?.cancelAndJoin()
+        converterRateJob=null
+        _converterRateStatus.value=null
+        rateAttempts.clear()
+        FinanceWorker.resetMutex.withLock {
+            val next=store.clearFinancialData()
+            _ledger.value=next
+            editor=null
+            onboardingDraft=EntryDraft()
+            converterDraft=EntryDraft()
+            converterBase=""
+            fileRequest=null
+            receiptRequest=null
+            _pickedResult.value=null
+            _quick.value=null
+            // The database transaction is already committed. Report any cleanup
+            // failure separately instead of suggesting that deletion was rolled back.
+            var cleanupFailed=false
+            try { preferences.clearFinancialHistorySettings() }
+            catch(e:kotlinx.coroutines.CancellationException){throw e}
+            catch(_:Exception){cleanupFailed=true}
+            runCatching { FinanceWorker.cancelReminders(getApplication()) }.onFailure{cleanupFailed=true}
+            try { refreshWidgets(getApplication()) }
+            catch(e:kotlinx.coroutines.CancellationException){throw e}
+            catch(_:Exception){cleanupFailed=true}
+            _message.value=if(cleanupFailed)"Финансовые данные удалены. Не удалось полностью обновить настройки, виджет или уведомления. Откройте приложение повторно." else "Все финансовые данные удалены."
+        }
         onDone()
     }
     fun saveEntry(entry: Entry, receipt: Receipt? = null, onDone: ()->Unit={}) = change({ old ->

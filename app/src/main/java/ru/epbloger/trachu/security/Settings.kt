@@ -63,6 +63,13 @@ class Preferences(context: Context) {
         it[K.onboardingCompleted]=true
         if(accountId!=null)it[K.account]=accountId
     } }
+    // Retain PIN, theme, reporting preferences and ad consent.
+    suspend fun clearFinancialHistorySettings() { store.edit { p ->
+        p.remove(K.account)
+        p[K.widget]=false
+        p[K.onboardingCompleted]=true
+        p.asMap().keys.filter{it.name.startsWith("notice_")}.forEach{p.remove(it)}
+    } }
     suspend fun monthStart(value: Int) { require(value in 1..31); store.edit { it[K.monthStart]=value } }
     suspend fun timeout(value: Int) { require(value in listOf(0,15,30,60,300)); store.edit { it[K.timeout]=value } }
     suspend fun biometric(value: Boolean) { store.edit { require(!value || !it[K.pin].isNullOrEmpty()); it[K.biometric]=value } }

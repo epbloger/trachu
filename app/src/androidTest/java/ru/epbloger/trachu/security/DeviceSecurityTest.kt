@@ -60,6 +60,15 @@ class DeviceSecurityTest {
             assertTrue(prefs.markBudgetNotice(id,"2026-11",2))
             assertFalse(prefs.markBudgetNotice(id,"2026-11",1))
             assertTrue(prefs.markBudgetNotice(id,"2026-12",1))
+            prefs.lastAccount("old-account")
+            prefs.widget(true)
+            prefs.clearFinancialHistorySettings()
+            assertEquals("",prefs.current().lastAccount)
+            assertFalse(prefs.current().showWidgetBalance)
+            assertEquals("test-credential",prefs.current().credential)
+            assertEquals(false,prefs.current().adsConsent)
+            assertTrue(prefs.markNotice(id,"today"))
+            assertTrue(prefs.markBudgetNotice(id,"2026-12",1))
         } finally { context.settingsStore.updateData{previous} }
     }
 }

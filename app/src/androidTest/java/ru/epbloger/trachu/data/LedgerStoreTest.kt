@@ -43,6 +43,34 @@ class LedgerStoreTest {
             assertEquals(reopened,store.current())
         } finally { db.close();context.deleteDatabase(name) }
     }
+    @Test fun financialResetClearsRecordsAndRemainsEmptyAfterReopen()=runBlocking {
+        val name="reset-${newId()}.db"
+        var db=Room.databaseBuilder(context,TrachuDatabase::class.java,name).build()
+        try {
+            val account=Account("a","Личные данные",openingMinor=10000)
+            val day=today()
+            val receipt=Receipt(mime="image/png",base64="AQID")
+            val base=Ledger.initial().copy(accounts=listOf(account),categories=Ledger.initial().categories+Category("custom","Своя категория"),receipts=listOf(receipt))
+            val entry=Finance.makeEntry(base,Kind.EXPENSE,"a",100,day,listOf("food" to 100L),receiptIds=listOf(receipt.id))
+            val schedule=Schedule("s",entry.copy(id="template",receiptIds=emptyList()),day+1,Frequency.DAILY)
+            val initial=base.copy(entries=listOf(entry),schedules=listOf(schedule),
+                goals=listOf(Goal(name="Цель",targetMinor=5000)),
+                debts=listOf(Debt(person="Долг",accountId="a",owedByMe=true,principalMinor=100)),
+                budgets=listOf(Budget(name="Бюджет",monthlyMinor=1000,startMonth=Period.month(day).from)),
+                rates=listOf(FxRate("USD",day,"100")))
+            val store=LedgerStore(db)
+            store.restore(initial)
+            assertEquals(1,store.current().receipts.size)
+            val empty=store.clearFinancialData()
+            assertEquals(Ledger.initial(),empty)
+            val expectedPersisted=Ledger.initial().let{it.copy(categories=it.categories.sortedBy{c->c.id})}
+            assertEquals(expectedPersisted,store.processDue(day+2))
+            db.close()
+            db=Room.databaseBuilder(context,TrachuDatabase::class.java,name).build()
+            assertEquals(expectedPersisted,LedgerStore(db).current())
+            assertTrue(db.ledgerDao().read().none{it.kind in setOf("entry","receipt","receipt_chunk","schedule","account","goal","debt","budget","rate")})
+        } finally { db.close();context.deleteDatabase(name) }
+    }
     @Test fun transactionRollbackAndRestore()=runBlocking {
         val db=Room.inMemoryDatabaseBuilder(context,TrachuDatabase::class.java).build()
         try {
