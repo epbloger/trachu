@@ -62,6 +62,44 @@ class AdvancedFinanceTest {
         assertEquals(Finance.balance(recorded,a.id,day),Finance.balance(edited,a.id,day))
     }
 
+    @Test fun archiveRequiresPrincipalAndKnownInterestToBeCleared() {
+        val debt=Debt("archive-debt","Кредитор","a",true,10000,"36.5",openedDay=day)
+        val initial=l.copy(debts=listOf(debt))
+        val opened=Finance.putEntry(initial,Finance.makeEntry(initial,Kind.LOAN_IN,"a",10000,day,debtId=debt.id,principalMinor=10000))
+        assertTrue(runCatching{Finance.requireAccountCanArchive(opened,"a",day+5)}.isFailure)
+        val paid=Finance.putEntry(opened,Finance.makeEntry(opened,Kind.DEBT_OUT,"a",10010,day+5,debtId=debt.id,principalMinor=10000))
+        assertEquals(0L,Finance.debtRemaining(paid,debt))
+        assertEquals(40L,Finance.unpaidInterestEstimate(paid,debt,day+10))
+        assertTrue(Finance.debtHasOutstandingAmount(paid,debt,day+10))
+        assertTrue(runCatching{Finance.requireAccountCanArchive(paid,"a",day+10)}.isFailure)
+        Finance.requireAccountCanArchive(paid,"usd",day+10)
+        val cleared=Finance.putEntry(paid,Finance.makeEntry(paid,Kind.DEBT_OUT,"a",40,day+10,debtId=debt.id,principalMinor=0))
+        assertFalse(Finance.debtHasOutstandingAmount(cleared,debt,day+10))
+        Finance.requireAccountCanArchive(cleared,"a",day+10)
+    }
+
+    @Test fun undatedDebtCanBeArchivedAfterPrincipalButStillAllowsManualInterest() {
+        val debt=Debt("undated","Кредитор","a",true,10000,"12")
+        val initial=l.copy(debts=listOf(debt))
+        val paid=Finance.putEntry(initial,Finance.makeEntry(initial,Kind.DEBT_OUT,"a",10000,day,debtId=debt.id,principalMinor=10000))
+        assertNull(Finance.unpaidInterestEstimate(paid,debt,day))
+        assertTrue(Finance.debtHasOutstandingAmount(paid,debt,day))
+        assertFalse(Finance.debtHasOutstandingAmount(paid,debt,day,includeUndatedInterest=false))
+        Finance.requireAccountCanArchive(paid,"a",day)
+    }
+
+    @Test fun interestOverflowCannotSilentlyCloseDebtOrAllowArchiving() {
+        val principal=Long.MAX_VALUE/4
+        val debt=Debt("huge","Кредитор","a",true,principal,"1000",openedDay=day)
+        val initial=l.copy(debts=listOf(debt))
+        val opened=Finance.putEntry(initial,Finance.makeEntry(initial,Kind.LOAN_IN,"a",principal,day,debtId=debt.id,principalMinor=principal))
+        val paid=Finance.putEntry(opened,Finance.makeEntry(opened,Kind.DEBT_OUT,"a",principal,day+365,debtId=debt.id,principalMinor=principal))
+        assertEquals(0L,Finance.debtRemaining(paid,debt))
+        assertTrue(runCatching{Finance.unpaidInterestEstimate(paid,debt,day+365)}.isFailure)
+        assertTrue(Finance.debtHasOutstandingAmount(paid,debt,day+365))
+        assertTrue(runCatching{Finance.requireAccountCanArchive(paid,"a",day+365)}.isFailure)
+    }
+
     @Test fun historicalRatesAndCrossCurrencyTransfer() {
         val expense=Finance.makeEntry(l,Kind.EXPENSE,"usd",1234,day,listOf("food" to 1234))
         val state=Finance.putEntry(l,expense)

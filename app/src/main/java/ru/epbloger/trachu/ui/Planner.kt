@@ -111,7 +111,8 @@ private fun PlannerTab.group()=when(this){
                     val a=ledger.accounts.first{it.id==d.accountId}
                     val left=Finance.debtRemaining(ledger,d)
                     val unpaidInterest=debtUnpaidInterestEstimate(ledger,d)
-                    val canPay=debtHasOutstandingAmount(ledger,d)
+                    val outstanding=Finance.debtHasOutstandingAmount(ledger,d)
+                    val canPay=outstanding&&!a.archived
                     Panel {
                         SectionTitle(d.person,if(d.owedByMe)"Я должен" else "Мне должны",action="Изменить"){editDebt(d)}
                         MoneyText(left,a.currency,large=true,color=if(d.owedByMe)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
@@ -124,11 +125,13 @@ private fun PlannerTab.group()=when(this){
                             val paid=runCatching{Finance.paidInterest(ledger,d)}.getOrNull()
                             if(accrued!=null)Text("Начислено по оценке: "+Money.format(accrued,a.currency),style=MaterialTheme.typography.bodySmall)
                             if(paid!=null)Text("Фактически учтённые проценты: "+Money.format(paid,a.currency),style=MaterialTheme.typography.bodySmall)
-                            if(unpaidInterest>0)Text("Осталось процентов по оценке: "+Money.format(unpaidInterest,a.currency),style=MaterialTheme.typography.bodySmall)
+                            if(unpaidInterest!=null&&unpaidInterest>0)Text("Осталось процентов по оценке: "+Money.format(unpaidInterest,a.currency),style=MaterialTheme.typography.bodySmall)
+                            if(d.openedDay!=null&&unpaidInterest==null)Warning("Не удалось рассчитать проценты. Фактический платёж можно записать вручную.")
                             if(d.openedDay==null)Text("Дата начала не указана — фактические проценты можно записать вручную.",style=MaterialTheme.typography.bodySmall)
                             Text("Простая оценка Actual/365, без банковского графика и капитализации.",style=MaterialTheme.typography.bodySmall)
                         }
-                        d.dueDay?.let{Text("Срок: "+dayLabel(it),color=if(it<today()&&canPay)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)}
+                        d.dueDay?.let{Text("Срок: "+dayLabel(it),color=if(it<today()&&outstanding)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)}
+                        if(outstanding&&a.archived)Warning("Для погашения восстановите счёт из архива.")
                         if(d.note.isNotBlank())Text(d.note)
                         Button(onClick={payDebt(d)},enabled=canPay,modifier=Modifier.fillMaxWidth().testTag("debt-pay:${d.id}")){
                             Text(when {
@@ -178,7 +181,7 @@ private fun PlannerTab.group()=when(this){
                                     cells.chunked(7).forEach{week->
                                         Row(horizontalArrangement=Arrangement.spacedBy(2.dp)){
                                             (week+List(7-week.size){null}).forEach{d->
-                                                val count=calendar.count{it.day==d}+ledger.debts.count{it.dueDay==d && debtHasOutstandingAmount(ledger,it)}+ledger.goals.count{it.dueDay==d}
+                                                val count=calendar.count{it.day==d}+ledger.debts.count{it.dueDay==d && Finance.debtHasOutstandingAmount(ledger,it)}+ledger.goals.count{it.dueDay==d}
                                                 if(d==null)Spacer(Modifier.weight(1f))
                                                 else Column(Modifier.weight(1f).background(if(d==selectedDay)MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,MaterialTheme.shapes.small).clickable{selectedDay=d}.padding(vertical=8.dp),horizontalAlignment=Alignment.CenterHorizontally){
                                                     Text(LocalDate.ofEpochDay(d).dayOfMonth.toString(),style=MaterialTheme.typography.bodyMedium)
@@ -194,7 +197,7 @@ private fun PlannerTab.group()=when(this){
                 }
                 item{Text(dayLabel(selectedDay),style=MaterialTheme.typography.titleLarge)}
                 val selected=calendar.filter{it.day==selectedDay}.sortedBy{it.timeMinutes}
-                val obligations=ledger.debts.filter{it.dueDay==selectedDay&&debtHasOutstandingAmount(ledger,it)}
+                val obligations=ledger.debts.filter{it.dueDay==selectedDay&&Finance.debtHasOutstandingAmount(ledger,it)}
                 val goals=ledger.goals.filter{it.dueDay==selectedDay}
                 if(selected.isEmpty() && obligations.isEmpty() && goals.isEmpty())item{Text("Нет событий в этот день.")}
                 items(selected,key={it.id}){e->Panel {
@@ -340,14 +343,17 @@ internal fun plannerRateOrNull(value:String,label:String):String? {
 }
 private fun plannerHasInterestRate(debt:Debt):Boolean =
     runCatching{BigDecimal(debt.annualPercent).signum()>0}.getOrDefault(false)
-private fun debtUnpaidInterestEstimate(ledger:Ledger,debt:Debt):Long = runCatching{
-    val accrued=Finance.accruedInterest(ledger,debt) ?: return@runCatching 0L
-    val paid=Finance.paidInterest(ledger,debt)
-    if(accrued>paid)Money.sub(accrued,paid) else 0L
-}.getOrDefault(0L)
-private fun debtHasOutstandingAmount(ledger:Ledger,debt:Debt):Boolean =
-    Finance.debtRemaining(ledger,debt)>0 ||
-        (plannerHasInterestRate(debt)&&(debt.openedDay==null||debtUnpaidInterestEstimate(ledger,debt)>0))
+private fun debtUnpaidInterestEstimate(ledger:Ledger,debt:Debt):Long? =
+    runCatching{Finance.unpaidInterestEstimate(ledger,debt)}.getOrNull()
+
+internal data class DebtPaymentPreview(val total:Long?,val remaining:Long?)
+internal fun debtPaymentPreview(principal:String,interest:String,showInterest:Boolean,currency:String,available:Long):DebtPaymentPreview {
+    val p=runCatching{Money.parse(principal,currency)}.getOrNull()
+    val remaining=p?.takeIf{it in 0..available}?.let{Money.sub(available,it)}
+    val i=if(showInterest&&interest.isNotBlank())runCatching{Money.parse(interest,currency)}.getOrNull() else 0L
+    val total=if(p!=null&&p>=0&&i!=null&&i>=0)runCatching{Money.add(p,i)}.getOrNull() else null
+    return DebtPaymentPreview(total,remaining)
+}
 
 @Composable fun GoalFundingEditor(goal:Goal,vm:AppViewModel,busy:Boolean,close:()->Unit,draft:EntryDraft,withdraw:Boolean){
     val currency by draft.state("fundCurrency"){goal.currency}
@@ -482,13 +488,8 @@ private fun debtHasOutstandingAmount(ledger:Ledger,debt:Debt):Boolean =
     var advanced by draft.state("advanced"){original!=null}
     var error by draft.state("error"){""}
     val currency by draft.state("paymentCurrency"){a.currency}
-    val total=runCatching{
-        val p=Money.parse(principal,currency)
-        val i=if(showInterest&&interest.isNotBlank())Money.parse(interest,currency) else 0L
-        require(p>=0){"Сумма погашения не может быть отрицательной"}
-        require(i>=0){"Проценты не могут быть отрицательными"}
-        Money.add(p,i)
-    }.getOrNull()
+    val preview=debtPaymentPreview(principal,interest,showInterest,currency,remaining)
+    val total=preview.total
     Form(if(original!=null)"Изменить платёж" else if(debt.owedByMe)"Погасить долг" else "Получить возврат",close,busy,
         saveLabel="Записать",onSave={
         runCatching{
@@ -533,7 +534,7 @@ private fun debtHasOutstandingAmount(ledger:Ledger,debt:Debt):Boolean =
             TextButton(onClick={showInterest=false;interest="0";error=""}){Text("Без процентов")}
         }else TextButton(onClick={showInterest=true}){Text("Добавить проценты")}
         if(total!=null)Text((if(debt.owedByMe)"Всего списать: " else "Всего получить: ")+Money.format(total,currency),style=MaterialTheme.typography.titleMedium)
-        val afterPayment=runCatching{Money.parse(principal,currency).takeIf{it in 0..remaining}?.let{Money.sub(remaining,it)}}.getOrNull()
+        val afterPayment=preview.remaining
         if(afterPayment!=null)Text("Останется: "+Money.format(afterPayment,currency))
         if(currency!=ledger.baseCurrency)Field("Курс ${ledger.baseCurrency} за 1 $currency",rate,{rate=it;error=""},true,supporting="Пустое поле использует сохранённый курс")
         TextButton(onClick={advanced=!advanced}){Text(if(advanced)"Свернуть детали" else "Дата и комментарий")}

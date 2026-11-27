@@ -6,6 +6,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlannerRateValidationTest {
+    @Test fun paymentPreviewHandlesBlankNegativeOverpreciseAndOverflowingAmounts() {
+        assertEquals(DebtPaymentPreview(1250L,750L),debtPaymentPreview("12.50","",true,"RUB",2000L))
+        assertEquals(DebtPaymentPreview(1500L,750L),debtPaymentPreview("12.50","2.50",true,"RUB",2000L))
+        assertEquals(DebtPaymentPreview(1250L,750L),debtPaymentPreview("12.50","invalid",false,"RUB",2000L))
+        for (bad in listOf("","-1","abc","0.001","92233720368547758.08")) {
+            assertEquals(DebtPaymentPreview(null,null),debtPaymentPreview(bad,"0",true,"RUB",2000L))
+        }
+        assertEquals(DebtPaymentPreview(null,750L),debtPaymentPreview("12.50","-1",true,"RUB",2000L))
+        assertEquals(DebtPaymentPreview(null,0L),debtPaymentPreview("92233720368547758.07","0.01",true,"RUB",Long.MAX_VALUE))
+        assertEquals(DebtPaymentPreview(2001L,null),debtPaymentPreview("20.01","0",true,"RUB",2000L))
+    }
+
     @Test fun blankRateUsesTheSavedQuote() {
         assertNull(plannerRateOrNull("  ","Курс погашения"))
     }

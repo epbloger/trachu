@@ -124,9 +124,7 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
                     l.schedules.none{it.template.accountId==original?.id || it.template.targetAccountId==original?.id}
                 ){"Валюта: нельзя менять валюту счёта с начальным остатком или финансовой историей"}
                 if(a.archived && original?.archived!=true) {
-                    require(l.schedules.none{it.enabled && (it.template.accountId==a.id || it.template.targetAccountId==a.id)}){"Сначала приостановите регулярные операции этого счёта"}
-                    require(l.entries.none{it.status==EntryStatus.PLANNED && (it.accountId==a.id || it.targetAccountId==a.id)}){"Сначала обработайте запланированные операции"}
-                    require(l.debts.none{it.accountId==a.id && Finance.debtRemaining(l,it)>0}){"Сначала погасите задолженность на этом счёте"}
+                    Finance.requireAccountCanArchive(l,a.id)
                 }
                 l.copy(accounts=l.accounts.filterNot{it.id==a.id}+a)
             },close)

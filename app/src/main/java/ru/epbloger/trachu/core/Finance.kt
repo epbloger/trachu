@@ -306,6 +306,36 @@ object Finance {
             it.debtId == debt.id && it.status == EntryStatus.POSTED && it.day <= through &&
                 it.kind in setOf(Kind.DEBT_IN, Kind.DEBT_OUT)
         }.map { Money.sub(it.minor, it.principalMinor) })
+    /** Null means the start date is unknown; arithmetic failures must not be treated as zero. */
+    fun unpaidInterestEstimate(ledger: Ledger, debt: Debt, through: Long = today()): Long? {
+        val accrued = accruedInterest(ledger, debt, through) ?: return null
+        val paid = paidInterest(ledger, debt, through)
+        return if (accrued > paid) Money.sub(accrued, paid) else 0L
+    }
+
+    /** For an undated debt actual interest can still be entered manually. A failed
+     * estimate for a dated loan must never silently mark it as fully repaid. */
+    fun debtHasOutstandingAmount(ledger: Ledger, debt: Debt, through: Long = today(),
+        includeUndatedInterest: Boolean = true): Boolean {
+        if (debtRemaining(ledger, debt) > 0) return true
+        if (BigDecimal(debt.annualPercent).signum() <= 0) return false
+        if (debt.openedDay == null) return includeUndatedInterest
+        return runCatching { requireNotNull(unpaidInterestEstimate(ledger, debt, through)) > 0 }
+            .getOrDefault(true)
+    }
+
+    fun requireAccountCanArchive(ledger: Ledger, accountId: String, through: Long = today()) {
+        require(ledger.schedules.none { it.enabled && (it.template.accountId == accountId || it.template.targetAccountId == accountId) }) {
+            "Сначала приостановите регулярные операции этого счёта"
+        }
+        require(ledger.entries.none { it.status == EntryStatus.PLANNED && (it.accountId == accountId || it.targetAccountId == accountId) }) {
+            "Сначала обработайте запланированные операции"
+        }
+        require(ledger.debts.none { it.accountId == accountId && debtHasOutstandingAmount(ledger, it, through, includeUndatedInterest = false) }) {
+            "Сначала погасите долг и оставшиеся проценты на этом счёте"
+        }
+    }
+
     fun nextDate(schedule: Schedule, day: Long): Long {
         val d = LocalDate.ofEpochDay(day)
         val next = when (schedule.frequency) {
