@@ -77,10 +77,20 @@ class LedgerStoreTest {
             val before=store.current()
             val generation=other.currentRateGeneration()
             val rates=listOf(FxRate("USD",today(),"90","CBR"))
+            var notices=0
+            other.withCurrentFinancialGeneration(generation){notices++}
+            assertEquals(1,notices)
             store.eraseAllFinancialData(before,"УДАЛИТЬ")
+            other.withCurrentFinancialGeneration(generation){notices++}
+            assertEquals(1,notices)
             assertFalse(other.mergeRatesIfCurrent(generation,"RUB",rates))
             assertTrue(store.current().rates.isEmpty())
+            val erasedGeneration=other.currentRateGeneration()
             store.restore(before)
+            other.withCurrentFinancialGeneration(erasedGeneration){notices++}
+            assertEquals(1,notices)
+            other.withCurrentFinancialGeneration(other.currentRateGeneration()){notices++}
+            assertEquals(2,notices)
             assertFalse(other.mergeRatesIfCurrent(generation,"RUB",rates,requireAccounts=true))
             assertTrue(store.current().rates.isEmpty())
             assertTrue(other.mergeRatesIfCurrent(other.currentRateGeneration(),"RUB",rates))

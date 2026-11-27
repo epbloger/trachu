@@ -80,6 +80,18 @@ class ConverterRefreshTest {
                 rule.onNodeWithText(Money.format(202,"EUR")).assertIsDisplayed()
                 assertEquals(1,calls.get())
                 assertTrue(runBlocking{store.current().entries.isEmpty()})
+                val backup=java.io.File.createTempFile("converter-restore-",".trachu",context.cacheDir)
+                try {
+                    val replacement=runBlocking{store.current()}.copy(rates=emptyList())
+                    backup.outputStream().use{ru.epbloger.trachu.data.Backup.write(replacement,"converter-test-password".toCharArray(),it)}
+                    scenario.onActivity{vm.import(android.net.Uri.fromFile(backup),"backup","converter-test-password")}
+                    rule.waitUntil(20_000){!vm.busy.value && vm.message.value=="Данные загружены"}
+                    scenario.onActivity{
+                        vm.clearMessage()
+                        vm.refreshConverterRates(today())
+                    }
+                    rule.waitUntil(20_000){calls.get()>=2 && vm.ledger.value?.let{Finance.rate(it,"USD",today())}=="100"}
+                }finally{backup.delete()}
             }
         } finally {
             releaseFetch.countDown()

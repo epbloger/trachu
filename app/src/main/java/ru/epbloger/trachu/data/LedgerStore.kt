@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import ru.epbloger.trachu.core.*
@@ -256,6 +258,15 @@ class LedgerStore(private val db: TrachuDatabase) {
 
     internal fun currentRateGeneration():Long = rateGeneration.get()
 
+    // Notification side effects must complete before a replacement, or be
+    // skipped when their source snapshot belongs to a previous generation.
+    // Never hold this mutex across a network request or widget rendering.
+    internal suspend fun withCurrentFinancialGeneration(generation:Long,action:suspend ()->Unit) {
+        replacementMutex.withLock {
+            if(rateGeneration.get()==generation)action()
+        }
+    }
+
     internal suspend fun mergeRatesIfCurrent(generation:Long,base:String,rates:List<FxRate>,requireAccounts:Boolean=false):Boolean {
         var applied=false
         change { current ->
@@ -292,25 +303,29 @@ class LedgerStore(private val db: TrachuDatabase) {
     }
     // Full deletion has its own explicit, snapshot-checked transaction.
     // Ordinary record edits continue to use the per-record sync path above.
-    internal suspend fun eraseAllFinancialData(expected: Ledger, confirmation: String): Ledger = db.withTransaction {
-        require(confirmation == "УДАЛИТЬ") { "Введите УДАЛИТЬ для подтверждения" }
-        val before = readSnapshot(dao.stats())
-        require(before == expected) { "Данные изменились. Откройте подтверждение снова." }
-        val next = Ledger.initial().validated()
-        rateGeneration.incrementAndGet()
-        dao.clear()
-        LedgerRecords.records(next).map { it.checkedSize() }.chunked(pageSize).forEach { dao.put(it) }
-        next
+    internal suspend fun eraseAllFinancialData(expected: Ledger, confirmation: String): Ledger = replacementMutex.withLock {
+        db.withTransaction {
+            require(confirmation == "УДАЛИТЬ") { "Введите УДАЛИТЬ для подтверждения" }
+            val before = readSnapshot(dao.stats())
+            require(before == expected) { "Данные изменились. Откройте подтверждение снова." }
+            val next = Ledger.initial().validated()
+            rateGeneration.incrementAndGet()
+            dao.clear()
+            LedgerRecords.records(next).map { it.checkedSize() }.chunked(pageSize).forEach { dao.put(it) }
+            next
+        }
     }
 
-    suspend fun restore(ledger: Ledger): Ledger = db.withTransaction {
-        val next = prune(ledger.validated())
-        val stats = dao.stats()
-        rateGeneration.incrementAndGet()
-        dao.clear()
-        LedgerRecords.records(next).map{it.checkedSize()}.chunked(pageSize).forEach { dao.put(it) }
-        checkGrowth(stats)
-        next
+    suspend fun restore(ledger: Ledger): Ledger = replacementMutex.withLock {
+        db.withTransaction {
+            val next = prune(ledger.validated())
+            val stats = dao.stats()
+            rateGeneration.incrementAndGet()
+            dao.clear()
+            LedgerRecords.records(next).map{it.checkedSize()}.chunked(pageSize).forEach { dao.put(it) }
+            checkGrowth(stats)
+            next
+        }
     }
     suspend fun processDue(through: Long = today()): Ledger {
         val now = java.time.LocalTime.now()
@@ -320,6 +335,7 @@ class LedgerStore(private val db: TrachuDatabase) {
         // No in-flight network request survives process death. Reject stale
         // generations inside the same Room transaction as the financial write.
         private val rateGeneration=java.util.concurrent.atomic.AtomicLong(0)
+        private val replacementMutex=Mutex()
         fun get(context: Context) = LedgerStore(TrachuDatabase.get(context))
     }
 }

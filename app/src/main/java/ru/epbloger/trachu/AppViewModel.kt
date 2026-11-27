@@ -84,7 +84,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _converterRateStatus=MutableStateFlow<ConverterRateStatus?>(null)
     internal val converterRateStatus=_converterRateStatus.asStateFlow()
     private var converterRateJob:Job?=null
-    private var erasingFinancialData=false
+    private var replacingFinancialData=false
+    private var converterRequestId=0L
     private val rateAttempts=mutableMapOf<Pair<String,Long>,Pair<Long,Boolean>>()
     // A replaceable transport makes the real UI refresh path deterministic in
     // instrumentation without relying on an external service or emulator network.
@@ -207,28 +208,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val protection=preferences.current()
         require(!protection.protected || _unlocked.value) { "Сначала разблокируйте приложение" }
         if(protection.protected)verifyPin(pin,protection)
-        erasingFinancialData=true
+        replacingFinancialData=true
         try {
-            converterRateJob?.cancel()
-            converterRateJob=null
-            _converterRateStatus.value=null
+            clearConverterRefresh()
             // The transaction rejects changes made since the warning was opened.
             store.eraseAllFinancialData(expected,confirmation)
-        } finally { erasingFinancialData=false }
-        _quick.value=null
-        onboardingDraft=EntryDraft()
-        converterDraft=EntryDraft()
-        converterBase=""
-        converterRateJob?.cancel()
-        _converterRateStatus.value=null
-        rateAttempts.clear()
-        // Do not remove security, privacy, display preferences or external backups.
-        runCatching { preferences.clearFinancialReferences() }
-        runCatching { FinanceWorker.cancelReminders(getApplication()) }
-        runCatching { refreshWidgets(getApplication()) }
-        runCatching { FinanceWorker.refresh(getApplication()) }
-        onDone()
-        _message.value="Финансовые данные удалены"
+            _quick.value=null
+            onboardingDraft=EntryDraft()
+            converterDraft=EntryDraft()
+            converterBase=""
+            // Do not remove security, privacy, display preferences or external backups.
+            runCatching { preferences.clearFinancialReferences() }
+            runCatching { FinanceWorker.cancelReminders(getApplication()) }
+            runCatching { refreshWidgets(getApplication()) }
+            runCatching { FinanceWorker.refresh(getApplication()) }
+            onDone()
+            _message.value="Финансовые данные удалены"
+        } finally { replacingFinancialData=false }
     }
     fun saveEntry(entry: Entry, receipt: Receipt? = null, onDone: ()->Unit={}) = change({ old ->
         var next=old
@@ -250,19 +246,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setAutomaticRates(enabled:Boolean) = perform {
         preferences.automaticRates(enabled)
         RatesWorker.configure(getApplication(),enabled,immediate=enabled)
-        if(!enabled){converterRateJob?.cancel();_converterRateStatus.value=null}
+        if(!enabled)clearConverterRefresh()
+    }
+    private fun clearConverterRefresh(){
+        converterRequestId++
+        converterRateJob?.cancel()
+        converterRateJob=null
+        _converterRateStatus.value=null
+        rateAttempts.clear()
     }
     /** Independent of financial-form busy state: cached/manual conversion and
      * editing keep working while an official quote is being downloaded. */
     internal fun refreshConverterRates(day:Long, force:Boolean=false) {
         val base=_ledger.value?.baseCurrency ?: return
         val settings=_settings.value ?: return
-        if(erasingFinancialData || day>today() || !settings.onboardingCompleted || settings.protected&&!_unlocked.value)return
+        if(replacingFinancialData || day>today() || !settings.onboardingCompleted || settings.protected&&!_unlocked.value)return
         if(!force&&!settings.automaticRates)return
         val key=base to day
         if(converterRateJob?.isActive==true && _converterRateStatus.value?.let{it.base==base&&it.day==day}==true)return
         val now=android.os.SystemClock.elapsedRealtime()
         if(!force&&rateAttempts[key]?.let{(time,success)->now-time < if(success) 30*60_000L else 60_000L}==true)return
+        val request=++converterRequestId
         converterRateJob?.cancel()
         _converterRateStatus.value=ConverterRateStatus(base,day,true)
         val generation=store.currentRateGeneration()
@@ -271,16 +275,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val rates=withContext(Dispatchers.IO){converterRateFetcher(base,day)}
                 require(rates.isNotEmpty()&&rates.all{it.day<=day}){"ЦБ РФ не вернул курсы на эту дату"}
                 if(!force&&!preferences.current().automaticRates)return@launch
-                if(!store.mergeRatesIfCurrent(generation,base,rates))return@launch
+                if(request!=converterRequestId || !store.mergeRatesIfCurrent(generation,base,rates))return@launch
+                if(request!=converterRequestId || generation!=store.currentRateGeneration())return@launch
                 rateAttempts[key]=android.os.SystemClock.elapsedRealtime() to true
                 _converterRateStatus.value=ConverterRateStatus(base,day,false)
             } catch(e:kotlinx.coroutines.CancellationException){throw e}
             catch(_:Exception){
+                if(request!=converterRequestId || generation!=store.currentRateGeneration())return@launch
                 rateAttempts[key]=android.os.SystemClock.elapsedRealtime() to false
                 _converterRateStatus.value=ConverterRateStatus(base,day,false,"Не удалось обновить курс. Доступны сохранённые и ручные курсы.")
             }
             finally {
-                if(_converterRateStatus.value==ConverterRateStatus(base,day,true))
+                if(request==converterRequestId && _converterRateStatus.value==ConverterRateStatus(base,day,true))
                     _converterRateStatus.value=null
             }
         }
@@ -318,29 +324,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val protection=preferences.current()
         require(!protection.protected || _unlocked.value) { "Сначала разблокируйте приложение" }
         val resolver=getApplication<Application>().contentResolver
-        withContext(Dispatchers.IO) {
-            requireNotNull(resolver.openInputStream(uri)).use { input ->
-                when(mode) {
-                    "backup" -> store.restore(Backup.read(password.toCharArray(),input))
-                    "statement" -> store.change { Csv.importStatement(input,it,accountId) }
-                    else -> {
-                        val imported=Csv.read(input)
-                        store.change { Csv.importFull(it,imported) }
+        val restoring=mode=="backup"
+        if(restoring)replacingFinancialData=true
+        try {
+            withContext(Dispatchers.IO) {
+                requireNotNull(resolver.openInputStream(uri)).use { input ->
+                    when(mode) {
+                        "backup" -> store.restore(Backup.read(password.toCharArray(),input))
+                        "statement" -> store.change { Csv.importStatement(input,it,accountId) }
+                        else -> {
+                            val imported=Csv.read(input)
+                            store.change { Csv.importFull(it,imported) }
+                        }
                     }
                 }
             }
-        }
-        runCatching { FinanceWorker.refresh(getApplication()) }
-        if(mode=="backup") {
-            try { preferences.completeOnboarding() }
-            catch(e:kotlinx.coroutines.CancellationException) { throw e }
-            catch(_:Exception) { /* The verified backup has already been restored. */ }
-            onboardingDraft=EntryDraft()
-            converterDraft=EntryDraft()
-            converterBase=""
-            if(_ledger.value==null)retryLoad()
-        }
-        _message.value="Данные загружены"
+            if(restoring) {
+                clearConverterRefresh()
+                try { preferences.completeOnboarding() }
+                catch(e:kotlinx.coroutines.CancellationException) { throw e }
+                catch(_:Exception) { /* The verified backup has already been restored. */ }
+                onboardingDraft=EntryDraft()
+                converterDraft=EntryDraft()
+                converterBase=""
+                // The old dataset's account and reminder references are obsolete.
+                runCatching { preferences.clearFinancialReferences() }
+                runCatching { FinanceWorker.cancelReminders(getApplication()) }
+                runCatching { refreshWidgets(getApplication()) }
+                if(_ledger.value==null)retryLoad()
+            }
+            runCatching { FinanceWorker.refresh(getApplication()) }
+            _message.value="Данные загружены"
+        } finally { if(restoring)replacingFinancialData=false }
     }
     fun readReceipt(uri: Uri, onDone: (Receipt)->Unit) = perform {
         val receipt=withContext(Dispatchers.IO) {
