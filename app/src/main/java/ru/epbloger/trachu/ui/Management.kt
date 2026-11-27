@@ -50,7 +50,7 @@ private fun currentNotificationAccess(context:Context):Boolean {
             Text("Общий баланс");MoneyText(v.minor,ledger.baseCurrency,large=true)
             if(v.missingCurrencies.isNotEmpty())Warning("Нет курсов: "+v.missingCurrencies.joinToString())
             ledger.accounts.filter{it.includeInTotal}.groupBy{it.currency}.forEach{(currency,group)->
-                Text("$currency: "+Money.format(Money.sum(group.map{Finance.balance(ledger,it.id)}),currency))
+                Text("$currency: "+Money.formatTotal(group.map{Finance.balance(ledger,it.id)},currency))
             }
             Button(onClick={edit(null)},modifier=Modifier.fillMaxWidth()){Text("Добавить счёт")}
             OutlinedButton(onClick=transfer,enabled=ledger.accounts.count{!it.archived}>=2,modifier=Modifier.fillMaxWidth()){Text("Перевести деньги")}

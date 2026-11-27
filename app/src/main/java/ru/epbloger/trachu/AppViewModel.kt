@@ -263,6 +263,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun export(uri: Uri, mode: String, password: String="", period: Period=Period.month(), accountId:String="") = perform {
         val current=store.current()
+        // Reject an obsolete report selection before opening (and possibly
+        // truncating) the document selected by the user.
+        require(mode!="pdf" || accountId.isEmpty() || current.accounts.any{it.id==accountId&&it.includeInStats}) {
+            "Счёт исключён из отчётов или удалён. Выберите счёт снова."
+        }
         withContext(Dispatchers.IO) {
             val resolver=getApplication<Application>().contentResolver
             if(mode=="backup") {

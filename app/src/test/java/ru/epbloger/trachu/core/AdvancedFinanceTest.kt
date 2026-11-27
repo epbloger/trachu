@@ -62,6 +62,88 @@ class AdvancedFinanceTest {
         assertEquals(Finance.balance(recorded,a.id,day),Finance.balance(edited,a.id,day))
     }
 
+    @Test fun signedTotalsAreOrderIndependentAndCurrencySubtotalsRemainExact() {
+        assertEquals(Long.MAX_VALUE,Money.sum(listOf(Long.MAX_VALUE,1L,-1L)))
+        assertEquals(Long.MIN_VALUE,Money.sum(listOf(Long.MIN_VALUE,-1L,1L)))
+        assertTrue(runCatching{Money.sum(listOf(Long.MAX_VALUE,1L))}.isFailure)
+        assertTrue(runCatching{Money.sum(listOf(Long.MIN_VALUE,-1L))}.isFailure)
+        val unquoted=Ledger.initial().copy(accounts=listOf(
+            Account("x","X","USD",openingMinor=Long.MAX_VALUE),
+            Account("y","Y","USD",openingMinor=Long.MAX_VALUE)
+        )).validated()
+        assertEquals(setOf("USD"),Finance.valuation(unquoted).missingCurrencies)
+        val amounts=unquoted.accounts.map{Finance.balance(unquoted,it.id)}
+        val formatted=Money.formatTotal(amounts,"USD")
+        assertEquals("18446744073709551614",formatted.filter{it.isDigit()})
+        assertEquals(Money.format(-123,"RUB"),Money.formatTotal(listOf(100L,-223L),"RUB"))
+    }
+
+    @Test fun entryAccountRechecksCurrencyAndArchiveInsideWrite() {
+        val changed=l.copy(accounts=l.accounts.map{if(it.id==a.id)it.copy(currency="EUR")else it})
+        assertTrue(runCatching{Finance.requireEntryAccount(changed,a)}.isFailure)
+        val archived=l.copy(accounts=l.accounts.map{if(it.id==usd.id)it.copy(archived=true)else it})
+        assertTrue(runCatching{Finance.requireEntryAccount(archived,usd,recipient=true)}.isFailure)
+        assertEquals("USD",Finance.requireEntryAccount(archived,usd,allowArchived=true).currency)
+        assertEquals(a,Finance.requireEntryAccount(l,a))
+    }
+
+    @Test fun manualPostingChecksDueDateArchiveAndStaleSnapshot() {
+        val entry=Finance.makeEntry(l,Kind.TRANSFER,"a",100,day,targetId="usd",targetMinor=1,
+            status=EntryStatus.PLANNED,autoPostPlanned=true)
+        val initial=Finance.putEntry(l,entry)
+        assertTrue(Finance.canPostPlanned(initial,entry))
+        assertTrue(runCatching{Finance.confirmPlanned(initial,entry,day-1)}.isFailure)
+        val archived=initial.copy(accounts=initial.accounts.map{if(it.id=="usd")it.copy(archived=true)else it})
+        assertFalse(Finance.canPostPlanned(archived,entry))
+        assertTrue(runCatching{Finance.confirmPlanned(archived,entry,day)}.isFailure)
+        // Editing the status directly must not bypass the same protection.
+        assertTrue(runCatching{Finance.putEntry(archived,entry.copy(status=EntryStatus.POSTED,autoPostPlanned=false))}.isFailure)
+        val stillPlanned=Finance.putEntry(archived,entry.copy(note="Уточнено"))
+        assertEquals(EntryStatus.PLANNED,stillPlanned.entries.single().status)
+        val posted=Finance.confirmPlanned(initial,entry,day)
+        assertEquals(EntryStatus.POSTED,posted.entries.single().status)
+        assertFalse(posted.entries.single().autoPostPlanned)
+        assertTrue(runCatching{Finance.confirmPlanned(posted,entry,day)}.isFailure)
+    }
+
+    @Test fun archiveRequiresPrincipalAndKnownInterestToBeCleared() {
+        val debt=Debt("archive-debt","Кредитор","a",true,10000,"36.5",openedDay=day)
+        val initial=l.copy(debts=listOf(debt))
+        val opened=Finance.putEntry(initial,Finance.makeEntry(initial,Kind.LOAN_IN,"a",10000,day,debtId=debt.id,principalMinor=10000))
+        assertTrue(runCatching{Finance.requireAccountCanArchive(opened,"a",day+5)}.isFailure)
+        val paid=Finance.putEntry(opened,Finance.makeEntry(opened,Kind.DEBT_OUT,"a",10010,day+5,debtId=debt.id,principalMinor=10000))
+        assertEquals(0L,Finance.debtRemaining(paid,debt))
+        assertEquals(40L,Finance.unpaidInterestEstimate(paid,debt,day+10))
+        assertTrue(Finance.debtHasOutstandingAmount(paid,debt,day+10))
+        assertTrue(runCatching{Finance.requireAccountCanArchive(paid,"a",day+10)}.isFailure)
+        Finance.requireAccountCanArchive(paid,"usd",day+10)
+        val cleared=Finance.putEntry(paid,Finance.makeEntry(paid,Kind.DEBT_OUT,"a",40,day+10,debtId=debt.id,principalMinor=0))
+        assertFalse(Finance.debtHasOutstandingAmount(cleared,debt,day+10))
+        Finance.requireAccountCanArchive(cleared,"a",day+10)
+    }
+
+    @Test fun undatedDebtCanBeArchivedAfterPrincipalButStillAllowsManualInterest() {
+        val debt=Debt("undated","Кредитор","a",true,10000,"12")
+        val initial=l.copy(debts=listOf(debt))
+        val paid=Finance.putEntry(initial,Finance.makeEntry(initial,Kind.DEBT_OUT,"a",10000,day,debtId=debt.id,principalMinor=10000))
+        assertNull(Finance.unpaidInterestEstimate(paid,debt,day))
+        assertTrue(Finance.debtHasOutstandingAmount(paid,debt,day))
+        assertFalse(Finance.debtHasOutstandingAmount(paid,debt,day,includeUndatedInterest=false))
+        Finance.requireAccountCanArchive(paid,"a",day)
+    }
+
+    @Test fun interestOverflowCannotSilentlyCloseDebtOrAllowArchiving() {
+        val principal=Long.MAX_VALUE/4
+        val debt=Debt("huge","Кредитор","a",true,principal,"1000",openedDay=day)
+        val initial=l.copy(debts=listOf(debt))
+        val opened=Finance.putEntry(initial,Finance.makeEntry(initial,Kind.LOAN_IN,"a",principal,day,debtId=debt.id,principalMinor=principal))
+        val paid=Finance.putEntry(opened,Finance.makeEntry(opened,Kind.DEBT_OUT,"a",principal,day+365,debtId=debt.id,principalMinor=principal))
+        assertEquals(0L,Finance.debtRemaining(paid,debt))
+        assertTrue(runCatching{Finance.unpaidInterestEstimate(paid,debt,day+365)}.isFailure)
+        assertTrue(Finance.debtHasOutstandingAmount(paid,debt,day+365))
+        assertTrue(runCatching{Finance.requireAccountCanArchive(paid,"a",day+365)}.isFailure)
+    }
+
     @Test fun historicalRatesAndCrossCurrencyTransfer() {
         val expense=Finance.makeEntry(l,Kind.EXPENSE,"usd",1234,day,listOf("food" to 1234))
         val state=Finance.putEntry(l,expense)
@@ -223,6 +305,19 @@ class AdvancedFinanceTest {
         assertEquals(213L,Finance.totals(edited,Period.month(day)).expense)
         assertEquals(2,edited.entries.size)
     }
+    @Test fun generatedForecastOverflowDoesNotInvalidateStoredLedger() {
+        val template=Finance.makeEntry(l,Kind.INCOME,"a",Long.MAX_VALUE/2,day,listOf("salary" to Long.MAX_VALUE/2),
+            status=EntryStatus.PLANNED)
+        val state=l.copy(schedules=listOf(Schedule(template=template,nextDay=day,frequency=Frequency.DAILY))).validated()
+        val upcoming=Finance.forecastEntries(state,day+2)
+        assertEquals(3,upcoming.size)
+        assertNull(Finance.forecastTotalsOrNull(state,upcoming,day,day+2))
+        assertEquals(Long.MAX_VALUE/2,Finance.forecastTotalsOrNull(state,upcoming.take(1),day,day+2)?.income)
+        assertTrue(state.entries.isEmpty())
+        assertEquals(day,state.schedules.single().nextDay)
+        assertEquals(state,state.validated())
+    }
+
     @Test fun forecastIncludesOverdueWithoutMutatingActualLedger() {
         val old=Finance.makeEntry(l,Kind.EXPENSE,"a",200,day-1,listOf("food" to 200L),status=EntryStatus.PLANNED)
         val next=Finance.makeEntry(l,Kind.INCOME,"a",500,day+2,listOf("salary" to 500L),status=EntryStatus.PLANNED)

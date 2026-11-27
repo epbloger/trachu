@@ -216,13 +216,17 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
         }
     }
 }
+internal fun availableReportAccount(ledger:Ledger,selected:String):String =
+    selected.takeIf { it.isNotEmpty() && ledger.accounts.any { account -> account.id==it && account.includeInStats } }.orEmpty()
+
 @Composable fun Reports(ledger: Ledger, monthStart:Int=1, exportPdf: (Period,String)->Unit) {
     var type by rememberSaveable { mutableStateOf(PeriodType.MONTH) }
     var period by rememberSaveable(monthStart,stateSaver=PeriodSaver) { mutableStateOf(Period.month(startDay=monthStart)) }
     var selectedAccount by rememberSaveable{mutableStateOf("")}
     var structureIncome by rememberSaveable{mutableStateOf(false)}
-    val reportLedger=remember(ledger,selectedAccount){
-        if(selectedAccount.isEmpty())ledger else ledger.copy(accounts=ledger.accounts.map{it.copy(includeInStats=it.id==selectedAccount && it.includeInStats)})
+    val reportAccount=availableReportAccount(ledger,selectedAccount)
+    val reportLedger=remember(ledger,reportAccount){
+        if(reportAccount.isEmpty())ledger else ledger.copy(accounts=ledger.accounts.map{it.copy(includeInStats=it.id==reportAccount && it.includeInStats)})
     }
     val totals=remember(reportLedger,period){Finance.totals(reportLedger,period)}
     val length=period.through-period.from+1
@@ -248,14 +252,19 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
     val forecast=remember(ledger,forecastStart) { runCatching {
         Finance.forecastEntries(ledger,forecastEnd)
     } }
+    val upcoming=forecast.getOrNull()
+    val forecastTotals=remember(ledger,upcoming,forecastStart,forecastEnd) {
+        upcoming?.let { Finance.forecastTotalsOrNull(ledger,it,forecastStart,forecastEnd) }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide=maxWidth>=840.dp && LocalDensity.current.fontScale<1.5f
         LazyColumn(modifier=Modifier.testTag("analytics-list"),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
-            item { SectionTitle("Аналитика",action="PDF"){exportPdf(period,selectedAccount)} }
+            item { SectionTitle("Аналитика",action=if(selectedAccount==reportAccount)"PDF" else null){exportPdf(period,reportAccount)} }
             item { Panel {
                 PeriodControls(type,{type=it},period,{period=it},monthStart)
-                AccountChoice("Счёт в отчёте",selectedAccount,ledger.accounts.filter{it.includeInStats},allLabel="Все счета отчётов"){selectedAccount=it}
-                if(selectedAccount.isNotEmpty())Text("Фильтр применяется к отчётам и PDF. Прогноз показывает все счета.",style=MaterialTheme.typography.bodySmall)
+                AccountChoice("Счёт в отчёте",reportAccount,ledger.accounts.filter{it.includeInStats},allLabel="Все счета отчётов"){selectedAccount=it}
+                if(selectedAccount!=reportAccount)Warning("Выбранный счёт недоступен. Показаны все счета отчётов. Для PDF выберите счёт или все счета.")
+                if(reportAccount.isNotEmpty())Text("Фильтр применяется к отчётам и PDF. Прогноз показывает все счета.",style=MaterialTheme.typography.bodySmall)
             } }
             item {
                 Panel {
@@ -316,11 +325,10 @@ fun periodFor(type: PeriodType, day: Long=today(), monthStart:Int=1): Period {
             item {
                 Panel {
                     SectionTitle("Прогноз на 30 дней","${dayLabel(forecastStart)} — ${dayLabel(forecastEnd)}")
-                    val upcoming=forecast.getOrNull()
                     if(upcoming==null)Warning("Не удалось рассчитать расписания. Проверьте регулярные операции и валютные курсы.")
+                    else if(forecastTotals==null)Warning("Не удалось рассчитать итог прогноза. Проверьте суммы плановых операций.")
                     else {
-                        val firstDay=minOf(forecastStart,upcoming.minOfOrNull{it.day} ?: forecastStart)
-                        val expected=Finance.totals(ledger.copy(entries=upcoming.map{it.copy(status=EntryStatus.POSTED)}),Period(firstDay,forecastEnd))
+                        val expected=forecastTotals
                         val overdue=upcoming.count{it.day<forecastStart}
                         if(overdue>0)Text("Включены просроченные операции: $overdue",color=MaterialTheme.colorScheme.tertiary)
                         Text("Плановые доходы: "+Money.format(expected.income,ledger.baseCurrency))

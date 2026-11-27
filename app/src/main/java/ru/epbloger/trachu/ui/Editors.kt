@@ -124,9 +124,7 @@ val allCurrencies = (commonCurrencies+currencies).distinct()
                     l.schedules.none{it.template.accountId==original?.id || it.template.targetAccountId==original?.id}
                 ){"Валюта: нельзя менять валюту счёта с начальным остатком или финансовой историей"}
                 if(a.archived && original?.archived!=true) {
-                    require(l.schedules.none{it.enabled && (it.template.accountId==a.id || it.template.targetAccountId==a.id)}){"Сначала приостановите регулярные операции этого счёта"}
-                    require(l.entries.none{it.status==EntryStatus.PLANNED && (it.accountId==a.id || it.targetAccountId==a.id)}){"Сначала обработайте запланированные операции"}
-                    require(l.debts.none{it.accountId==a.id && Finance.debtRemaining(l,it)>0}){"Сначала погасите задолженность на этом счёте"}
+                    Finance.requireAccountCanArchive(l,a.id)
                 }
                 l.copy(accounts=l.accounts.filterNot{it.id==a.id}+a)
             },close)
@@ -294,6 +292,8 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
     var pendingAccountId by draft.state("conversionAccountId") { "" }
     val account=ledger.accounts.find{it.id==accountId}
     val target=ledger.accounts.find{it.id==targetId}
+    var entryCurrency by draft.state("entryCurrency"){account?.currency.orEmpty()}
+    var targetCurrency by draft.state("entryTargetCurrency"){target?.currency.orEmpty()}
     val cats=ledger.categories.filter{it.income==(kind==Kind.INCOME) && (!it.archived || splitDrafts.any{d->d.category==it.id})}
     val parsedDay=entryDayOrNull(day)
     val todayDay=today()
@@ -313,7 +313,8 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         pendingAccountId=""
     }
     fun selectAccount(id:String) {
-        val changedCurrency=account?.currency!=active.first{it.id==id}.currency
+        val nextCurrency=active.first{it.id==id}.currency
+        val changedCurrency=entryCurrency!=nextCurrency
         if(changedCurrency){
             amount=""
             splitDrafts=splitDrafts.map{it.copy(amount="")}
@@ -321,12 +322,14 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             targetAmount=""
         }
         accountId=id
+        entryCurrency=nextCurrency
         error=""
-        if(targetId==id){targetId="";targetAmount=""}
+        if(targetId==id){targetId="";targetCurrency="";targetAmount=""}
     }
     Form(if(recurring)"Регулярная операция" else if(current==null)"Новая операция" else "Редактировать операцию",close,busy,spacing=6,compact=true,validationError=error,onSave={
         runCatching {
             val a=requireNotNull(account){"Сначала создайте счёт"}
+            require(a.currency==entryCurrency){"Валюта счёта изменилась. Откройте операцию снова."}
             val minor=editorAmount(amount,a.currency,"Сумма");require(minor>0){"Сумма должна быть положительной"}
             if(kind!=Kind.TRANSFER) {
                 val selected=if(splitMode)splitDrafts else splitDrafts.take(1)
@@ -348,6 +351,7 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             }
             val toMinor=if(kind!=Kind.TRANSFER)null else {
                 val dest=requireNotNull(target){"Выберите счёт получателя"}
+                require(dest.currency==targetCurrency){"Валюта счёта получателя изменилась. Откройте операцию снова."}
                 require(dest.id!=a.id){"Выберите другой счёт получателя"}
                 if(dest.currency==a.currency)minor else editorAmount(targetAmount,dest.currency,"Получено").also{
                     require(it>0){"Получено: сумма должна быть больше нуля"}
@@ -374,26 +378,44 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
                 }.distinct().sorted() else emptyList()
             require(!recurring||!enabled||scheduleEnd==null||scheduleEnd>=date){"Дата окончания раньше следующего повтора. Измените дату или отключите расписание."}
             val receipts=pendingReceipts.filter{it.id in receiptIds}
+            // Capture the validated submission before the asynchronous store transaction.
+            val submittedKind=kind
+            val submittedTarget=target.takeIf{submittedKind==Kind.TRANSFER}
+            val submittedNote=note
+            val submittedEssential=essential
+            val submittedReceiptIds=receiptIds
+            val submittedAutoPost=autoPostPlanned
+            val submittedFrequency=frequency
+            val submittedWeekdays=weekdays
+            val submittedAlternate=alternate
+            val submittedUseAlternate=useAlternate
+            val submittedScheduleAutoPost=autoPost
+            val submittedEnabled=enabled
+            val submittedBase=ledger.baseCurrency
             vm.change({ old->
                 if(!recurring&&original!=null)require(old.entries.find{it.id==original?.id}==original) {
                     "Операция изменилась. Закройте редактор и откройте её снова."
                 }
                 val prepared=old.copy(receipts=old.receipts+receipts)
-                require(old.accounts.any{it.id==a.id&&(!it.archived||original!=null)}){"Счёт больше недоступен. Выберите другой."}
-                if(kind==Kind.TRANSFER)require(old.accounts.any{it.id==targetId&&(!it.archived||original!=null)}){"Счёт получателя больше недоступен. Выберите другой."}
-                else require(split.all{(id,_)->old.categories.any{it.id==id&&it.income==(kind==Kind.INCOME)&&(!it.archived||original?.splits?.any{sp->sp.categoryId==id}==true)}}){"Категория больше недоступна. Выберите другую."}
-                val e=editorInput("Сумма или курс: проверьте значения операции."){Finance.makeEntry(prepared,kind,a.id,minor,date,split,note,entryTags,
-                    targetId=targetId.takeIf{kind==Kind.TRANSFER},targetMinor=toMinor,
-                    status=if(plan)EntryStatus.PLANNED else EntryStatus.POSTED,explicitRate=rate,essential=essential,
-                    timeMinutes=t.hour*60+t.minute,id=id,receiptIds=receiptIds,allowArchived=original!=null,autoPostPlanned=plan&&!recurring&&autoPostPlanned)}
+                require(old.baseCurrency==submittedBase){"Основная валюта изменилась. Откройте операцию снова."}
+                val allowHistoricalAccount=if(recurring)!submittedEnabled else plan || original?.status==EntryStatus.POSTED
+                Finance.requireEntryAccount(old,a,allowArchived=allowHistoricalAccount&&original?.accountId==a.id)
+                if(submittedKind==Kind.TRANSFER) {
+                    val dest=requireNotNull(submittedTarget){"Выберите счёт получателя"}
+                    Finance.requireEntryAccount(old,dest,allowArchived=allowHistoricalAccount&&original?.targetAccountId==dest.id,recipient=true)
+                } else require(split.all{(id,_)->old.categories.any{it.id==id&&it.income==(submittedKind==Kind.INCOME)&&(!it.archived||original?.splits?.any{sp->sp.categoryId==id}==true)}}){"Категория больше недоступна. Выберите другую."}
+                val e=editorInput("Сумма или курс: проверьте значения операции."){Finance.makeEntry(prepared,submittedKind,a.id,minor,date,split,submittedNote,entryTags,
+                    targetId=submittedTarget?.id,targetMinor=toMinor,
+                    status=if(plan)EntryStatus.PLANNED else EntryStatus.POSTED,explicitRate=rate,essential=submittedEssential,
+                    timeMinutes=t.hour*60+t.minute,id=id,receiptIds=submittedReceiptIds,allowArchived=original!=null,autoPostPlanned=plan&&!recurring&&submittedAutoPost)}
                 if(recurring) {
                     if(originalSchedule!=null)require(old.schedules.find{it.id==originalSchedule?.id}==originalSchedule){"Расписание изменилось. Откройте его снова."}
                     val previous=originalSchedule
-                    val s=Schedule(previous?.id ?: newId(),e,date,frequency,scheduleInterval,
-                        scheduleEnd,autoPost,enabled,
+                    val s=Schedule(previous?.id ?: newId(),e,date,submittedFrequency,scheduleInterval,
+                        scheduleEnd,submittedScheduleAutoPost,submittedEnabled,
                         if(previous!=null && previous.nextDay==date)previous.anchorDay else LocalDate.ofEpochDay(date).dayOfMonth,
-                        if(frequency==Frequency.WEEKLY)weekdays.sorted() else emptyList(),
-                        if(frequency==Frequency.WEEKLY&&useAlternate&&scheduleInterval==2&&weekdays.isNotEmpty())alternate.sorted() else emptyList(),
+                        if(submittedFrequency==Frequency.WEEKLY)submittedWeekdays.sorted() else emptyList(),
+                        if(submittedFrequency==Frequency.WEEKLY&&submittedUseAlternate&&scheduleInterval==2&&submittedWeekdays.isNotEmpty())submittedAlternate.sorted() else emptyList(),
                         scheduleDays,
                         if(previous!=null&&previous.nextDay==date)previous.anchorEpochDay else date)
                     require(!s.enabled || s.endDay==null || s.endDay>=s.nextDay){"Дата окончания раньше следующего повтора. Измените дату или отключите расписание."}
@@ -439,8 +461,10 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
         }
         if(kind==Kind.TRANSFER) {
             AccountChoice("На счёт",targetId,active.filter{it.id!=accountId},compact=true){id->
-                if(target?.currency!=active.first{it.id==id}.currency)targetAmount=""
+                val nextCurrency=active.first{it.id==id}.currency
+                if(targetCurrency!=nextCurrency)targetAmount=""
                 targetId=id
+                targetCurrency=nextCurrency
             }
             if(account!=null && target!=null && account.currency!=target.currency)Field("Получено (${target.currency})",targetAmount,{targetAmount=it;error=""},true)
         } else {
@@ -661,10 +685,9 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
             Text("Операция ещё не проведена.",color=MaterialTheme.colorScheme.tertiary)
             if(entry.autoPostPlanned)Text("Включено автоматическое проведение.")
             Button(onClick={vm.change({l->
-                val latest=l.entries.find{it.id==entry.id}
-                require(latest==entry){"Операция изменилась. Откройте её снова."}
-                Finance.putEntry(l,entry.copy(status=EntryStatus.POSTED,autoPostPlanned=false))
-            },close)},enabled=!busy && entry.day<=today(),modifier=Modifier.fillMaxWidth()){Text("Подтвердить операцию")}
+                Finance.confirmPlanned(l,entry)
+            },close)},enabled=!busy && entry.day<=today() && Finance.canPostPlanned(ledger,entry),modifier=Modifier.fillMaxWidth()){Text("Подтвердить операцию")}
+            if(!Finance.canPostPlanned(ledger,entry))Warning("Для проведения восстановите счета операции из архива.")
             if(entry.day>today())Text("Подтвердить можно в дату операции. Для досрочного проведения сначала измените дату.")
         }
         if(entry.kind !in setOf(Kind.LOAN_IN,Kind.LOAN_OUT) && refunds.isEmpty())
@@ -686,6 +709,18 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
     },close)},busy)}
 }
 
+internal fun refundCategoryAmounts(parts:Map<String,String>,currency:String,ledger:Ledger):Result<List<Pair<String,Long>>> =
+    runCatching{parts.mapNotNull{(id,text)->
+        if(text.isBlank())null else {
+            val value=editorAmount(text,currency,ledger.categoryName(id))
+            require(value>=0){"Сумма возврата по категории не может быть отрицательной"}
+            (id to value).takeIf{value!=0L}
+        }
+    }}
+
+internal fun refundCategoryTotal(amounts:Result<List<Pair<String,Long>>>):Long? =
+    amounts.mapCatching{Money.sum(it.map{part->part.second})}.getOrNull()
+
 @Composable fun RefundEditor(ledger: Ledger, entry: Entry, vm: AppViewModel,busy:Boolean,close:()->Unit,current:Entry?=null, draft:EntryDraft) {
     val account=ledger.accounts.first{it.id==entry.accountId}
     val left=Money.sub(entry.minor,Money.sum(ledger.entries.filter{it.originalId==entry.id&&it.id!=current?.id}.map{it.minor}))
@@ -696,8 +731,8 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
     val refundable=remember(ledger,entry.id,current?.id){Finance.refundableSplits(ledger,entry.id,current?.id)}
     var byCategory by draft.state("byCategory"){current!=null && entry.splits.size>1}
     var parts by draft.state("parts"){refundable.associate{split->split.categoryId to (current?.splits?.find{it.categoryId==split.categoryId}?.let{Money.input(it.minor,account.currency)} ?: "")}}
-    val categoryAmounts=runCatching{parts.mapNotNull{(id,text)->if(text.isBlank())null else (id to editorAmount(text,account.currency,ledger.categoryName(id))).takeIf{it.second!=0L}}}
-    val categoryTotal=categoryAmounts.mapCatching{Money.sum(it.map{part->part.second})}.getOrNull()
+    val categoryAmounts=refundCategoryAmounts(parts,account.currency,ledger)
+    val categoryTotal=refundCategoryTotal(categoryAmounts)
     Form("Возврат покупки",close,busy,validationError=error,onSave={
         runCatching {
             val selected=if(byCategory)categoryAmounts.getOrThrow() else null

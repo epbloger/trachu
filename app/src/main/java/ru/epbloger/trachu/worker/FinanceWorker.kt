@@ -41,7 +41,7 @@ class FinanceWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             val now=java.time.LocalTime.now()
             if(ledger.entries.any { it.status==EntryStatus.PLANNED && Finance.isDue(it,day,now.hour*60+now.minute) } && prefs.markNotice("planned",day.toString()))
                 show(100,"Есть запланированные операции. Проверьте календарь.")
-            if(ledger.debts.any { it.dueDay!=null && it.dueDay<=day && Finance.debtRemaining(ledger,it)>0 } && prefs.markNotice("debt",day.toString()))
+            if(ledger.debts.any { it.dueDay!=null && it.dueDay<=day && Finance.debtHasOutstandingAmount(ledger,it,day,includeUndatedInterest=false) } && prefs.markNotice("debt",day.toString()))
                 show(101,"Есть обязательства с наступившим сроком.")
             val month=YearMonth.now().toString()
             ledger.budgets.forEach { budget ->

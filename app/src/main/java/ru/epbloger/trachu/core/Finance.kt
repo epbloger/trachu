@@ -102,6 +102,16 @@ object Finance {
      * The original snapshot and occurrence cursors are never mutated. */
     fun forecastEntries(ledger: Ledger, through:Long):List<Entry> =
         generate(ledger,through,forecast=true).entries.filter{it.status==EntryStatus.PLANNED && it.day<=through}
+
+    /** Generated occurrences are not subject to the stored ledger's aggregate limit.
+     * Report an unavailable forecast without invalidating actual financial data. */
+    fun forecastTotalsOrNull(ledger: Ledger, entries: List<Entry>, from: Long, through: Long): Totals? =
+        runCatching {
+            require(entries.all { it.status == EntryStatus.PLANNED && it.day <= through })
+            val first = minOf(from, entries.minOfOrNull { it.day } ?: from)
+            totals(ledger.copy(entries = entries.map { it.copy(status = EntryStatus.POSTED, autoPostPlanned = false) }),
+                Period(first, through)).also { it.net }
+        }.getOrNull()
     fun makeEntry(
         ledger: Ledger, kind: Kind, accountId: String, minor: Long, day: Long,
         categoryAmounts: List<Pair<String, Long>> = emptyList(), note: String = "",
@@ -306,6 +316,36 @@ object Finance {
             it.debtId == debt.id && it.status == EntryStatus.POSTED && it.day <= through &&
                 it.kind in setOf(Kind.DEBT_IN, Kind.DEBT_OUT)
         }.map { Money.sub(it.minor, it.principalMinor) })
+    /** Null means the start date is unknown; arithmetic failures must not be treated as zero. */
+    fun unpaidInterestEstimate(ledger: Ledger, debt: Debt, through: Long = today()): Long? {
+        val accrued = accruedInterest(ledger, debt, through) ?: return null
+        val paid = paidInterest(ledger, debt, through)
+        return if (accrued > paid) Money.sub(accrued, paid) else 0L
+    }
+
+    /** For an undated debt actual interest can still be entered manually. A failed
+     * estimate for a dated loan must never silently mark it as fully repaid. */
+    fun debtHasOutstandingAmount(ledger: Ledger, debt: Debt, through: Long = today(),
+        includeUndatedInterest: Boolean = true): Boolean {
+        if (debtRemaining(ledger, debt) > 0) return true
+        if (BigDecimal(debt.annualPercent).signum() <= 0) return false
+        if (debt.openedDay == null) return includeUndatedInterest
+        return runCatching { requireNotNull(unpaidInterestEstimate(ledger, debt, through)) > 0 }
+            .getOrDefault(true)
+    }
+
+    fun requireAccountCanArchive(ledger: Ledger, accountId: String, through: Long = today()) {
+        require(ledger.schedules.none { it.enabled && (it.template.accountId == accountId || it.template.targetAccountId == accountId) }) {
+            "Сначала приостановите регулярные операции этого счёта"
+        }
+        require(ledger.entries.none { it.status == EntryStatus.PLANNED && (it.accountId == accountId || it.targetAccountId == accountId) }) {
+            "Сначала обработайте запланированные операции"
+        }
+        require(ledger.debts.none { it.accountId == accountId && debtHasOutstandingAmount(ledger, it, through, includeUndatedInterest = false) }) {
+            "Сначала погасите долг и оставшиеся проценты на этом счёте"
+        }
+    }
+
     fun nextDate(schedule: Schedule, day: Long): Long {
         val d = LocalDate.ofEpochDay(day)
         val next = when (schedule.frequency) {
@@ -381,8 +421,40 @@ object Finance {
         }
         return ledger.copy(entries = newEntries, schedules = updated)
     }
+    /** Recheck the denomination and availability under the actual write transaction. */
+    fun requireEntryAccount(ledger: Ledger, expected: Account, allowArchived: Boolean = false,
+        recipient: Boolean = false): Account {
+        val label = if (recipient) "Счёт получателя" else "Счёт"
+        val account = requireNotNull(ledger.accounts.find { it.id == expected.id && (!it.archived || allowArchived) }) {
+            "$label больше недоступен. Выберите другой."
+        }
+        require(account.currency == expected.currency) { "$label: валюта изменилась. Откройте операцию снова." }
+        return account
+    }
+
+    fun activeEntryAccounts(ledger: Ledger, entry: Entry): Boolean =
+        ledger.accounts.any { it.id == entry.accountId && !it.archived } &&
+            (entry.targetAccountId == null || ledger.accounts.any { it.id == entry.targetAccountId && !it.archived })
+
+    fun canPostPlanned(ledger: Ledger, entry: Entry): Boolean =
+        entry.status == EntryStatus.PLANNED && activeEntryAccounts(ledger, entry)
+
+    fun confirmPlanned(ledger: Ledger, expected: Entry, through: Long = today()): Ledger {
+        require(ledger.entries.find { it.id == expected.id } == expected) {
+            "Операция изменилась. Откройте её снова."
+        }
+        require(expected.status == EntryStatus.PLANNED && expected.day <= through) {
+            "Подтвердить можно только запланированную операцию с наступившей датой."
+        }
+        require(canPostPlanned(ledger, expected)) { "Сначала восстановите счета операции из архива." }
+        return putEntry(ledger, expected.copy(status = EntryStatus.POSTED, autoPostPlanned = false))
+    }
+
     fun putEntry(ledger: Ledger, entry: Entry): Ledger {
         val original = ledger.entries.find { it.id == entry.id }
+        if (original?.status == EntryStatus.PLANNED && entry.status == EntryStatus.POSTED) {
+            require(activeEntryAccounts(ledger, entry)) { "Сначала восстановите счета операции из архива." }
+        }
         require(original == null || ledger.entries.none { it.originalId == entry.id }) { "Сначала удалите связанные возвраты" }
         return ledger.copy(entries = ledger.entries.filterNot { it.id == entry.id } + entry).validated()
     }
