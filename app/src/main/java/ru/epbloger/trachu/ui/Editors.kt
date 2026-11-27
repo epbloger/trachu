@@ -398,10 +398,11 @@ internal fun repeatEntryDraft(ledger:Ledger,entry:Entry):EntryDraft {
                 }
                 val prepared=old.copy(receipts=old.receipts+receipts)
                 require(old.baseCurrency==submittedBase){"Основная валюта изменилась. Откройте операцию снова."}
-                Finance.requireEntryAccount(old,a,allowArchived=original?.accountId==a.id)
+                val allowHistoricalAccount=if(recurring)!submittedEnabled else plan || original?.status==EntryStatus.POSTED
+                Finance.requireEntryAccount(old,a,allowArchived=allowHistoricalAccount&&original?.accountId==a.id)
                 if(submittedKind==Kind.TRANSFER) {
                     val dest=requireNotNull(submittedTarget){"Выберите счёт получателя"}
-                    Finance.requireEntryAccount(old,dest,allowArchived=original?.targetAccountId==dest.id,recipient=true)
+                    Finance.requireEntryAccount(old,dest,allowArchived=allowHistoricalAccount&&original?.targetAccountId==dest.id,recipient=true)
                 } else require(split.all{(id,_)->old.categories.any{it.id==id&&it.income==(submittedKind==Kind.INCOME)&&(!it.archived||original?.splits?.any{sp->sp.categoryId==id}==true)}}){"Категория больше недоступна. Выберите другую."}
                 val e=editorInput("Сумма или курс: проверьте значения операции."){Finance.makeEntry(prepared,submittedKind,a.id,minor,date,split,submittedNote,entryTags,
                     targetId=submittedTarget?.id,targetMinor=toMinor,

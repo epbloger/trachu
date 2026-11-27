@@ -102,6 +102,16 @@ object Finance {
      * The original snapshot and occurrence cursors are never mutated. */
     fun forecastEntries(ledger: Ledger, through:Long):List<Entry> =
         generate(ledger,through,forecast=true).entries.filter{it.status==EntryStatus.PLANNED && it.day<=through}
+
+    /** Generated occurrences are not subject to the stored ledger's aggregate limit.
+     * Report an unavailable forecast without invalidating actual financial data. */
+    fun forecastTotalsOrNull(ledger: Ledger, entries: List<Entry>, from: Long, through: Long): Totals? =
+        runCatching {
+            require(entries.all { it.status == EntryStatus.PLANNED && it.day <= through })
+            val first = minOf(from, entries.minOfOrNull { it.day } ?: from)
+            totals(ledger.copy(entries = entries.map { it.copy(status = EntryStatus.POSTED, autoPostPlanned = false) }),
+                Period(first, through)).also { it.net }
+        }.getOrNull()
     fun makeEntry(
         ledger: Ledger, kind: Kind, accountId: String, minor: Long, day: Long,
         categoryAmounts: List<Pair<String, Long>> = emptyList(), note: String = "",
@@ -422,10 +432,12 @@ object Finance {
         return account
     }
 
-    fun canPostPlanned(ledger: Ledger, entry: Entry): Boolean =
-        entry.status == EntryStatus.PLANNED &&
-            ledger.accounts.any { it.id == entry.accountId && !it.archived } &&
+    fun activeEntryAccounts(ledger: Ledger, entry: Entry): Boolean =
+        ledger.accounts.any { it.id == entry.accountId && !it.archived } &&
             (entry.targetAccountId == null || ledger.accounts.any { it.id == entry.targetAccountId && !it.archived })
+
+    fun canPostPlanned(ledger: Ledger, entry: Entry): Boolean =
+        entry.status == EntryStatus.PLANNED && activeEntryAccounts(ledger, entry)
 
     fun confirmPlanned(ledger: Ledger, expected: Entry, through: Long = today()): Ledger {
         require(ledger.entries.find { it.id == expected.id } == expected) {
@@ -440,6 +452,9 @@ object Finance {
 
     fun putEntry(ledger: Ledger, entry: Entry): Ledger {
         val original = ledger.entries.find { it.id == entry.id }
+        if (original?.status == EntryStatus.PLANNED && entry.status == EntryStatus.POSTED) {
+            require(activeEntryAccounts(ledger, entry)) { "Сначала восстановите счета операции из архива." }
+        }
         require(original == null || ledger.entries.none { it.originalId == entry.id }) { "Сначала удалите связанные возвраты" }
         return ledger.copy(entries = ledger.entries.filterNot { it.id == entry.id } + entry).validated()
     }

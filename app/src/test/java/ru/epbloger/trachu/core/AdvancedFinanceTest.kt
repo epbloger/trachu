@@ -96,6 +96,10 @@ class AdvancedFinanceTest {
         val archived=initial.copy(accounts=initial.accounts.map{if(it.id=="usd")it.copy(archived=true)else it})
         assertFalse(Finance.canPostPlanned(archived,entry))
         assertTrue(runCatching{Finance.confirmPlanned(archived,entry,day)}.isFailure)
+        // Editing the status directly must not bypass the same protection.
+        assertTrue(runCatching{Finance.putEntry(archived,entry.copy(status=EntryStatus.POSTED,autoPostPlanned=false))}.isFailure)
+        val stillPlanned=Finance.putEntry(archived,entry.copy(note="Уточнено"))
+        assertEquals(EntryStatus.PLANNED,stillPlanned.entries.single().status)
         val posted=Finance.confirmPlanned(initial,entry,day)
         assertEquals(EntryStatus.POSTED,posted.entries.single().status)
         assertFalse(posted.entries.single().autoPostPlanned)
@@ -301,6 +305,19 @@ class AdvancedFinanceTest {
         assertEquals(213L,Finance.totals(edited,Period.month(day)).expense)
         assertEquals(2,edited.entries.size)
     }
+    @Test fun generatedForecastOverflowDoesNotInvalidateStoredLedger() {
+        val template=Finance.makeEntry(l,Kind.INCOME,"a",Long.MAX_VALUE/2,day,listOf("salary" to Long.MAX_VALUE/2),
+            status=EntryStatus.PLANNED)
+        val state=l.copy(schedules=listOf(Schedule(template=template,nextDay=day,frequency=Frequency.DAILY))).validated()
+        val upcoming=Finance.forecastEntries(state,day+2)
+        assertEquals(3,upcoming.size)
+        assertNull(Finance.forecastTotalsOrNull(state,upcoming,day,day+2))
+        assertEquals(Long.MAX_VALUE/2,Finance.forecastTotalsOrNull(state,upcoming.take(1),day,day+2)?.income)
+        assertTrue(state.entries.isEmpty())
+        assertEquals(day,state.schedules.single().nextDay)
+        assertEquals(state,state.validated())
+    }
+
     @Test fun forecastIncludesOverdueWithoutMutatingActualLedger() {
         val old=Finance.makeEntry(l,Kind.EXPENSE,"a",200,day-1,listOf("food" to 200L),status=EntryStatus.PLANNED)
         val next=Finance.makeEntry(l,Kind.INCOME,"a",500,day+2,listOf("salary" to 500L),status=EntryStatus.PLANNED)
