@@ -256,13 +256,17 @@ class LedgerStore(private val db: TrachuDatabase) {
 
     internal fun currentRateGeneration():Long = rateGeneration.get()
 
-    internal suspend fun mergeRatesIfCurrent(generation:Long,base:String,rates:List<FxRate>,requireAccounts:Boolean=false):Ledger =
+    internal suspend fun mergeRatesIfCurrent(generation:Long,base:String,rates:List<FxRate>,requireAccounts:Boolean=false):Boolean {
+        var applied=false
         change { current ->
             if(rateGeneration.get()==generation && current.baseCurrency==base &&
-                (!requireAccounts || current.accounts.isNotEmpty()))
+                (!requireAccounts || current.accounts.isNotEmpty())) {
+                applied=true
                 Finance.mergePublishedRates(current,base,rates)
-            else current
+            } else current
         }
+        return applied
+    }
 
     suspend fun change(transform: (Ledger) -> Ledger): Ledger = db.withTransaction {
         val stats = dao.stats()

@@ -15,6 +15,29 @@ import java.io.ByteArrayOutputStream
 
 @RunWith(AndroidJUnit4::class)
 class PdfReportTest {
+    @Test fun refundAppearsInPurchaseAndReceivingAccountReportsWithoutDoubleCounting() {
+        val day=today()
+        val base=Ledger.initial().copy(accounts=listOf(Account("a","Карта"),Account("b","Наличные")))
+        val purchase=Finance.makeEntry(base,Kind.EXPENSE,"a",1000,day,listOf("food" to 1000L))
+        val purchased=Finance.putEntry(base,purchase)
+        val refund=Finance.refund(purchased,purchase.id,300,day,accountId="b")
+        val ledger=Finance.putEntry(purchased,refund)
+        val period=Period(day,day)
+        fun accountReport(id:String)=ledger.copy(accounts=ledger.accounts.map{it.copy(includeInStats=it.id==id)})
+        val a=accountReport("a")
+        val b=accountReport("b")
+        assertEquals(setOf(purchase.id,refund.id),PdfReport.operationEntries(a,period).map{it.id}.toSet())
+        assertEquals(listOf(refund.id),PdfReport.operationEntries(b,period).map{it.id})
+        assertEquals(2,PdfReport.operationEntries(ledger,period).size)
+        assertTrue(PdfReport.operationEntries(b,Period(day-1,day-1)).isEmpty())
+        assertEquals(700L,Finance.totals(a,period).expense)
+        assertEquals(0L,Finance.totals(b,period).expense)
+        assertEquals(300L,Finance.balance(ledger,"b",day))
+        val output=ByteArrayOutputStream()
+        PdfReport.write(ledger,period,output,"b")
+        assertTrue(output.size()>100)
+    }
+
     @Test fun accountReportCanBeOpenedAndRendered() {
         val context=ApplicationProvider.getApplicationContext<Context>()
         val day=today()

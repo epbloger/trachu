@@ -10,10 +10,22 @@ import java.io.OutputStream
 import java.time.LocalDate
 
 object PdfReport {
+    // Financial totals follow the purchase account; the operations list also
+    // shows actual incoming cash movements, including refunds to another account.
+    internal fun operationEntries(ledger:Ledger,period:Period):List<Entry> {
+        val included=ledger.accounts.filter{it.includeInStats}.map{it.id}.toSet()
+        val reported=Finance.reportEntries(ledger,period)
+        val incoming=ledger.entries.filter {
+            it.status==EntryStatus.POSTED && it.day in period &&
+                (it.kind==Kind.TRANSFER && it.targetAccountId in included ||
+                    it.kind==Kind.REFUND && it.accountId in included)
+        }
+        return (reported+incoming).distinctBy{it.id}.sortedWith(EntryOrder.newestFirst)
+    }
+
     fun write(ledger: Ledger, period: Period, output: OutputStream, accountId:String="") {
         require(accountId.isEmpty() || ledger.accounts.any{it.id==accountId && it.includeInStats}) { "Счёт исключён из отчётов или удалён" }
         val report=if(accountId.isEmpty())ledger else ledger.copy(accounts=ledger.accounts.map{it.copy(includeInStats=it.id==accountId && it.includeInStats)})
-        val included=report.accounts.filter{it.includeInStats}.map{it.id}.toSet()
         val doc = PdfDocument()
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         var page: PdfDocument.Page? = null
@@ -72,14 +84,14 @@ object PdfReport {
             }
             y+=12
             row("Операции",true)
-            val reported=Finance.reportEntries(report,period)
-            val incomingTransfers=ledger.entries.filter { it.kind==Kind.TRANSFER && it.status==EntryStatus.POSTED && it.day in period && it.targetAccountId in included }
-            (reported+incomingTransfers).distinctBy{it.id}.sortedWith(EntryOrder.newestFirst).forEach { e ->
+            val reportedIds=Finance.reportEntries(report,period).mapTo(HashSet()){it.id}
+            operationEntries(report,period).forEach { e ->
                 val a=ledger.accounts.first { it.id==e.accountId }
                 val kind=when(e.kind) { Kind.EXPENSE->"Расход"; Kind.INCOME->"Доход"; Kind.TRANSFER->"Перевод"; Kind.REFUND->"Возврат"; Kind.DEBT_IN,Kind.DEBT_OUT->"Погашение долга"; Kind.LOAN_IN,Kind.LOAN_OUT->"Получение / выдача займа" }
                 row("${LocalDate.ofEpochDay(e.day)}  $kind  ${Money.format(e.minor,a.currency)}  ${a.name}")
                 if(e.kind==Kind.REFUND)ledger.entries.find{it.id==e.originalId}?.let{purchase->
                     if(purchase.accountId!=a.id)row("  Счёт покупки: "+ledger.accounts.first{it.id==purchase.accountId}.name)
+                    if(e.id !in reportedIds)row("  Зачисление на счёт; не включено в расходы этого отчёта.")
                 }
                 if(e.targetAccountId!=null && e.targetMinor!=null) {
                     val target=ledger.accounts.first{it.id==e.targetAccountId}

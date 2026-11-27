@@ -271,7 +271,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val rates=withContext(Dispatchers.IO){converterRateFetcher(base,day)}
                 require(rates.isNotEmpty()&&rates.all{it.day<=day}){"ЦБ РФ не вернул курсы на эту дату"}
                 if(!force&&!preferences.current().automaticRates)return@launch
-                store.mergeRatesIfCurrent(generation,base,rates)
+                if(!store.mergeRatesIfCurrent(generation,base,rates))return@launch
                 rateAttempts[key]=android.os.SystemClock.elapsedRealtime() to true
                 _converterRateStatus.value=ConverterRateStatus(base,day,false)
             } catch(e:kotlinx.coroutines.CancellationException){throw e}
@@ -290,7 +290,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val generation=store.currentRateGeneration()
         val base=store.current().baseCurrency
         val rates=withContext(Dispatchers.IO) { ExchangeRates.fetch(base,day) }
-        store.mergeRatesIfCurrent(generation,base,rates)
+        require(store.mergeRatesIfCurrent(generation,base,rates)) { "Данные изменились. Обновите курсы снова." }
         _message.value="Курсы сохранены"
     }
     fun export(uri: Uri, mode: String, password: String="", period: Period=Period.month(), accountId:String="") = perform {
