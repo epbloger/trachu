@@ -15,6 +15,34 @@ import ru.epbloger.trachu.core.*
 @RunWith(AndroidJUnit4::class)
 class LedgerStoreTest {
     private val context=ApplicationProvider.getApplicationContext<Context>()
+    @Test fun sameMinuteNewestFirstSurvivesDatabaseReopenAndEdits()=runBlocking {
+        val name="entry-order-${newId()}.db"
+        val account=Account("a","Карта",openingMinor=10000)
+        val day=today()
+        var db=Room.databaseBuilder(context,TrachuDatabase::class.java,name).build()
+        try {
+            var store=LedgerStore(db)
+            store.restore(Ledger.initial().copy(accounts=listOf(account)))
+            val first=Finance.makeEntry(store.current(),Kind.EXPENSE,"a",100,day,listOf("food" to 100L),id="z-first",timeMinutes=600)
+            val second=Finance.makeEntry(store.current(),Kind.EXPENSE,"a",200,day,listOf("food" to 200L),id="a-second",timeMinutes=600)
+            store.change{Finance.putEntry(it,first)}
+            store.change{Finance.putEntry(it,second)}
+            val before=store.current()
+            assertEquals(listOf(second.id,first.id),before.entries.sortedWith(EntryOrder.newestFirst).map{it.id})
+            val savedFirst=before.entries.single{it.id==first.id}
+            assertTrue(savedFirst.recordedAtMillis>0)
+            store.change{Finance.putEntry(it,first.copy(note="Уточнение"))}
+            db.close()
+            db=Room.databaseBuilder(context,TrachuDatabase::class.java,name).build()
+            store=LedgerStore(db)
+            val reopened=store.current()
+            assertEquals(listOf(second.id,first.id),reopened.entries.sortedWith(EntryOrder.newestFirst).map{it.id})
+            assertEquals(savedFirst.recordedAtMillis,reopened.entries.single{it.id==first.id}.recordedAtMillis)
+            assertEquals(9700L,Finance.balance(reopened,"a"))
+            store.restore(reopened)
+            assertEquals(reopened,store.current())
+        } finally { db.close();context.deleteDatabase(name) }
+    }
     @Test fun transactionRollbackAndRestore()=runBlocking {
         val db=Room.inMemoryDatabaseBuilder(context,TrachuDatabase::class.java).build()
         try {

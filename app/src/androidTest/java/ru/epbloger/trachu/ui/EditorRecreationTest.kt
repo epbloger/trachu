@@ -392,8 +392,8 @@ class EditorRecreationTest {
         val account=Account(name="Редактирование ${newId()}",currency=initial.baseCurrency)
         val category=initial.categories.first{!it.income&&!it.archived}
         val prepared=initial.copy(accounts=initial.accounts+account)
-        val original=Finance.makeEntry(prepared,Kind.EXPENSE,account.id,1234,today()-1,listOf(category.id to 1234L))
-        runBlocking{store.change{it.copy(accounts=it.accounts+account,entries=it.entries+original)}}
+        val fixture=Finance.makeEntry(prepared,Kind.EXPENSE,account.id,1234,today()-1,listOf(category.id to 1234L))
+        val original=runBlocking{store.change{it.copy(accounts=it.accounts+account,entries=it.entries+fixture)}}.entries.single{it.id==fixture.id}
         try{
             awaitTag("nav-home")
             lateinit var vm:AppViewModel
@@ -578,9 +578,9 @@ class EditorRecreationTest {
         val category=initial.categories.first{!it.income&&!it.archived}
         val receipt=Receipt(mime="image/png",base64="AAAA")
         val prepared=initial.copy(accounts=initial.accounts+account,receipts=initial.receipts+receipt)
-        val original=Finance.makeEntry(prepared,Kind.EXPENSE,account.id,1234,today()-1,
+        val fixture=Finance.makeEntry(prepared,Kind.EXPENSE,account.id,1234,today()-1,
             listOf(category.id to 1234L),note="Повторяемая покупка",tags=listOf("повтор"),receiptIds=listOf(receipt.id))
-        runBlocking{store.change{it.copy(accounts=it.accounts+account,receipts=it.receipts+receipt,entries=it.entries+original)}}
+        val original=runBlocking{store.change{it.copy(accounts=it.accounts+account,receipts=it.receipts+receipt,entries=it.entries+fixture)}}.entries.single{it.id==fixture.id}
         try {
             awaitTag("nav-home")
             lateinit var vm:AppViewModel

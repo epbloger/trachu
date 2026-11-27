@@ -43,7 +43,7 @@ private fun currentNotificationAccess(context:Context):Boolean {
 @Composable fun Accounts(ledger:Ledger,edit:(Account?)->Unit,transfer:()->Unit,back:()->Unit,move:(String,Int)->Unit) {
     var showArchived by remember{mutableStateOf(false)}
     val accounts=ledger.accounts.filter{showArchived||!it.archived}.sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name})
-    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+    LazyColumn(contentPadding=PaddingValues(PageInset),verticalArrangement=Arrangement.spacedBy(SectionGap)){
         item{SectionTitle("Счета",action="Назад",onAction=back)}
         item{Panel {
             val v=Finance.valuation(ledger)
@@ -74,7 +74,7 @@ private fun currentNotificationAccess(context:Context):Boolean {
     var income by remember{mutableStateOf(false)}
     var archived by remember{mutableStateOf(false)}
     val cats=ledger.categories.filter{it.income==income&&(archived||!it.archived)}
-    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+    LazyColumn(contentPadding=PaddingValues(PageInset),verticalArrangement=Arrangement.spacedBy(SectionGap)){
         item{SectionTitle("Категории",action="Назад",onAction=back)}
         item{Panel{
             Chips(listOf(false,true),income,{if(it)"Доходы" else "Расходы"}){income=it}
@@ -99,7 +99,7 @@ private fun currentNotificationAccess(context:Context):Boolean {
     var value by remember{mutableStateOf("")}
     var error by remember{mutableStateOf("")}
     val relevant=ledger.rates.filter{it.currency==currency}.sortedByDescending{it.day}
-    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+    LazyColumn(contentPadding=PaddingValues(PageInset),verticalArrangement=Arrangement.spacedBy(SectionGap)){
         item{SectionTitle("Курсы валют",action="Конвертер",onAction=back)}
         item{Panel{
             Text("Основная валюта отчётов: ${ledger.baseCurrency}",style=MaterialTheme.typography.titleMedium)
@@ -156,7 +156,7 @@ private fun canChangeBaseCurrency(ledger:Ledger)=ledger.accounts.isEmpty()&&ledg
     fun openNotificationSettings(){
         context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,context.packageName))
     }
-    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+    LazyColumn(contentPadding=PaddingValues(PageInset),verticalArrangement=Arrangement.spacedBy(SectionGap)){
         item{SectionTitle("Настройки",action="Назад",onAction=back)}
         item{Panel{
             SectionTitle("Оформление")
@@ -236,13 +236,13 @@ private fun canChangeBaseCurrency(ledger:Ledger)=ledger.accounts.isEmpty()&&ledg
 @Composable fun AdConsentPanel(current:Boolean?=null,onChoose:(Boolean)->Unit) {
     val uri=androidx.compose.ui.platform.LocalUriHandler.current
     Column(Modifier.fillMaxWidth().padding(12.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
-        Text("Поддержать приложение рекламой",style=MaterialTheme.typography.titleSmall)
-        Text("При согласии Яндекс может обрабатывать технические данные и использовать их для рекламы. Финансовые записи не передаются. Можно отказаться без потери функций.",style=MaterialTheme.typography.bodySmall)
+        Text("Персонализированная реклама",style=MaterialTheme.typography.titleSmall)
+        Text("Разрешить Яндексу использовать технические данные для подбора рекламы по вашим интересам? Финансовые записи не передаются. Вы можете отказаться от персонализации или изменить выбор в настройках. Обычная реклама остаётся.",style=MaterialTheme.typography.bodySmall)
         TextButton(onClick={runCatching{uri.openUri("https://epbloger.github.io/trachu/privacy.html")}}){Text("Политика конфиденциальности")}
         if(current==null)Column(Modifier.fillMaxWidth()){
-            Button(onClick={onChoose(true)},modifier=Modifier.fillMaxWidth()){Text("Согласен")}
-            OutlinedButton(onClick={onChoose(false)},modifier=Modifier.fillMaxWidth()){Text("Отказаться")}
-        }else Toggle("Разрешить рекламу",current,onChoose,"Отказ прекращает новые рекламные запросы.")
+            Button(onClick={onChoose(true)},modifier=Modifier.fillMaxWidth()){Text("Разрешить персонализацию")}
+            OutlinedButton(onClick={onChoose(false)},modifier=Modifier.fillMaxWidth()){Text("Без персонализации")}
+        }else Toggle("Персонализировать рекламу",current,onChoose,"Без персонализации обычная реклама остаётся.")
     }
 }
 data class FileRequest(val mode:String,val save:Boolean,val password:String="",val account:String="",val period:Period=Period.month())
@@ -252,7 +252,7 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
     var account by remember{mutableStateOf(ledger.accounts.firstOrNull{!it.archived}?.id.orEmpty())}
     var importError by remember{mutableStateOf("")}
     var csvConfirm by remember{mutableStateOf(false)}
-    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+    LazyColumn(contentPadding=PaddingValues(PageInset),verticalArrangement=Arrangement.spacedBy(SectionGap)){
         item{SectionTitle("Данные и копии",action="Назад",onAction=back)}
         item{Panel{
             SectionTitle("Зашифрованная копия")
@@ -303,7 +303,7 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
     var document by remember{mutableStateOf<String?>(null)}
     val context=androidx.compose.ui.platform.LocalContext.current
     val text=remember(document){document?.let{runCatching{context.assets.open("legal/$it.txt").bufferedReader().use{r->r.readText()}}.getOrElse{"Документ недоступен"}}}
-    LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+    LazyColumn(contentPadding=PaddingValues(PageInset),verticalArrangement=Arrangement.spacedBy(SectionGap)){
         item{SectionTitle("Помощь",action="Назад",onAction=back)}
         item{Panel{
             SectionTitle("Как пользоваться ТРАЧУ.")
@@ -321,7 +321,20 @@ data class FileRequest(val mode:String,val save:Boolean,val password:String="",v
             SectionTitle("Документы")
             listOf("privacy" to "Политика конфиденциальности","terms" to "Условия использования","developer" to "О разработчике").forEach{(key,label)->
                 TextButton(onClick={document=if(document==key)null else key},modifier=Modifier.fillMaxWidth()){Text(label)}
-                if(document==key&&text!=null)Text(text,style=MaterialTheme.typography.bodyMedium)
+                if(document==key&&text!=null) {
+                    text.trim().split(Regex("\\n\\s*\\n")).forEach { paragraph ->
+                        when {
+                            paragraph.startsWith("# ") -> Text(paragraph.removePrefix("# "),style=MaterialTheme.typography.titleLarge)
+                            paragraph.startsWith("## ") -> Text(paragraph.removePrefix("## "),style=MaterialTheme.typography.titleMedium)
+                            else -> Text(paragraph.replace(Regex("\\[([^]]+)\\]\\((https?://[^)]+)\\)"),"$1 ($2)")
+                                .replace(Regex("(?m)^- "),"• "),style=MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    val uri=androidx.compose.ui.platform.LocalUriHandler.current
+                    val page=when(key){"privacy"->"privacy";"terms"->"terms";else->"developer"}
+                    OutlinedButton(onClick={runCatching{uri.openUri("https://epbloger.github.io/trachu/$page.html")}},
+                        modifier=Modifier.fillMaxWidth()){Text("Открыть на сайте")}
+                }
             }
         }}
     }

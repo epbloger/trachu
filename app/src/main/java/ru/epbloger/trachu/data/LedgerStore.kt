@@ -257,7 +257,7 @@ class LedgerStore(private val db: TrachuDatabase) {
     suspend fun change(transform: (Ledger) -> Ledger): Ledger = db.withTransaction {
         val stats = dao.stats()
         val before = readSnapshot(stats)
-        val next = prune(transform(before))
+        val next = EntryOrder.stampNew(before, prune(transform(before)))
         if (stats.rows == 0L) {
             LedgerRecords.records(next).map{it.checkedSize()}.chunked(pageSize).forEach { dao.put(it) }
         } else {

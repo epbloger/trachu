@@ -81,7 +81,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
 @Composable fun Panel(modifier: Modifier=Modifier, content: @Composable ColumnScope.()->Unit) {
     Card(modifier.fillMaxWidth(),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.surface),
         shape=MaterialTheme.shapes.large) {
-        Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(12.dp),content=content)
+        Column(Modifier.padding(PanelInset),verticalArrangement=Arrangement.spacedBy(ContentGap),content=content)
     }
 }
 @Composable fun SectionTitle(title: String, subtitle: String?=null, action: String?=null, onAction: ()->Unit={}) {
@@ -309,7 +309,7 @@ fun Ledger.entryName(e: Entry): String = when(e.kind) {
                     @Composable fun Cancel(modifier:Modifier=Modifier) { TextButton(onClick=onClose,enabled=!busy,modifier=modifier) { Text("Отмена") } }
                     @Composable fun Save(modifier:Modifier=Modifier) { Button(onClick=onSave,enabled=!busy,modifier=modifier.testTag("form_save")) { if(busy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Text(saveLabel) } }
                     if(maxWidth<240.dp||LocalDensity.current.fontScale>=1.5f)Column(Modifier.fillMaxWidth()){Save(Modifier.fillMaxWidth());Cancel(Modifier.fillMaxWidth())}
-                    else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.End,verticalAlignment=Alignment.CenterVertically){Cancel();Save()}
+                    else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp,Alignment.End),verticalAlignment=Alignment.CenterVertically){Cancel();Save()}
                 }
             }
         }

@@ -26,6 +26,7 @@ fun today(): Long = LocalDate.now().toEpochDay()
 @Serializable data class Split(
     val categoryId: String, val minor: Long, val baseMinor: Long
 )
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable data class Entry(
     val id: String = newId(), val kind: Kind, val accountId: String,
     val minor: Long, val baseMinor: Long, val day: Long = today(),
@@ -35,7 +36,10 @@ fun today(): Long = LocalDate.now().toEpochDay()
     val originalId: String? = null, val debtId: String? = null,
     val principalMinor: Long = 0, val essential: Boolean = false,
     val receiptIds: List<String> = emptyList(), val rate: String = "1",
-    val autoPostPlanned: Boolean = false
+    val autoPostPlanned: Boolean = false,
+    // Presentation-only tie breaker; absent in older databases and exports.
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val recordedAtMillis: Long = 0L
 )
 @Serializable data class Budget(
     val id: String = newId(), val name: String, val categoryId: String? = null,

@@ -128,7 +128,7 @@ fun CurrencyConverter(ledger: Ledger, vm: AppViewModel, busy: Boolean, back: () 
         }
     }
     val result = converterPreview(ledger,from,to,amount,manual,rateText,day,saved)
-    LazyColumn(modifier = Modifier.testTag("converter-list"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(modifier = Modifier.testTag("converter-list"), contentPadding = PaddingValues(PageInset), verticalArrangement = Arrangement.spacedBy(SectionGap)) {
         item { SectionTitle("Конвертер валют", action = "Назад", onAction = back) }
         item {
             Panel {

@@ -51,7 +51,7 @@ private fun PlannerTab.group()=when(this){
         runCatching { Finance.generate(ledger,month.atEndOfMonth().toEpochDay(),true).entries }.getOrElse{ledger.entries}
             .filter{it.day in month.atDay(1).toEpochDay()..month.atEndOfMonth().toEpochDay()}
     }
-    LazyColumn(modifier=Modifier.testTag("planner-list"),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+    LazyColumn(modifier=Modifier.testTag("planner-list"),contentPadding=PaddingValues(PageInset),verticalArrangement=Arrangement.spacedBy(SectionGap)) {
         item{
             Text("Планирование",style=MaterialTheme.typography.headlineLarge)
             PlannerChoices(PlannerGroup.entries,tab.group(),{it.label},{"planner-group-${it.name.lowercase()}"}){group->
@@ -95,8 +95,8 @@ private fun PlannerTab.group()=when(this){
                     Text("Цель: "+Money.format(g.targetMinor,g.currency))
                     Text(if(saved>=g.targetMinor)"Цель достигнута" else "Осталось: "+Money.format(g.targetMinor-saved,g.currency))
                     BoxWithConstraints(Modifier.fillMaxWidth()){
-                        @Composable fun Fund(modifier:Modifier){Button(onClick={adjustGoal(g,false)},modifier=modifier.testTag("goal-fund:${g.id}")){Text("Пополнить")}}
-                        @Composable fun Withdraw(modifier:Modifier){OutlinedButton(onClick={adjustGoal(g,true)},enabled=saved>0,modifier=modifier.testTag("goal-withdraw:${g.id}")){Text("Снять")}}
+                        @Composable fun Fund(modifier:Modifier){Button(onClick={adjustGoal(g,false)},modifier=modifier.testTag("goal-fund:${g.id}"),colors=moneyActionColors(true)){Text("Пополнить")}}
+                        @Composable fun Withdraw(modifier:Modifier){OutlinedButton(onClick={adjustGoal(g,true)},enabled=saved>0,modifier=modifier.testTag("goal-withdraw:${g.id}"),colors=ButtonDefaults.outlinedButtonColors(contentColor=MaterialTheme.colorScheme.error)){Text("Снять")}}
                         if(maxWidth<260.dp||LocalDensity.current.fontScale>=1.5f){
                             Column(verticalArrangement=Arrangement.spacedBy(4.dp)){Fund(Modifier.fillMaxWidth());Withdraw(Modifier.fillMaxWidth())}
                         }else Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Fund(Modifier.weight(1f));Withdraw(Modifier.weight(1f))}
@@ -133,7 +133,7 @@ private fun PlannerTab.group()=when(this){
                         d.dueDay?.let{Text("Срок: "+dayLabel(it),color=if(it<today()&&outstanding)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)}
                         if(outstanding&&a.archived)Warning("Для погашения восстановите счёт из архива.")
                         if(d.note.isNotBlank())Text(d.note)
-                        Button(onClick={payDebt(d)},enabled=canPay,modifier=Modifier.fillMaxWidth().testTag("debt-pay:${d.id}")){
+                        Button(onClick={payDebt(d)},enabled=canPay,modifier=Modifier.fillMaxWidth().testTag("debt-pay:${d.id}"),colors=moneyActionColors(!d.owedByMe)){
                             Text(when {
                                 left>0 -> if(d.owedByMe)"Погасить долг" else "Получить возврат"
                                 else -> "Учесть проценты"
@@ -437,7 +437,8 @@ internal fun debtPaymentPreview(principal:String,interest:String,showInterest:Bo
                     }
                     val entry=runCatching{
                         Finance.makeEntry(updated,if(owed)Kind.LOAN_IN else Kind.LOAN_OUT,latestAccount.id,d.principalMinor,openedDay,
-                            note=note,explicitRate=openingRateValue,debtId=d.id,principalMinor=d.principalMinor)
+                            note=note,explicitRate=openingRateValue,debtId=d.id,principalMinor=d.principalMinor,
+                            timeMinutes=EntryOrder.manualTime(openedDay))
                     }.getOrElse{throw IllegalArgumentException("Не удалось пересчитать сумму займа по выбранному курсу")}
                     Finance.putEntry(updated,entry)
                 } else updated
@@ -519,7 +520,8 @@ internal fun debtPaymentPreview(principal:String,interest:String,showInterest:Bo
                 }
                 val e=runCatching{
                     Finance.makeEntry(l,if(latest.owedByMe)Kind.DEBT_OUT else Kind.DEBT_IN,account.id,sum,date,note=note,
-                        explicitRate=explicitRate,debtId=latest.id,principalMinor=p,id=original?.id ?: newId(),allowArchived=original!=null)
+                        explicitRate=explicitRate,debtId=latest.id,principalMinor=p,id=original?.id ?: newId(),allowArchived=original!=null,
+                        timeMinutes=EntryOrder.manualTime(date,original))
                 }.getOrElse{throw IllegalArgumentException("Не удалось пересчитать платёж по выбранному курсу")}
                 Finance.putEntry(l,e)
             },close)

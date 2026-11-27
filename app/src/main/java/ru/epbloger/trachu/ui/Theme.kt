@@ -12,6 +12,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+internal val PageInset = 20.dp
+internal val SectionGap = 16.dp
+internal val PanelInset = 16.dp
+internal val ContentGap = 12.dp
+
+@Composable internal fun moneyActionColors(income:Boolean):ButtonColors =
+    ButtonDefaults.buttonColors(
+        containerColor=if(income) Color(0xFFDDF4E5) else Color(0xFFFFE2E5),
+        contentColor=if(income) Color(0xFF145C37) else Color(0xFF8F243B)
+    )
+
 val Lavender = Color(0xFFE8E2FC)
 val Graphite = Color(0xFF27243E)
 @Composable fun incomeColor():Color =

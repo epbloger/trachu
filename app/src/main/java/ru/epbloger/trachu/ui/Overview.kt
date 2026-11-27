@@ -32,12 +32,12 @@ import java.time.temporal.TemporalAdjusters
     var showPeriod by rememberSaveable{mutableStateOf(false)}
     val totals=remember(ledger,p){Finance.totals(ledger,p)}
     val valuation=remember(ledger,day){Finance.valuation(ledger,day)}
-    val recent=remember(ledger){ledger.entries.filter { it.status==EntryStatus.POSTED }.sortedWith(compareByDescending<Entry>{it.day}.thenByDescending{it.timeMinutes}).take(5)}
+    val recent=remember(ledger){ledger.entries.filter { it.status==EntryStatus.POSTED }.sortedWith(EntryOrder.newestFirst).take(5)}
     val budget=ledger.budgets.firstOrNull { it.categoryId==null } ?: ledger.budgets.firstOrNull()
     val planned=remember(ledger){ledger.entries.filter { it.status==EntryStatus.PLANNED }.sortedBy { it.day }.take(3)}
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide=maxWidth>=840.dp && LocalDensity.current.fontScale<1.5f
-        LazyColumn(contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
+        LazyColumn(contentPadding=PaddingValues(PageInset),verticalArrangement=Arrangement.spacedBy(SectionGap)) {
             item {
                 Text("Обзор",style=MaterialTheme.typography.headlineLarge)
                 Text(LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("LLLL yyyy",java.util.Locale("ru"))).replaceFirstChar{it.uppercase()},
@@ -55,10 +55,10 @@ import java.time.temporal.TemporalAdjusters
                             MoneyText(totals.net,ledger.baseCurrency,color=Color.White)
                             BoxWithConstraints(Modifier.fillMaxWidth()) {
                                 @Composable fun Expense(modifier:Modifier) {
-                                    Button(onClick={add(Kind.EXPENSE)},modifier=modifier.heightIn(min=52.dp).testTag("add-expense").then(tutorialTarget("expense")),colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFFFE2E5),contentColor=Color(0xFF8F243B))) { Text("− Расход") }
+                                    Button(onClick={add(Kind.EXPENSE)},modifier=modifier.heightIn(min=52.dp).testTag("add-expense").then(tutorialTarget("expense")),colors=moneyActionColors(false)) { Text("− Расход") }
                                 }
                                 @Composable fun Income(modifier:Modifier) {
-                                    Button(onClick={add(Kind.INCOME)},modifier=modifier.heightIn(min=52.dp).testTag("add-income").then(tutorialTarget("income")),colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFDDF4E5),contentColor=Color(0xFF145C37))) { Text("+ Доход") }
+                                    Button(onClick={add(Kind.INCOME)},modifier=modifier.heightIn(min=52.dp).testTag("add-income").then(tutorialTarget("income")),colors=moneyActionColors(true)) { Text("+ Доход") }
                                 }
                                 if(maxWidth<260.dp||LocalDensity.current.fontScale>=1.3f)Column(verticalArrangement=Arrangement.spacedBy(8.dp)){Expense(Modifier.fillMaxWidth());Income(Modifier.fillMaxWidth())}
                                 else Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Expense(Modifier.weight(1f));Income(Modifier.weight(1f))}
@@ -258,7 +258,7 @@ internal fun availableReportAccount(ledger:Ledger,selected:String):String =
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide=maxWidth>=840.dp && LocalDensity.current.fontScale<1.5f
-        LazyColumn(modifier=Modifier.testTag("analytics-list"),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
+        LazyColumn(modifier=Modifier.testTag("analytics-list"),contentPadding=PaddingValues(PageInset),verticalArrangement=Arrangement.spacedBy(SectionGap)) {
             item { SectionTitle("Аналитика",action=if(selectedAccount==reportAccount)"PDF" else null){exportPdf(period,reportAccount)} }
             item { Panel {
                 PeriodControls(type,{type=it},period,{period=it},monthStart)
