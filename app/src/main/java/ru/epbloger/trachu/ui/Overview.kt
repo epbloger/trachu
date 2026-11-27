@@ -32,7 +32,7 @@ import java.time.temporal.TemporalAdjusters
     var showPeriod by rememberSaveable{mutableStateOf(false)}
     val totals=remember(ledger,p){Finance.totals(ledger,p)}
     val valuation=remember(ledger,day){Finance.valuation(ledger,day)}
-    val recent=remember(ledger){ledger.entries.filter { it.status==EntryStatus.POSTED }.sortedWith(compareByDescending<Entry>{it.day}.thenByDescending{it.timeMinutes}).take(5)}
+    val recent=remember(ledger){ledger.entries.filter { it.status==EntryStatus.POSTED }.sortedWith(EntryOrder.newestFirst).take(5)}
     val budget=ledger.budgets.firstOrNull { it.categoryId==null } ?: ledger.budgets.firstOrNull()
     val planned=remember(ledger){ledger.entries.filter { it.status==EntryStatus.PLANNED }.sortedBy { it.day }.take(3)}
     BoxWithConstraints(Modifier.fillMaxSize()) {

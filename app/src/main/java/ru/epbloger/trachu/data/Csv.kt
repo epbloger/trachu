@@ -137,19 +137,22 @@ object Csv {
 
     fun merge(existing: Ledger, incoming: Ledger): Ledger {
         require(existing.baseCurrency == incoming.baseCurrency) { "Основные валюты различаются" }
-        fun <T> mergeList(kind: String, old: List<T>, new: List<T>, id: (T) -> String): List<T> {
+        fun <T> mergeList(kind: String, old: List<T>, new: List<T>,
+                          equivalent: (T,T) -> Boolean = { a,b -> a==b }, id: (T) -> String): List<T> {
             val merged = old.associateBy(id).toMutableMap()
             new.forEach {
                 val key = id(it)
-                require(merged[key] == null || merged[key] == it) { "Конфликт записи: $kind / $key" }
-                merged[key] = it
+                val previous=merged[key]
+                require(previous == null || equivalent(previous,it)) { "Конфликт записи: $kind / $key" }
+                if(previous==null)merged[key] = it
             }
             return merged.values.toList()
         }
         return Ledger(existing.baseCurrency,
             mergeList("account",existing.accounts,incoming.accounts) { it.id },
             mergeList("category",existing.categories,incoming.categories) { it.id },
-            mergeList("entry",existing.entries,incoming.entries) { it.id },
+            mergeList("entry",existing.entries,incoming.entries,
+                equivalent={ a,b -> a.copy(recordedAtMillis=0L)==b.copy(recordedAtMillis=0L) }) { it.id },
             mergeList("budget",existing.budgets,incoming.budgets) { it.id },
             mergeList("debt",existing.debts,incoming.debts) { it.id },
             mergeList("goal",existing.goals,incoming.goals) { it.id },

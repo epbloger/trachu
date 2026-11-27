@@ -750,7 +750,10 @@ internal fun refundCategoryTotal(amounts:Result<List<Pair<String,Long>>>):Long? 
                 val available=Finance.refundableSplits(l,entry.id,current?.id)
                 require(minor<=Money.sum(available.map{it.minor})){"Сумма возврата превышает доступный остаток покупки"}
                 if(selected!=null)require(selected.all{(id,value)->available.any{it.categoryId==id&&value<=it.minor}}){"Доступные суммы по категориям изменились. Проверьте возврат."}
-                Finance.putEntry(l,editorInput("Проверьте сумму и распределение возврата."){Finance.refund(l,entry.id,minor,date,note,current?.id ?: newId(),categoryAmounts=selected)})
+                Finance.putEntry(l,editorInput("Проверьте сумму и распределение возврата."){
+                    Finance.refund(l,entry.id,minor,date,note,current?.id ?: newId(),categoryAmounts=selected)
+                        .copy(timeMinutes=EntryOrder.manualTime(date,current))
+                })
             },close)
         }.onFailure{error=editorMessage(it,"Проверьте сумму и дату возврата.")}
     }) {

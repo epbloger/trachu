@@ -437,7 +437,8 @@ internal fun debtPaymentPreview(principal:String,interest:String,showInterest:Bo
                     }
                     val entry=runCatching{
                         Finance.makeEntry(updated,if(owed)Kind.LOAN_IN else Kind.LOAN_OUT,latestAccount.id,d.principalMinor,openedDay,
-                            note=note,explicitRate=openingRateValue,debtId=d.id,principalMinor=d.principalMinor)
+                            note=note,explicitRate=openingRateValue,debtId=d.id,principalMinor=d.principalMinor,
+                            timeMinutes=EntryOrder.manualTime(openedDay))
                     }.getOrElse{throw IllegalArgumentException("Не удалось пересчитать сумму займа по выбранному курсу")}
                     Finance.putEntry(updated,entry)
                 } else updated
@@ -519,7 +520,8 @@ internal fun debtPaymentPreview(principal:String,interest:String,showInterest:Bo
                 }
                 val e=runCatching{
                     Finance.makeEntry(l,if(latest.owedByMe)Kind.DEBT_OUT else Kind.DEBT_IN,account.id,sum,date,note=note,
-                        explicitRate=explicitRate,debtId=latest.id,principalMinor=p,id=original?.id ?: newId(),allowArchived=original!=null)
+                        explicitRate=explicitRate,debtId=latest.id,principalMinor=p,id=original?.id ?: newId(),allowArchived=original!=null,
+                        timeMinutes=EntryOrder.manualTime(date,original))
                 }.getOrElse{throw IllegalArgumentException("Не удалось пересчитать платёж по выбранному курсу")}
                 Finance.putEntry(l,e)
             },close)

@@ -75,6 +75,23 @@ class PortabilityTest {
         assertEquals(16,absolute.read(buffer))
         assertTrue(runCatching { absolute.read() }.isFailure)
     }
+    @Test fun operationOrderSurvivesExportsAndLegacyCsvMerge() {
+        val account=Account("a","Карта")
+        val base=Ledger.initial().copy(accounts=listOf(account))
+        val first=Finance.makeEntry(base,Kind.EXPENSE,"a",100,today(),listOf("food" to 100L),id="z-first").copy(recordedAtMillis=100L)
+        val second=Finance.makeEntry(base,Kind.EXPENSE,"a",200,today(),listOf("food" to 200L),id="a-second").copy(recordedAtMillis=101L)
+        val ledger=base.copy(entries=listOf(first,second)).validated()
+        val bytes=java.io.ByteArrayOutputStream()
+        Csv.write(ledger,bytes)
+        val imported=Csv.read(bytes.toByteArray().inputStream())
+        assertEquals(ledger.entries.associateBy{it.id},imported.entries.associateBy{it.id})
+        val legacy=ledger.copy(entries=ledger.entries.map{it.copy(recordedAtMillis=0L)})
+        assertEquals(ledger,Csv.merge(ledger,legacy))
+        assertTrue(runCatching{Csv.merge(ledger,legacy.copy(entries=listOf(first.copy(note="Другие данные"),second)))}.isFailure)
+        val backup=java.io.ByteArrayOutputStream()
+        Backup.write(ledger,"password123".toCharArray(),backup)
+        assertEquals(ledger,Backup.read("password123".toCharArray(),backup.toByteArray().inputStream()))
+    }
     @Test fun csvRoundTripAndIdempotence() {
         val out = ByteArrayOutputStream()
         Csv.write(original,out)
