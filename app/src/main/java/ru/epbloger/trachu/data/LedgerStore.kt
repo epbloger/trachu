@@ -254,6 +254,16 @@ class LedgerStore(private val db: TrachuDatabase) {
         }
     }
 
+    internal fun currentRateGeneration():Long = rateGeneration.get()
+
+    internal suspend fun mergeRatesIfCurrent(generation:Long,base:String,rates:List<FxRate>,requireAccounts:Boolean=false):Ledger =
+        change { current ->
+            if(rateGeneration.get()==generation && current.baseCurrency==base &&
+                (!requireAccounts || current.accounts.isNotEmpty()))
+                Finance.mergePublishedRates(current,base,rates)
+            else current
+        }
+
     suspend fun change(transform: (Ledger) -> Ledger): Ledger = db.withTransaction {
         val stats = dao.stats()
         val before = readSnapshot(stats)
@@ -283,6 +293,7 @@ class LedgerStore(private val db: TrachuDatabase) {
         val before = readSnapshot(dao.stats())
         require(before == expected) { "Данные изменились. Откройте подтверждение снова." }
         val next = Ledger.initial().validated()
+        rateGeneration.incrementAndGet()
         dao.clear()
         LedgerRecords.records(next).map { it.checkedSize() }.chunked(pageSize).forEach { dao.put(it) }
         next
@@ -291,6 +302,7 @@ class LedgerStore(private val db: TrachuDatabase) {
     suspend fun restore(ledger: Ledger): Ledger = db.withTransaction {
         val next = prune(ledger.validated())
         val stats = dao.stats()
+        rateGeneration.incrementAndGet()
         dao.clear()
         LedgerRecords.records(next).map{it.checkedSize()}.chunked(pageSize).forEach { dao.put(it) }
         checkGrowth(stats)
@@ -300,5 +312,10 @@ class LedgerStore(private val db: TrachuDatabase) {
         val now = java.time.LocalTime.now()
         return change { Finance.generate(it, through, throughMinutes = if(through==today()) now.hour*60+now.minute else null) }
     }
-    companion object { fun get(context: Context) = LedgerStore(TrachuDatabase.get(context)) }
+    companion object {
+        // No in-flight network request survives process death. Reject stale
+        // generations inside the same Room transaction as the financial write.
+        private val rateGeneration=java.util.concurrent.atomic.AtomicLong(0)
+        fun get(context: Context) = LedgerStore(TrachuDatabase.get(context))
+    }
 }

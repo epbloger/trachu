@@ -239,8 +239,7 @@ internal fun availableReportAccount(ledger:Ledger,selected:String):String =
         Finance.totals(reportLedger,prev)
     }
     val groups=remember(reportLedger,period){
-        val included=reportLedger.accounts.filter{it.includeInStats}.map{it.id}.toSet()
-        reportLedger.entries.filter { it.status==EntryStatus.POSTED && it.day in period && it.accountId in included }
+        Finance.reportEntries(reportLedger,period)
             .groupBy { if(length<=31) iso(it.day) else YearMonth.from(LocalDate.ofEpochDay(it.day)).toString() }
             .toSortedMap().map { (label,entries) ->
                 val p=Period(entries.minOf{it.day},entries.maxOf{it.day})
@@ -264,7 +263,7 @@ internal fun availableReportAccount(ledger:Ledger,selected:String):String =
                 PeriodControls(type,{type=it},period,{period=it},monthStart)
                 AccountChoice("Счёт в отчёте",reportAccount,ledger.accounts.filter{it.includeInStats},allLabel="Все счета отчётов"){selectedAccount=it}
                 if(selectedAccount!=reportAccount)Warning("Выбранный счёт недоступен. Показаны все счета отчётов. Для PDF выберите счёт или все счета.")
-                if(reportAccount.isNotEmpty())Text("Фильтр применяется к отчётам и PDF. Прогноз показывает все счета.",style=MaterialTheme.typography.bodySmall)
+                if(reportAccount.isNotEmpty())Text("Фильтр применяется к отчётам и PDF. Возвраты уменьшают расходы счёта покупки; прогноз показывает все счета.",style=MaterialTheme.typography.bodySmall)
             } }
             item {
                 Panel {
@@ -273,7 +272,7 @@ internal fun availableReportAccount(ledger:Ledger,selected:String):String =
                     Text("Доходы: "+Money.format(totals.income,ledger.baseCurrency),color=incomeColor(),style=MaterialTheme.typography.titleMedium)
                     Text("Расходы: "+Money.format(totals.expense,ledger.baseCurrency),color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.titleMedium)
                     Text("Средние расходы в день: "+Money.format(totals.expense/length,ledger.baseCurrency))
-                    val expenseEntries=reportLedger.entries.filter{it.status==EntryStatus.POSTED && it.day in period && it.kind in setOf(Kind.EXPENSE,Kind.REFUND) && reportLedger.accounts.any{a->a.id==it.accountId&&a.includeInStats}}
+                    val expenseEntries=Finance.reportEntries(reportLedger,period).filter{it.kind in setOf(Kind.EXPENSE,Kind.REFUND)}
                     val essential=Money.sum(expenseEntries.filter{it.essential}.map{if(it.kind==Kind.REFUND)-it.baseMinor else it.baseMinor})
                     val discretionary=Money.sum(expenseEntries.filterNot{it.essential}.map{if(it.kind==Kind.REFUND)-it.baseMinor else it.baseMinor})
                     Text("Обязательные траты: "+Money.format(essential,ledger.baseCurrency))

@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.work.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import ru.epbloger.trachu.core.Finance
 import ru.epbloger.trachu.core.today
 import ru.epbloger.trachu.data.ExchangeRates
 import ru.epbloger.trachu.data.LedgerStore
@@ -17,14 +16,13 @@ class RatesWorker(context:Context,params:WorkerParameters):CoroutineWorker(conte
         val preferences=Preferences(applicationContext)
         if(preferences.current().let{it.automaticRates&&it.onboardingCompleted}) {
             val store=LedgerStore.get(applicationContext)
+            val generation=store.currentRateGeneration()
             val ledger=store.current()
             if(ledger.accounts.isNotEmpty()) {
                 val base=ledger.baseCurrency
                 val published=withContext(Dispatchers.IO){ExchangeRates.fetch(base,today())}
                 if(preferences.current().automaticRates) {
-                    store.change { current ->
-                        if(current.baseCurrency==base&&current.accounts.isNotEmpty())Finance.mergePublishedRates(current,base,published) else current
-                    }
+                    store.mergeRatesIfCurrent(generation,base,published,requireAccounts=true)
                     refreshWidgets(applicationContext)
                 }
             }

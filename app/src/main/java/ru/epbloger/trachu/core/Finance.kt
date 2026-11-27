@@ -185,9 +185,20 @@ object Finance {
             day, note = note, tags = original.tags, splits = splits, originalId = originalId, rate = original.rate,
             essential = original.essential)
     }
+    /** Refunds reduce the original purchase in reports; cash balances
+     * follow the account actually credited by the refund. */
+    fun reportEntries(ledger:Ledger,period:Period):List<Entry> {
+        val included=ledger.accounts.filter{it.includeInStats}.map{it.id}.toSet()
+        val purchaseAccounts=ledger.entries.asSequence().filter{it.kind==Kind.EXPENSE}
+            .associate{it.id to it.accountId}
+        return ledger.entries.filter { entry ->
+            entry.status==EntryStatus.POSTED && entry.day in period &&
+                (if(entry.kind==Kind.REFUND)entry.originalId?.let(purchaseAccounts::get) else entry.accountId) in included
+        }
+    }
+
     fun totals(ledger: Ledger, period: Period): Totals {
-        val excluded=ledger.accounts.filterNot { it.includeInStats }.map { it.id }.toSet()
-        val posted = ledger.entries.filter { it.status == EntryStatus.POSTED && it.day in period && it.accountId !in excluded }
+        val posted = reportEntries(ledger,period)
         val income = Money.sum(posted.map {
             when (it.kind) {
                 Kind.INCOME -> it.baseMinor
@@ -200,8 +211,7 @@ object Finance {
     }
     fun byCategory(ledger: Ledger, period: Period, income: Boolean = false): Map<String, Long> {
         val kinds = if(income)setOf(Kind.INCOME,Kind.DEBT_IN) else setOf(Kind.EXPENSE,Kind.REFUND,Kind.DEBT_OUT)
-        val excluded=ledger.accounts.filterNot { it.includeInStats }.map { it.id }.toSet()
-        return ledger.entries.filter { it.status == EntryStatus.POSTED && it.day in period && it.kind in kinds && it.accountId !in excluded }
+        return reportEntries(ledger,period).filter { it.kind in kinds }
             .flatMap { e ->
                 when(e.kind) {
                     Kind.DEBT_IN->listOf(INTEREST_IN to interestBase(e)).filter{it.second!=0L}
@@ -211,7 +221,7 @@ object Finance {
             }.groupBy({it.first},{it.second}).mapValues{Money.sum(it.value)}
     }
     fun byTag(ledger: Ledger, period: Period): Map<String, Long> =
-        ledger.entries.filter { it.status == EntryStatus.POSTED && it.day in period && it.kind in setOf(Kind.EXPENSE, Kind.REFUND) && ledger.accounts.any { a -> a.id==it.accountId && a.includeInStats } }
+        reportEntries(ledger,period).filter { it.kind in setOf(Kind.EXPENSE, Kind.REFUND) }
             .flatMap { e -> e.tags.distinct().map { it to if (e.kind == Kind.REFUND) -e.baseMinor else e.baseMinor } }
             .groupBy({ it.first }, { it.second }).mapValues { Money.sum(it.value) }
     fun budget(ledger: Ledger, budget: Budget, day: Long): BudgetProgress {
@@ -219,12 +229,8 @@ object Finance {
         val start=YearMonth.from(LocalDate.ofEpochDay(budget.startMonth))
         if(target<start)return BudgetProgress(0,0)
         val first=if(budget.rollover)start else target
-        val included=ledger.accounts.filter{it.includeInStats}.map{it.id}.toSet()
         val ids=ledger.categories.filter{it.id==budget.categoryId || it.parentId==budget.categoryId}.map{it.id}.toSet()
-        val spentByMonth=ledger.entries.asSequence().filter{
-            it.status==EntryStatus.POSTED && it.accountId in included &&
-                it.day in first.atDay(1).toEpochDay()..day
-        }.map { entry ->
+        val spentByMonth=reportEntries(ledger,Period(first.atDay(1).toEpochDay(),day)).asSequence().map { entry ->
             val spent=if(budget.categoryId==null)expenseBase(entry)
             else if(entry.kind in setOf(Kind.EXPENSE,Kind.REFUND)) {
                 val value=Money.sum(entry.splits.filter{it.categoryId in ids}.map{it.baseMinor})

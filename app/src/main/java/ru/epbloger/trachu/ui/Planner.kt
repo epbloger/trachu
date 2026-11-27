@@ -12,6 +12,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.epbloger.trachu.AppViewModel
@@ -165,9 +167,9 @@ private fun PlannerTab.group()=when(this){
                     Panel {
                         SectionTitle("Платежи по датам",action="Добавить"){addPlanned(selectedDay)}
                         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){
-                            TextButton(modifier=Modifier.width(48.dp).testTag("calendar-prev"),onClick={val next=month.minusMonths(1);monthKey=next.toString();selectedDay=next.atDay(1).toEpochDay()}){Text("‹")}
+                            TextButton(modifier=Modifier.width(48.dp).testTag("calendar-prev").semantics{contentDescription="Предыдущий месяц"},onClick={val next=month.minusMonths(1);monthKey=next.toString();selectedDay=next.atDay(1).toEpochDay()}){Text("‹")}
                             Text(month.format(DateTimeFormatter.ofPattern("LLLL yyyy",Locale("ru"))),Modifier.weight(1f).testTag("calendar-month"),style=MaterialTheme.typography.titleMedium,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
-                            TextButton(modifier=Modifier.width(48.dp).testTag("calendar-next"),onClick={val next=month.plusMonths(1);monthKey=next.toString();selectedDay=next.atDay(1).toEpochDay()}){Text("›")}
+                            TextButton(modifier=Modifier.width(48.dp).testTag("calendar-next").semantics{contentDescription="Следующий месяц"},onClick={val next=month.plusMonths(1);monthKey=next.toString();selectedDay=next.atDay(1).toEpochDay()}){Text("›")}
                         }
                         BoxWithConstraints(Modifier.fillMaxWidth()){
                             val compact=maxWidth<290.dp || LocalDensity.current.fontScale>1.35f
@@ -197,13 +199,13 @@ private fun PlannerTab.group()=when(this){
                 }
                 item{
                     Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){
-                        TextButton(modifier=Modifier.width(48.dp).testTag("calendar-day-prev"),onClick={
+                        TextButton(modifier=Modifier.width(48.dp).testTag("calendar-day-prev").semantics{contentDescription="Предыдущий день"},onClick={
                             val next=LocalDate.ofEpochDay(selectedDay).minusDays(1)
                             selectedDay=next.toEpochDay()
                             monthKey=YearMonth.from(next).toString()
                         }){Text("‹")}
                         Text(dayLabel(selectedDay),Modifier.weight(1f).testTag("calendar-selected-day"),style=MaterialTheme.typography.titleLarge,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
-                        TextButton(modifier=Modifier.width(48.dp).testTag("calendar-day-next"),onClick={
+                        TextButton(modifier=Modifier.width(48.dp).testTag("calendar-day-next").semantics{contentDescription="Следующий день"},onClick={
                             val next=LocalDate.ofEpochDay(selectedDay).plusDays(1)
                             selectedDay=next.toEpochDay()
                             monthKey=YearMonth.from(next).toString()

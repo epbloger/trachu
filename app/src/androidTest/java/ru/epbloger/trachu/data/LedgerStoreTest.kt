@@ -68,6 +68,25 @@ class LedgerStoreTest {
         }finally{db.close()}
     }
 
+    @Test fun staleRateRequestsCannotRepopulateErasedOrRestoredLedger()=runBlocking {
+        val db=Room.inMemoryDatabaseBuilder(context,TrachuDatabase::class.java).build()
+        try {
+            val store=LedgerStore(db)
+            val other=LedgerStore(db)
+            store.restore(Ledger.initial().copy(accounts=listOf(Account("a","Карта"))))
+            val before=store.current()
+            val generation=other.currentRateGeneration()
+            val rates=listOf(FxRate("USD",today(),"90","CBR"))
+            store.eraseAllFinancialData(before,"УДАЛИТЬ")
+            other.mergeRatesIfCurrent(generation,"RUB",rates)
+            assertTrue(store.current().rates.isEmpty())
+            store.restore(before)
+            other.mergeRatesIfCurrent(generation,"RUB",rates,requireAccounts=true)
+            assertTrue(store.current().rates.isEmpty())
+            other.mergeRatesIfCurrent(other.currentRateGeneration(),"RUB",rates)
+            assertEquals("90",Finance.rate(store.current(),"USD",today()))
+        }finally{db.close()}
+    }
     @Test fun sameMinuteNewestFirstSurvivesDatabaseReopenAndEdits()=runBlocking {
         val name="entry-order-${newId()}.db"
         val account=Account("a","Карта",openingMinor=10000)

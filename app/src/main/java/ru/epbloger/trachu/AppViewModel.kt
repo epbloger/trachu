@@ -84,6 +84,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _converterRateStatus=MutableStateFlow<ConverterRateStatus?>(null)
     internal val converterRateStatus=_converterRateStatus.asStateFlow()
     private var converterRateJob:Job?=null
+    private var erasingFinancialData=false
     private val rateAttempts=mutableMapOf<Pair<String,Long>,Pair<Long,Boolean>>()
     // A replaceable transport makes the real UI refresh path deterministic in
     // instrumentation without relying on an external service or emulator network.
@@ -206,8 +207,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val protection=preferences.current()
         require(!protection.protected || _unlocked.value) { "Сначала разблокируйте приложение" }
         if(protection.protected)verifyPin(pin,protection)
-        // The transaction rejects changes made since the warning was opened.
-        store.eraseAllFinancialData(expected,confirmation)
+        erasingFinancialData=true
+        try {
+            converterRateJob?.cancel()
+            converterRateJob=null
+            _converterRateStatus.value=null
+            // The transaction rejects changes made since the warning was opened.
+            store.eraseAllFinancialData(expected,confirmation)
+        } finally { erasingFinancialData=false }
         _quick.value=null
         onboardingDraft=EntryDraft()
         converterDraft=EntryDraft()
@@ -250,7 +257,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     internal fun refreshConverterRates(day:Long, force:Boolean=false) {
         val base=_ledger.value?.baseCurrency ?: return
         val settings=_settings.value ?: return
-        if(day>today() || !settings.onboardingCompleted || settings.protected&&!_unlocked.value)return
+        if(erasingFinancialData || day>today() || !settings.onboardingCompleted || settings.protected&&!_unlocked.value)return
         if(!force&&!settings.automaticRates)return
         val key=base to day
         if(converterRateJob?.isActive==true && _converterRateStatus.value?.let{it.base==base&&it.day==day}==true)return
@@ -258,12 +265,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if(!force&&rateAttempts[key]?.let{(time,success)->now-time < if(success) 30*60_000L else 60_000L}==true)return
         converterRateJob?.cancel()
         _converterRateStatus.value=ConverterRateStatus(base,day,true)
+        val generation=store.currentRateGeneration()
         converterRateJob=viewModelScope.launch {
             try {
                 val rates=withContext(Dispatchers.IO){converterRateFetcher(base,day)}
                 require(rates.isNotEmpty()&&rates.all{it.day<=day}){"ЦБ РФ не вернул курсы на эту дату"}
                 if(!force&&!preferences.current().automaticRates)return@launch
-                store.change { l -> if(l.baseCurrency==base)Finance.mergePublishedRates(l,base,rates) else l }
+                store.mergeRatesIfCurrent(generation,base,rates)
                 rateAttempts[key]=android.os.SystemClock.elapsedRealtime() to true
                 _converterRateStatus.value=ConverterRateStatus(base,day,false)
             } catch(e:kotlinx.coroutines.CancellationException){throw e}
@@ -279,9 +287,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if(rateAttempts.size>128)rateAttempts.entries.removeAll{now-it.value.first>30*60_000L}
     }
     fun fetchRates(day: Long) = perform {
+        val generation=store.currentRateGeneration()
         val base=store.current().baseCurrency
         val rates=withContext(Dispatchers.IO) { ExchangeRates.fetch(base,day) }
-        store.change { l -> Finance.mergePublishedRates(l,base,rates) }
+        store.mergeRatesIfCurrent(generation,base,rates)
         _message.value="Курсы сохранены"
     }
     fun export(uri: Uri, mode: String, password: String="", period: Period=Period.month(), accountId:String="") = perform {

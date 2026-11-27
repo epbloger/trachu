@@ -56,6 +56,7 @@ object PdfReport {
             newPage()
             row(if(accountId.isEmpty())"Счета: все включённые в отчёты" else "Счёт: "+ledger.accounts.first{it.id==accountId}.name)
             row("Переводы и основной долг не входят в доходы и расходы.",false)
+            row("Возвраты уменьшают расходы счёта исходной покупки.",false)
             val totals=Finance.totals(report,period)
             row("Доходы: ${Money.format(totals.income,ledger.baseCurrency)}",true)
             row("Расходы: ${Money.format(totals.expense,ledger.baseCurrency)}",true)
@@ -71,10 +72,15 @@ object PdfReport {
             }
             y+=12
             row("Операции",true)
-            ledger.entries.filter { it.status==EntryStatus.POSTED && it.day in period && (it.accountId in included || it.targetAccountId in included) }.sortedWith(EntryOrder.newestFirst).forEach { e ->
+            val reported=Finance.reportEntries(report,period)
+            val incomingTransfers=ledger.entries.filter { it.kind==Kind.TRANSFER && it.status==EntryStatus.POSTED && it.day in period && it.targetAccountId in included }
+            (reported+incomingTransfers).distinctBy{it.id}.sortedWith(EntryOrder.newestFirst).forEach { e ->
                 val a=ledger.accounts.first { it.id==e.accountId }
                 val kind=when(e.kind) { Kind.EXPENSE->"Расход"; Kind.INCOME->"Доход"; Kind.TRANSFER->"Перевод"; Kind.REFUND->"Возврат"; Kind.DEBT_IN,Kind.DEBT_OUT->"Погашение долга"; Kind.LOAN_IN,Kind.LOAN_OUT->"Получение / выдача займа" }
                 row("${LocalDate.ofEpochDay(e.day)}  $kind  ${Money.format(e.minor,a.currency)}  ${a.name}")
+                if(e.kind==Kind.REFUND)ledger.entries.find{it.id==e.originalId}?.let{purchase->
+                    if(purchase.accountId!=a.id)row("  Счёт покупки: "+ledger.accounts.first{it.id==purchase.accountId}.name)
+                }
                 if(e.targetAccountId!=null && e.targetMinor!=null) {
                     val target=ledger.accounts.first{it.id==e.targetAccountId}
                     row("  → ${target.name}: ${Money.format(e.targetMinor,target.currency)}")
