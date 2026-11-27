@@ -30,8 +30,10 @@ for (const page of pages) {
   }
 }
 const index = fs.readFileSync(path.join(output, 'index.html'), 'utf8');
-for (const m of index.matchAll(/\bdata-screen="([^"]+)"/g)) {
-  assert.ok(index.includes(`id="${m[1]}"`), `Missing demo screen ${m[1]}`);
-}
-assert.match(index, /id="theme-toggle"/);
-console.log('Site checks passed: four pages, local links, unique IDs, demo targets, synchronized legal documents.');
+const promos = [...index.matchAll(/src="assets\/(promo-[^"]+\.svg)"/g)].map(m => m[1]);
+assert.deepEqual(promos, ['promo-balance.svg','promo-analytics.svg','promo-goals.svg']);
+assert.doesNotMatch(index, /assets\/screens\/|actions\/runs\/|CI #|\bQA\b/);
+const readme=fs.readFileSync(path.join(root,'README.md'),'utf8');
+for(const image of promos) assert.ok(readme.includes('site/assets/'+image), 'Missing README promo '+image);
+assert.doesNotMatch(readme, /assets\/screens\/|actions\/runs\/|CI #|\bQA\b/);
+console.log('Site checks passed: four pages, links, three promo illustrations and synchronized legal documents.');
