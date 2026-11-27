@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">ТРАЧУ.</string>
     <string name="widget_name">ТРАЧУ. — баланс и операции</string>
-    <string name="widget_description">Баланс и быстрый ввод расхода или дохода</string>
+    <string name="widget_description">Баланс, доходы и расходы за месяц, быстрый ввод операций</string>
 </resources>

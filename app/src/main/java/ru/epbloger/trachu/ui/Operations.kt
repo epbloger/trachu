@@ -45,7 +45,7 @@ import ru.epbloger.trachu.core.*
     BoxWithConstraints(Modifier.fillMaxSize()) {
       val wide=maxWidth>=760.dp && LocalDensity.current.fontScale<1.5f
       Row(Modifier.fillMaxSize()) {
-       LazyColumn(modifier=Modifier.weight(1f).testTag("operations-list"),contentPadding=PaddingValues(start=20.dp,end=20.dp,top=20.dp,bottom=96.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+       LazyColumn(modifier=Modifier.weight(1f).testTag("operations-list"),contentPadding=PaddingValues(start=PageInset,end=PageInset,top=PageInset,bottom=96.dp),verticalArrangement=Arrangement.spacedBy(SectionGap)) {
          item { SectionTitle("Операции") }
         item {
             Field("Поиск по сумме, заметке, тегу",query,{query=it})
