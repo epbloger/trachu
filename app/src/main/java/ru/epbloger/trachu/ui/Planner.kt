@@ -112,7 +112,7 @@ private fun PlannerTab.group()=when(this){
                     val left=Finance.debtRemaining(ledger,d)
                     val unpaidInterest=debtUnpaidInterestEstimate(ledger,d)
                     val outstanding=Finance.debtHasOutstandingAmount(ledger,d)
-                    val canPay=outstanding&&!a.archived
+                    val canPay=outstanding&&ledger.accounts.any{!it.archived&&it.currency==a.currency}
                     Panel {
                         SectionTitle(d.person,if(d.owedByMe)"Я должен" else "Мне должны",action="Изменить"){editDebt(d)}
                         MoneyText(left,a.currency,large=true,color=if(d.owedByMe)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
@@ -131,7 +131,7 @@ private fun PlannerTab.group()=when(this){
                             Text("Простая оценка Actual/365, без банковского графика и капитализации.",style=MaterialTheme.typography.bodySmall)
                         }
                         d.dueDay?.let{Text("Срок: "+dayLabel(it),color=if(it<today()&&outstanding)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)}
-                        if(outstanding&&a.archived)Warning("Для погашения восстановите счёт из архива.")
+                        if(outstanding&&!canPay)Warning("Для погашения нужен активный счёт в валюте долга (${a.currency}).")
                         if(d.note.isNotBlank())Text(d.note)
                         Button(onClick={payDebt(d)},enabled=canPay,modifier=Modifier.fillMaxWidth().testTag("debt-pay:${d.id}"),colors=moneyActionColors(!d.owedByMe)){
                             Text(when {
@@ -165,9 +165,9 @@ private fun PlannerTab.group()=when(this){
                     Panel {
                         SectionTitle("Платежи по датам",action="Добавить"){addPlanned(selectedDay)}
                         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){
-                            TextButton(onClick={val next=month.minusMonths(1);monthKey=next.toString();selectedDay=next.atDay(1).toEpochDay()}){Text("‹")}
-                            Text(month.format(DateTimeFormatter.ofPattern("LLLL yyyy",Locale("ru"))),Modifier.weight(1f),style=MaterialTheme.typography.titleMedium)
-                            TextButton(modifier=Modifier.testTag("calendar-next"),onClick={val next=month.plusMonths(1);monthKey=next.toString();selectedDay=next.atDay(1).toEpochDay()}){Text("›")}
+                            TextButton(modifier=Modifier.width(48.dp).testTag("calendar-prev"),onClick={val next=month.minusMonths(1);monthKey=next.toString();selectedDay=next.atDay(1).toEpochDay()}){Text("‹")}
+                            Text(month.format(DateTimeFormatter.ofPattern("LLLL yyyy",Locale("ru"))),Modifier.weight(1f).testTag("calendar-month"),style=MaterialTheme.typography.titleMedium,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+                            TextButton(modifier=Modifier.width(48.dp).testTag("calendar-next"),onClick={val next=month.plusMonths(1);monthKey=next.toString();selectedDay=next.atDay(1).toEpochDay()}){Text("›")}
                         }
                         BoxWithConstraints(Modifier.fillMaxWidth()){
                             val compact=maxWidth<290.dp || LocalDensity.current.fontScale>1.35f
@@ -195,8 +195,22 @@ private fun PlannerTab.group()=when(this){
                         }
                     }
                 }
-                item{Text(dayLabel(selectedDay),style=MaterialTheme.typography.titleLarge)}
-                val selected=calendar.filter{it.day==selectedDay}.sortedBy{it.timeMinutes}
+                item{
+                    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){
+                        TextButton(modifier=Modifier.width(48.dp).testTag("calendar-day-prev"),onClick={
+                            val next=LocalDate.ofEpochDay(selectedDay).minusDays(1)
+                            selectedDay=next.toEpochDay()
+                            monthKey=YearMonth.from(next).toString()
+                        }){Text("‹")}
+                        Text(dayLabel(selectedDay),Modifier.weight(1f).testTag("calendar-selected-day"),style=MaterialTheme.typography.titleLarge,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+                        TextButton(modifier=Modifier.width(48.dp).testTag("calendar-day-next"),onClick={
+                            val next=LocalDate.ofEpochDay(selectedDay).plusDays(1)
+                            selectedDay=next.toEpochDay()
+                            monthKey=YearMonth.from(next).toString()
+                        }){Text("›")}
+                    }
+                }
+                val selected=calendar.filter{it.day==selectedDay}.sortedWith(EntryOrder.newestFirst)
                 val obligations=ledger.debts.filter{it.dueDay==selectedDay&&Finance.debtHasOutstandingAmount(ledger,it)}
                 val goals=ledger.goals.filter{it.dueDay==selectedDay}
                 if(selected.isEmpty() && obligations.isEmpty() && goals.isEmpty())item{Text("Нет событий в этот день.")}
@@ -448,7 +462,7 @@ internal fun debtPaymentPreview(principal:String,interest:String,showInterest:Bo
         Field(if(owed)"Кому я должен" else "Кто должен мне",person,{person=it;error=""})
         if(!paid && original?.openedDay==null){
             Chips(listOf(true,false),owed,{if(it)"Я должен" else "Мне должны"}){owed=it}
-            AccountChoice("Счёт погашения",accountId,ledger.accounts.filter{!it.archived||it.id==accountId}){accountId=it}
+            AccountChoice("Счёт займа",accountId,ledger.accounts.filter{!it.archived||it.id==accountId}){accountId=it}
         }else Text((if(owed)"Я должен" else "Мне должны")+" · "+ledger.accountName(accountId))
         if(original?.openedDay==null)Field("Сумма долга (${account?.currency ?: ledger.baseCurrency})",amount,{amount=it;error=""},true)
         else if(account!=null)Text("Основная сумма: "+Money.format(original?.principalMinor ?: 0L,account.currency))
@@ -479,6 +493,12 @@ internal fun debtPaymentPreview(principal:String,interest:String,showInterest:Bo
     val original = draft.state("originalPayment"){current}.value
     val originalDebt = draft.state("originalDebt"){debt}.value
     val a=ledger.accounts.first{it.id==debt.accountId}
+    val paymentAccounts=ledger.accounts.filter{it.currency==a.currency&&(!it.archived||it.id==original?.accountId)}
+        .sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name})
+    var paymentAccountId by draft.state("paymentAccountId"){
+        original?.accountId ?: paymentAccounts.firstOrNull{it.id==debt.accountId}?.id
+            ?: paymentAccounts.firstOrNull()?.id.orEmpty()
+    }
     val remaining=Money.add(Finance.debtRemaining(ledger,debt),current?.principalMinor ?: 0)
     var principal by draft.state("principal"){Money.input(original?.principalMinor ?: remaining,a.currency)}
     var interest by draft.state("interest"){original?.let{Money.input(it.minor-it.principalMinor,a.currency)} ?: "0"}
@@ -505,14 +525,16 @@ internal fun debtPaymentPreview(principal:String,interest:String,showInterest:Bo
             require(date<=today()){"Дата платежа не может быть в будущем"}
             require(debt.openedDay==null||date>=debt.openedDay){"Дата платежа не может быть раньше даты займа"}
             require(note.trim().length<=8000){"Комментарий не должен быть длиннее 8000 символов"}
+            require(paymentAccounts.any{it.id==paymentAccountId}){"Выберите счёт платежа"}
             val explicitRate=if(currency!=ledger.baseCurrency)plannerRateOrNull(rate,"Курс погашения") else null
             vm.change({l->
                 val latest=requireNotNull(l.debts.find{it.id==debt.id}){"Долг удалён"}
                 require(latest==originalDebt){"Долг изменился. Откройте платёж снова."}
                 if(original!=null)require(l.entries.find{it.id==original.id}==original){"Платёж изменился. Откройте его снова."}
-                val account=requireNotNull(l.accounts.find{it.id==latest.accountId}){"Счёт удалён"}
+                val account=requireNotNull(l.accounts.find{it.id==paymentAccountId}){"Выберите счёт платежа"}
+                require(l.accounts.find{it.id==latest.accountId}?.currency==currency){"Валюта долга изменилась. Откройте платёж снова."}
                 require(account.currency==currency){"Валюта счёта изменилась. Откройте платёж снова."}
-                require(!account.archived||original!=null){"Сначала восстановите счёт из архива"}
+                require(!account.archived||original?.accountId==account.id){"Выберите активный счёт"}
                 val available=Money.add(Finance.debtRemaining(l,latest),original?.principalMinor ?: 0)
                 require(p<=available){"Основной платёж больше остатка долга"}
                 require(account.currency==l.baseCurrency||explicitRate!=null||Finance.rate(l,account.currency,date)!=null){
@@ -520,7 +542,7 @@ internal fun debtPaymentPreview(principal:String,interest:String,showInterest:Bo
                 }
                 val e=runCatching{
                     Finance.makeEntry(l,if(latest.owedByMe)Kind.DEBT_OUT else Kind.DEBT_IN,account.id,sum,date,note=note,
-                        explicitRate=explicitRate,debtId=latest.id,principalMinor=p,id=original?.id ?: newId(),allowArchived=original!=null,
+                        explicitRate=explicitRate,debtId=latest.id,principalMinor=p,id=original?.id ?: newId(),allowArchived=original?.accountId==account.id,
                         timeMinutes=EntryOrder.manualTime(date,original))
                 }.getOrElse{throw IllegalArgumentException("Не удалось пересчитать платёж по выбранному курсу")}
                 Finance.putEntry(l,e)
@@ -529,7 +551,9 @@ internal fun debtPaymentPreview(principal:String,interest:String,showInterest:Bo
     },compact=true,validationError=error){
         Text(debt.person,style=MaterialTheme.typography.titleMedium)
         Text("Остаток долга: "+Money.format(remaining,currency))
-        Text((if(debt.owedByMe)"Списать со счёта: " else "Зачислить на счёт: ")+accountChoiceLabel(a),style=MaterialTheme.typography.bodySmall)
+        AccountChoice(if(debt.owedByMe)"Списать со счёта" else "Зачислить на счёт",paymentAccountId,paymentAccounts){paymentAccountId=it;error=""}
+        if(paymentAccounts.isEmpty())Warning("Нет активных счетов в валюте долга ($currency).")
+        else if(ledger.accounts.any{!it.archived&&it.currency!=currency})Text("Платёж в валюте долга ($currency). Для другой валюты сначала выполните перевод между счетами.",style=MaterialTheme.typography.bodySmall)
         Field("Основной долг",principal,{principal=it;error=""},true,supporting="Сумма, на которую уменьшится долг")
         if(showInterest){
             Field("Проценты",interest,{interest=it;error=""},true,supporting=if(debt.owedByMe)"Только фактически уплаченные проценты" else "Только фактически полученные проценты")

@@ -331,7 +331,6 @@ internal class Editor(val type:String,val id:String?=null,val kind:Kind=Kind.EXP
                 Column(Modifier.then(if(visible)Modifier else Modifier.clearAndSetSemantics{}).fillMaxHeight().verticalScroll(rememberScrollState()).padding(horizontal=12.dp),
                     verticalArrangement=Arrangement.spacedBy(2.dp)){
                     Text("ТРАЧУ.",style=MaterialTheme.typography.headlineLarge,color=MaterialTheme.colorScheme.primary,modifier=Modifier.padding(16.dp))
-                    Text("Личные финансы",style=MaterialTheme.typography.bodyMedium,modifier=Modifier.padding(horizontal=16.dp))
                     Spacer(Modifier.height(8.dp))
                     drawerPages.forEach{page->
                         if(page==MorePage.ACCOUNTS || page==MorePage.DATA){

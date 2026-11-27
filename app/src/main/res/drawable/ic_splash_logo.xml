@@ -1,0 +1,19 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt" android:width="288dp" android:height="288dp" android:viewportWidth="288" android:viewportHeight="288">
+    <!-- Keep the complete 132dp brand tile inside Android's 192dp safe circle. -->
+    <path android:pathData="M108,78 H180 Q210,78 210,108 V180 Q210,210 180,210 H108 Q78,210 78,180 V108 Q78,78 108,78 Z">
+        <aapt:attr name="android:fillColor"><gradient android:type="linear" android:startX="78" android:startY="78" android:endX="210" android:endY="210" android:startColor="#8421A8" android:centerColor="#290B63" android:endColor="#5B21CF"/></aapt:attr>
+    </path>
+    <path android:pathData="M113,115 L169,100 Q181,96 181,108 V135 H109 Q103,127 113,115 Z">
+        <aapt:attr name="android:fillColor"><gradient android:startX="110" android:startY="101" android:endX="180" android:endY="140" android:startColor="#E7CFFF" android:endColor="#6F2DCC"/></aapt:attr>
+    </path>
+    <path android:pathData="M115,120 H166 Q181,120 181,135 V164 Q181,180 166,180 H118 Q106,180 106,168 V134 Q106,124 115,120 Z">
+        <aapt:attr name="android:fillColor"><gradient android:startX="106" android:startY="120" android:endX="181" android:endY="180" android:startColor="#D6A5FF" android:centerColor="#8F40DF" android:endColor="#4F1BA7"/></aapt:attr>
+    </path>
+    <path android:pathData="M114,120 H173 Q181,120 181,128 Q181,135 173,135 H151 V180 H136 V135 H114 Q106,135 106,128 Q106,120 114,120 Z">
+        <aapt:attr name="android:fillColor"><gradient android:startX="106" android:startY="120" android:endX="151" android:endY="180" android:startColor="#FFF2FF" android:endColor="#D7B2FA"/></aapt:attr>
+    </path>
+    <path android:pathData="M169,144 H179 Q185,144 185,150 V157 Q185,163 179,163 H169 Q161,163 161,154 Q161,144 169,144 Z">
+        <aapt:attr name="android:fillColor"><gradient android:startX="161" android:startY="144" android:endX="185" android:endY="163" android:startColor="#C98BF8" android:endColor="#7134C5"/></aapt:attr>
+    </path>
+    <path android:fillColor="#F3D9FF" android:pathData="M169,150 A4,4 0,1 0,169 158 A4,4 0,1 0,169 150 Z"/>
+</vector>

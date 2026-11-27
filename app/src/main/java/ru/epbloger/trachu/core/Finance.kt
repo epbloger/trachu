@@ -159,9 +159,13 @@ object Finance {
         }.filter { it.minor > 0 }
     }
     fun refund(ledger: Ledger, originalId: String, amount: Long, day: Long, note: String = "", id: String = newId(),
-               categoryAmounts: List<Pair<String, Long>>? = null): Entry {
+               categoryAmounts: List<Pair<String, Long>>? = null, accountId: String? = null): Entry {
         val original = ledger.entries.first { it.id == originalId && it.kind == Kind.EXPENSE && it.status == EntryStatus.POSTED }
         require(day >= original.day && amount > 0)
+        val source = ledger.accounts.first { it.id == original.accountId }
+        val destination = requireNotNull(ledger.accounts.find { it.id == (accountId ?: source.id) }) { "Выберите счёт возврата" }
+        require(destination.currency == source.currency) { "Валюта счёта возврата должна совпадать с валютой покупки" }
+        require(!destination.archived || destination.id == source.id || ledger.entries.any { it.id == id && it.kind == Kind.REFUND && it.originalId == originalId && it.accountId == destination.id }) { "Выберите активный счёт" }
         val remaining = refundableSplits(ledger, originalId, id)
         require(amount <= Money.sum(remaining.map { it.minor })) { "Возврат превышает остаток покупки" }
         val requested = categoryAmounts?.also { amounts ->
@@ -177,7 +181,7 @@ object Finance {
                 Money.share(split.baseMinor, take, split.minor))
         }
         require(left == 0L)
-        return Entry(id, Kind.REFUND, original.accountId, amount, Money.sum(splits.map { it.baseMinor }),
+        return Entry(id, Kind.REFUND, destination.id, amount, Money.sum(splits.map { it.baseMinor }),
             day, note = note, tags = original.tags, splits = splits, originalId = originalId, rate = original.rate,
             essential = original.essential)
     }
@@ -499,7 +503,7 @@ fun Ledger.validated(): Ledger {
                 if (e.kind == Kind.REFUND) {
                     require(!template && e.status == EntryStatus.POSTED)
                     val o = requireNotNull(ee[e.originalId])
-                    require(o.kind == Kind.EXPENSE && o.status == EntryStatus.POSTED && o.accountId == e.accountId && o.day <= e.day && o.rate == e.rate)
+                    require(o.kind == Kind.EXPENSE && o.status == EntryStatus.POSTED && aa[o.accountId]?.currency == account.currency && o.day <= e.day && o.rate == e.rate)
                     require(e.splits.all { s -> o.splits.any { it.categoryId == s.categoryId } })
                 } else require(e.originalId == null)
             }
@@ -516,7 +520,7 @@ fun Ledger.validated(): Ledger {
                 } else {
                     if(debt.owedByMe) Kind.DEBT_OUT else Kind.DEBT_IN
                 }
-                require(debt.accountId == e.accountId && e.kind == expected)
+                require(e.kind == expected && if(opening) debt.accountId == e.accountId else aa[debt.accountId]?.currency == account.currency)
                 require(e.principalMinor in 0..e.minor && e.splits.isEmpty() && e.originalId == null && e.targetAccountId == null && e.targetMinor == null)
                 if(opening) require(e.principalMinor == debt.principalMinor && e.minor == debt.principalMinor && debt.openedDay == e.day)
                 else require(debt.openedDay == null || e.day >= debt.openedDay)

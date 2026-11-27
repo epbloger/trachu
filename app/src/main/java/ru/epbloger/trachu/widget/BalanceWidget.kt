@@ -49,7 +49,7 @@ class BalanceWidget : GlanceAppWidget() {
         val tall=LocalSize.current.height>=184.dp
         val white=ColorProvider(Color(0xFFF9F7FF))
         val muted=ColorProvider(Color(0xFFCEC5EC))
-        Column(GlanceModifier.fillMaxSize().background(ImageProvider(R.drawable.widget_background)).padding(12.dp),
+        Column(GlanceModifier.fillMaxSize().background(Color(0xFF33294F)).cornerRadius(24.dp).padding(12.dp),
             verticalAlignment=Alignment.CenterVertically) {
             Row(GlanceModifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                 Text("ТРАЧУ.",modifier=GlanceModifier.defaultWeight(),style=TextStyle(color=muted,fontWeight=FontWeight.Bold,fontSize=12.sp))

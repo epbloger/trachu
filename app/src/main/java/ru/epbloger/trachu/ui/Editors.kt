@@ -723,6 +723,9 @@ internal fun refundCategoryTotal(amounts:Result<List<Pair<String,Long>>>):Long? 
 
 @Composable fun RefundEditor(ledger: Ledger, entry: Entry, vm: AppViewModel,busy:Boolean,close:()->Unit,current:Entry?=null, draft:EntryDraft) {
     val account=ledger.accounts.first{it.id==entry.accountId}
+    val refundAccounts=ledger.accounts.filter{it.currency==account.currency&&(!it.archived||it.id==entry.accountId||it.id==current?.accountId)}
+        .sortedWith(compareBy<Account>{it.sortOrder}.thenBy{it.name})
+    var refundAccountId by draft.state("refundAccountId"){current?.accountId ?: entry.accountId}
     val left=Money.sub(entry.minor,Money.sum(ledger.entries.filter{it.originalId==entry.id&&it.id!=current?.id}.map{it.minor}))
     var amount by draft.state("amount"){Money.input(current?.minor ?: left,account.currency)}
     var day by draft.state("day"){iso(current?.day ?: today())}
@@ -743,6 +746,7 @@ internal fun refundCategoryTotal(amounts:Result<List<Pair<String,Long>>>):Long? 
             require(minor>0){"Введите положительную сумму возврата"}
             require(minor<=left){"Сумма возврата превышает доступный остаток покупки"}
             requireEditorNote(note)
+            require(refundAccounts.any{it.id==refundAccountId}){"Выберите счёт возврата"}
             if(selected!=null)require(selected.all{(id,value)->value>0 && refundable.any{it.categoryId==id && value<=it.minor}}){"Проверьте доступные суммы по категориям"}
             vm.change({l->
                 require(l.entries.find{it.id==entry.id}==entry){"Покупка изменилась. Откройте её снова."}
@@ -751,13 +755,15 @@ internal fun refundCategoryTotal(amounts:Result<List<Pair<String,Long>>>):Long? 
                 require(minor<=Money.sum(available.map{it.minor})){"Сумма возврата превышает доступный остаток покупки"}
                 if(selected!=null)require(selected.all{(id,value)->available.any{it.categoryId==id&&value<=it.minor}}){"Доступные суммы по категориям изменились. Проверьте возврат."}
                 Finance.putEntry(l,editorInput("Проверьте сумму и распределение возврата."){
-                    Finance.refund(l,entry.id,minor,date,note,current?.id ?: newId(),categoryAmounts=selected)
+                    Finance.refund(l,entry.id,minor,date,note,current?.id ?: newId(),categoryAmounts=selected,accountId=refundAccountId)
                         .copy(timeMinutes=EntryOrder.manualTime(date,current))
                 })
             },close)
         }.onFailure{error=editorMessage(it,"Проверьте сумму и дату возврата.")}
     }) {
         Text(ledger.entryName(entry));Text("Максимум: "+Money.format(left,account.currency))
+        AccountChoice("Зачислить на счёт",refundAccountId,refundAccounts){refundAccountId=it;error=""}
+        if(ledger.accounts.any{!it.archived&&it.currency!=account.currency})Text("Возврат записывается в валюте покупки (${account.currency}).",style=MaterialTheme.typography.bodySmall)
         if(entry.splits.size>1)Toggle("Выбрать категории возврата",byCategory,{byCategory=it},"Укажите, какие части покупки были возвращены.")
         if(byCategory) {
             refundable.forEach { split->

@@ -77,6 +77,31 @@ class PlannerUxTest {
         awaitTag("planner-list")
     }
 
+    @Test fun calendarDayArrowsCrossMonthBoundaryAndShowNewestFirst(){
+        val currency=runBlocking{store.current().baseCurrency}
+        val account=Account(name="Календарь ${newId()}",currency=currency,openingMinor=50000)
+        val first=java.time.YearMonth.now().atDay(1).toEpochDay()
+        val early=Finance.makeEntry(Ledger.initial().copy(baseCurrency=currency,accounts=listOf(account)),Kind.INCOME,account.id,100,first,listOf("salary" to 100L),note="Ранняя операция",timeMinutes=60)
+        val late=early.copy(id=newId(),timeMinutes=120,note="Поздняя операция")
+        runBlocking{store.change{it.copy(accounts=it.accounts+account,entries=it.entries+listOf(early,late))}}
+        try{
+            awaitLedger{it.entries.any{e->e.id==late.id}}
+            openPlanner()
+            plannerClick("planner-group-payments")
+            plannerClick("calendar-next")
+            plannerClick("calendar-prev")
+            plannerReveal("calendar-selected-day").assertTextEquals(dayLabel(first))
+            plannerClick("calendar-day-prev")
+            plannerReveal("calendar-selected-day").assertTextEquals(dayLabel(first-1))
+            plannerClick("calendar-day-next")
+            plannerReveal("calendar-selected-day").assertTextEquals(dayLabel(first))
+            val matching=runBlocking{store.current()}.entries.filter{it.id==early.id||it.id==late.id}.sortedWith(EntryOrder.newestFirst)
+            assertEquals(listOf(late.id,early.id),matching.map{it.id})
+        }finally{
+            runBlocking{store.change{it.copy(entries=it.entries.filterNot{e->e.accountId==account.id},accounts=it.accounts.filterNot{a->a.id==account.id})}}
+        }
+    }
+
     @Test fun groupedNavigationAndGoalAdjustments(){
         val goal=Goal(name="Отпуск",targetMinor=10000,savedMinor=1000)
         val account=Account(name="Накопительный счёт",currency="RUB",openingMinor=50000)
@@ -234,8 +259,9 @@ class PlannerUxTest {
 
     @Test fun principalAndInterestAreRecordedExactlyOnce(){
         val account=Account(name="Основная карта",currency=runBlocking{store.current().baseCurrency},openingMinor=50000)
+        val other=Account(name="Другая карта",currency=account.currency,openingMinor=60000)
         val debt=Debt(person="Алексей (пример)",accountId=account.id,owedByMe=true,principalMinor=10000)
-        runBlocking{store.change{it.copy(accounts=it.accounts+account,debts=it.debts+debt)}}
+        runBlocking{store.change{it.copy(accounts=it.accounts+listOf(account,other),debts=it.debts+debt)}}
         try{
             awaitLedger{it.debts.any{d->d.id==debt.id}}
             openPlanner()
@@ -246,6 +272,8 @@ class PlannerUxTest {
             capture("debts")
             plannerClick("debt-pay:${debt.id}")
             awaitTag("field:Основной долг")
+            rule.onNodeWithTag("choice:Списать со счёта").performScrollTo().performClick()
+            rule.onNodeWithTag("choice-option:Списать со счёта:${other.id}").performClick()
             val principal=Money.input(2500,account.currency)
             val interest=Money.input(500,account.currency)
             enter("field:Основной долг",principal)
@@ -269,11 +297,13 @@ class PlannerUxTest {
             assertEquals(2500L,payment.principalMinor)
             assertEquals(3000L,payment.minor)
             assertEquals(7500L,Finance.debtRemaining(after,debt))
-            assertEquals(47000L,Finance.balance(after,account.id))
+            assertEquals(other.id,payment.accountId)
+            assertEquals(50000L,Finance.balance(after,account.id))
+            assertEquals(57000L,Finance.balance(after,other.id))
             assertEquals(500L,Finance.totals(after.copy(entries=listOf(payment)),Period(today(),today())).expense)
         }finally{
             rule.activityRule.scenario.onActivity{ViewModelProvider(it)[AppViewModel::class.java].editor=null}
-            runBlocking{store.change{it.copy(entries=it.entries.filterNot{e->e.debtId==debt.id},debts=it.debts.filterNot{d->d.id==debt.id},accounts=it.accounts.filterNot{a->a.id==account.id})}}
+            runBlocking{store.change{it.copy(entries=it.entries.filterNot{e->e.debtId==debt.id},debts=it.debts.filterNot{d->d.id==debt.id},accounts=it.accounts.filterNot{a->a.id==account.id||a.id==other.id})}}
         }
     }
 
