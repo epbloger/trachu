@@ -1,19 +1,61 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt" android:width="288dp" android:height="288dp" android:viewportWidth="288" android:viewportHeight="288">
-    <!-- Keep the complete 132dp brand tile inside Android's 192dp safe circle. -->
-    <path android:pathData="M108,78 H180 Q210,78 210,108 V180 Q210,210 180,210 H108 Q78,210 78,180 V108 Q78,78 108,78 Z">
-        <aapt:attr name="android:fillColor"><gradient android:type="linear" android:startX="78" android:startY="78" android:endX="210" android:endY="210" android:startColor="#8421A8" android:centerColor="#290B63" android:endColor="#5B21CF"/></aapt:attr>
-    </path>
-    <path android:pathData="M113,115 L169,100 Q181,96 181,108 V135 H109 Q103,127 113,115 Z">
-        <aapt:attr name="android:fillColor"><gradient android:startX="110" android:startY="101" android:endX="180" android:endY="140" android:startColor="#E7CFFF" android:endColor="#6F2DCC"/></aapt:attr>
-    </path>
-    <path android:pathData="M115,120 H166 Q181,120 181,135 V164 Q181,180 166,180 H118 Q106,180 106,168 V134 Q106,124 115,120 Z">
-        <aapt:attr name="android:fillColor"><gradient android:startX="106" android:startY="120" android:endX="181" android:endY="180" android:startColor="#D6A5FF" android:centerColor="#8F40DF" android:endColor="#4F1BA7"/></aapt:attr>
-    </path>
-    <path android:pathData="M114,120 H173 Q181,120 181,128 Q181,135 173,135 H151 V180 H136 V135 H114 Q106,135 106,128 Q106,120 114,120 Z">
-        <aapt:attr name="android:fillColor"><gradient android:startX="106" android:startY="120" android:endX="151" android:endY="180" android:startColor="#FFF2FF" android:endColor="#D7B2FA"/></aapt:attr>
-    </path>
-    <path android:pathData="M169,144 H179 Q185,144 185,150 V157 Q185,163 179,163 H169 Q161,163 161,154 Q161,144 169,144 Z">
-        <aapt:attr name="android:fillColor"><gradient android:startX="161" android:startY="144" android:endX="185" android:endY="163" android:startColor="#C98BF8" android:endColor="#7134C5"/></aapt:attr>
-    </path>
-    <path android:fillColor="#F3D9FF" android:pathData="M169,150 A4,4 0,1 0,169 158 A4,4 0,1 0,169 150 Z"/>
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="288dp" android:height="288dp"
+    android:viewportWidth="288" android:viewportHeight="288">
+    <!-- Scalable recreation of the purple wallet-and-T app mark. -->
+    <group android:translateX="78" android:translateY="78" android:scaleX="0.6875" android:scaleY="0.6875">
+        <path android:pathData="M42,0 H150 Q192,0 192,42 V150 Q192,192 150,192 H42 Q0,192 0,150 V42 Q0,0 42,0 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="0" android:startY="0" android:endX="192" android:endY="192">
+                    <item android:offset="0" android:color="#9823B0"/>
+                    <item android:offset="0.43" android:color="#24065E"/>
+                    <item android:offset="0.72" android:color="#1D075D"/>
+                    <item android:offset="1" android:color="#6023CA"/>
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M58,70 H124 Q154,70 154,100 V132 Q154,155 130,155 H64 Q37,155 37,133 V96 Q37,79 58,70 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="37" android:startY="80" android:endX="130" android:endY="156">
+                    <item android:offset="0" android:color="#6631A6"/>
+                    <item android:offset="1" android:color="#3A0D7B"/>
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M51,58 L121,37 Q138,32 139,46 L139,73 H46 Q37,66 51,58 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="90" android:startY="37" android:endX="104" android:endY="76">
+                    <item android:offset="0" android:color="#F5DDFF"/>
+                    <item android:offset="0.36" android:color="#B47AEB"/>
+                    <item android:offset="1" android:color="#5221A7"/>
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M55,64 H125 Q149,64 149,87 V126 Q149,149 127,149 H65 Q41,149 41,126 V86 Q41,72 55,64 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="42" android:startY="80" android:endX="146" android:endY="151">
+                    <item android:offset="0" android:color="#D79AFB"/>
+                    <item android:offset="0.36" android:color="#A24DE5"/>
+                    <item android:offset="1" android:color="#541CA9"/>
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M55,63 H137 Q149,63 149,75 Q149,85 137,85 H106 V149 H82 V85 H55 Q41,85 41,75 Q41,63 55,63 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="52" android:startY="63" android:endX="131" android:endY="149">
+                    <item android:offset="0" android:color="#FFF1FF"/>
+                    <item android:offset="0.52" android:color="#EED4FE"/>
+                    <item android:offset="1" android:color="#C8A0F1"/>
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M130,94 H145 Q153,94 153,102 V112 Q153,120 145,120 H130 Q118,120 118,107 Q118,94 130,94 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="122" android:startY="96" android:endX="151" android:endY="123">
+                    <item android:offset="0" android:color="#E1A5FF"/>
+                    <item android:offset="1" android:color="#8C35D9"/>
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:fillColor="#F6DAFF" android:pathData="M130,102 A5,5 0,1 0,130 112 A5,5 0,1 0,130 102 Z"/>
+    </group>
 </vector>
