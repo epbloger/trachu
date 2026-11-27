@@ -45,9 +45,8 @@ private object AdsRuntime {
         else mainHandler.post(action)
     }
 
-    fun consent(value:Boolean) {
-        if(requested || ready) runCatching { YandexAds.setUserConsent(value) }
-    }
+    fun consent(value:Boolean):Boolean =
+        (requested || ready) && runCatching { YandexAds.setUserConsent(value) }.isSuccess
 
     fun initializeIfNeeded(context: Context, consent:Boolean) {
         if (requested || ready) return
@@ -66,7 +65,9 @@ private object AdsRuntime {
 }
 
 /** Called even when the banner is no longer composed, to pass withdrawal to a running SDK. */
-fun updateAdsConsent(accepted:Boolean) = AdsRuntime.consent(accepted && !BuildConfig.DEBUG)
+fun updateAdsConsent(accepted:Boolean) {
+    AdsRuntime.consent(adPersonalization(accepted,BuildConfig.DEBUG))
+}
 
 /** Rate-limit new requests when a user returns to the overview repeatedly. */
 private object BannerRequestGate {
@@ -94,17 +95,21 @@ private object BannerRequestGate {
 @Composable
 fun OverviewAdBanner(consent:Boolean?=null) {
     val adUnitId = BuildConfig.YANDEX_BANNER_ID
-    // No SDK call in release until a production ID AND enabling flag are supplied.
-    if (adUnitId.isEmpty() || (!BuildConfig.DEBUG && consent!=true)) return
+    // Consent controls personalization, not eligibility for the banner.
+    if (!adBannerEnabled(adUnitId)) return
+    val personalized = adPersonalization(consent,BuildConfig.DEBUG)
 
     val context = LocalContext.current.applicationContext
-    LaunchedEffect(context) { AdsRuntime.initializeIfNeeded(context,consent==true && !BuildConfig.DEBUG) }
+    LaunchedEffect(context,personalized) {
+        AdsRuntime.initializeIfNeeded(context,personalized)
+        AdsRuntime.consent(personalized)
+    }
 
     if (!AdsRuntime.ready) return
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val bannerWidth = maxWidth.coerceAtMost(480.dp)
         if (bannerWidth < 120.dp) return@BoxWithConstraints
-        key(bannerWidth) {
+        key(bannerWidth,personalized) {
             var loaded by remember { mutableStateOf(false) }
             var failed by remember { mutableStateOf(false) }
             val bannerState = rememberBannerAdState(
@@ -120,10 +125,16 @@ fun OverviewAdBanner(consent:Boolean?=null) {
                     },
                 ),
             )
-            LaunchedEffect(bannerState, adUnitId) {
+            LaunchedEffect(bannerState, adUnitId, personalized) {
                 BannerRequestGate.awaitNext()
-                if (!failed) runCatching { bannerState.loadAd(AdRequest.Builder(adUnitId).build()) }
-                    .onFailure { failed=true; loaded=false }
+                if (!failed) {
+                    // Never load with a stale consent value, including after withdrawal.
+                    if (!AdsRuntime.consent(personalized)) {
+                        failed=true
+                        loaded=false
+                    } else runCatching { bannerState.loadAd(AdRequest.Builder(adUnitId).build()) }
+                        .onFailure { failed=true; loaded=false }
+                }
             }
             if (!failed) {
                 Column(

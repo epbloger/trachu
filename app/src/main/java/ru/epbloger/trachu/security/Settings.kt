@@ -36,7 +36,8 @@ class Preferences(context: Context) {
         val until = longPreferencesKey("pin_until")
         val monthStart = intPreferencesKey("month_start")
         val automaticRates = booleanPreferencesKey("automatic_rates")
-        val adsConsent = booleanPreferencesKey("ads_consent_v1")
+        // The old choice was about enabling all ads; it is not consent to personalization.
+        val adsConsent = booleanPreferencesKey("ads_personalization_consent_v2")
         val onboardingCompleted = booleanPreferencesKey("onboarding_completed_v1")
         val notificationsEnabled = booleanPreferencesKey("notifications_enabled_v1")
     }

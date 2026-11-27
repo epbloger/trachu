@@ -236,13 +236,13 @@ private fun canChangeBaseCurrency(ledger:Ledger)=ledger.accounts.isEmpty()&&ledg
 @Composable fun AdConsentPanel(current:Boolean?=null,onChoose:(Boolean)->Unit) {
     val uri=androidx.compose.ui.platform.LocalUriHandler.current
     Column(Modifier.fillMaxWidth().padding(12.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
-        Text("Согласие на обработку данных для рекламы",style=MaterialTheme.typography.titleSmall)
-        Text("Разрешить передачу технических данных об устройстве, сети и рекламных взаимодействиях Яндексу для показа и измерения рекламы? Финансовые записи не передаются. Согласие добровольное, действует до отзыва в настройках. Отказ не ограничивает функции.",style=MaterialTheme.typography.bodySmall)
+        Text("Персонализированная реклама",style=MaterialTheme.typography.titleSmall)
+        Text("Разрешить Яндексу использовать технические данные для подбора рекламы по вашим интересам? Финансовые записи не передаются. Вы можете отказаться от персонализации или изменить выбор в настройках. Обычная реклама остаётся.",style=MaterialTheme.typography.bodySmall)
         TextButton(onClick={runCatching{uri.openUri("https://epbloger.github.io/trachu/privacy.html")}}){Text("Политика конфиденциальности")}
         if(current==null)Column(Modifier.fillMaxWidth()){
-            Button(onClick={onChoose(true)},modifier=Modifier.fillMaxWidth()){Text("Согласен")}
-            OutlinedButton(onClick={onChoose(false)},modifier=Modifier.fillMaxWidth()){Text("Отказаться")}
-        }else Toggle("Разрешить рекламу",current,onChoose,"Отказ прекращает новые рекламные запросы.")
+            Button(onClick={onChoose(true)},modifier=Modifier.fillMaxWidth()){Text("Разрешить персонализацию")}
+            OutlinedButton(onClick={onChoose(false)},modifier=Modifier.fillMaxWidth()){Text("Без персонализации")}
+        }else Toggle("Персонализировать рекламу",current,onChoose,"Без персонализации обычная реклама остаётся.")
     }
 }
 data class FileRequest(val mode:String,val save:Boolean,val password:String="",val account:String="",val period:Period=Period.month())
